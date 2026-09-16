@@ -31,17 +31,19 @@ import { test, expect } from '../config/collaboration-fixtures';
  *   The issue's original trigger (an automatic parse dispatched as an edit)
  *   does not exist; case 1 shows a delayed join is harmless on its own.
  * - A deliberate keystroke before the snapshot carries the WHOLE block
- *   tree as parsed from the saved post. The replay merges that tree against
- *   the first snapshot row the log delivers, treating every difference as
- *   the joiner's own edit. When that row matches the saved post (case 2),
- *   only the keystroke lands. When it is older than the saved post (a save
- *   happened during the room's life, case 3), the peer's saved text is
- *   inserted a second time. When it is newer (the server compacted the log
- *   and dropped the genesis, case 4), the peer's unsaved text is deleted.
- *   Both windows agree on the damaged text and no conflict is shown.
+ *   tree as parsed from the saved post. A verbatim replay of that tree
+ *   against the first snapshot row the log delivers treated every
+ *   difference as the joiner's own edit. When that row matched the saved
+ *   post (case 2), only the keystroke landed. When it was older than the
+ *   saved post (a save happened during the room's life, case 3), the
+ *   peer's saved text was inserted a second time. When it was newer (the
+ *   server compacted the log and dropped the genesis, case 4), the peer's
+ *   unsaved text was deleted. Both windows agreed on the damaged text and
+ *   no conflict was shown.
  *
- * Cases 3 and 4 are the reproduction and are expected to fail until the
- * buffer stops replaying a stale tree.
+ * The engine now carries over only the difference between the saved post
+ * and the buffered tree, once the whole bootstrapping response has
+ * landed, so cases 3 and 4 pass: the keystroke lands and nothing else.
  */
 
 const HOLD_MS = 4000;
@@ -138,35 +140,30 @@ test.describe( 'Collaboration - yjs-server late join (issue #57)', () => {
 		typeDuringHold: boolean;
 		savedBeforeJoin: boolean;
 		compacted: boolean;
-		knownBroken: boolean;
 	} > = [
 		{
 			title: 'a window whose first sync response is delayed does not revert a peer’s unsaved text',
 			typeDuringHold: false,
 			savedBeforeJoin: false,
 			compacted: false,
-			knownBroken: false,
 		},
 		{
 			title: 'a window that TYPES before its delayed first sync response keeps a peer’s unsaved text',
 			typeDuringHold: true,
 			savedBeforeJoin: false,
 			compacted: false,
-			knownBroken: false,
 		},
 		{
 			title: 'the same after user 1 SAVED: the replay must not insert the saved text a second time',
 			typeDuringHold: true,
 			savedBeforeJoin: true,
 			compacted: false,
-			knownBroken: true,
 		},
 		{
 			title: 'the same after the server compacted the room: the replay must not delete the peer’s text',
 			typeDuringHold: true,
 			savedBeforeJoin: false,
 			compacted: true,
-			knownBroken: true,
 		},
 	];
 
@@ -175,7 +172,6 @@ test.describe( 'Collaboration - yjs-server late join (issue #57)', () => {
 		typeDuringHold,
 		savedBeforeJoin,
 		compacted,
-		knownBroken,
 	} of CASES ) {
 		test(
 			title,
@@ -183,10 +179,6 @@ test.describe( 'Collaboration - yjs-server late join (issue #57)', () => {
 				{ collaborationUtils, requestUtils, editor, page },
 				testInfo
 			) => {
-				// The issue #57 reproduction: flips to an unexpected pass once
-				// the pre-bootstrap buffer stops replaying a stale tree.
-				test.fail( knownBroken, 'issue #57' );
-
 				if ( compacted ) {
 					await requestUtils.activatePlugin( CHECKPOINT_FIXTURE );
 				}
@@ -346,4 +338,62 @@ test.describe( 'Collaboration - yjs-server late join (issue #57)', () => {
 			}
 		);
 	}
+	test( 'the first paragraph typed into an EMPTY post before the delayed first sync response survives', async ( {
+		collaborationUtils,
+		requestUtils,
+		editor,
+		page,
+	} ) => {
+		// An empty post parses to no blocks, so the comparison that drives
+		// the typing-only replay has nothing to work from. The document
+		// holds no blocks either, so the buffered edit is merged as it is:
+		// the paragraph must reach both windows.
+		const post = await requestUtils.createPost( {
+			title: 'Late join, empty post',
+			status: 'draft',
+			content: '',
+			date_gmt: new Date().toISOString(),
+		} );
+		await collaborationUtils.openCollaborativeSession( post.id );
+		const { editor2, page2 } = collaborationUtils;
+
+		let releaseAt = 0;
+		await page2.route(
+			( url ) => url.href.includes( 'wp-sync' ),
+			async ( route ) => {
+				const wait = releaseAt - Date.now();
+				if ( wait > 0 ) {
+					await new Promise( ( resolve ) =>
+						setTimeout( resolve, wait )
+					);
+				}
+				await route.continue();
+			}
+		);
+		releaseAt = Date.now() + HOLD_MS;
+		await page2.reload();
+		await collaborationUtils.waitForCollaborationReady( page2 );
+
+		await editor2.canvas
+			.getByRole( 'document', { name: 'Add default block' } )
+			.click();
+		await page2.keyboard.type( 'Hi' );
+		expect( Date.now() ).toBeLessThan( releaseAt );
+
+		await page2.waitForTimeout( HOLD_MS + 2000 );
+		await waitForSyncQuiet( page2 );
+		await waitForSyncQuiet( page );
+
+		for ( const currentEditor of [ editor, editor2 ] ) {
+			await expect( async () => {
+				const blocks = await currentEditor.getBlocks();
+				expect( blocks ).toMatchObject( [
+					{
+						name: 'core/paragraph',
+						attributes: { content: 'Hi' },
+					},
+				] );
+			} ).toPass( { timeout: 10000 } );
+		}
+	} );
 } );
