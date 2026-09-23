@@ -324,6 +324,43 @@ class Tests_Collaboration_WpSseSyncServer extends WP_Test_REST_TestCase {
 		$this->assertArrayHasKey( 42, $events[1][1]['rooms'][0]['awareness'] );
 	}
 
+	public function test_a_peers_presence_refresh_does_not_wake_the_stream() {
+		$exact = static fn() => 1;
+		add_filter( 'wp_sync_awareness_timestamp_granularity', $exact );
+		add_filter( 'wp_sync_sse_redis_url', '__return_empty_string' );
+		$this->server->redis = null;
+		$this->server->sleep = static function () {};
+		$room                = 'postType/post:' . $this->post_id;
+		$this->server->handle_request( $this->request() ); // Mints the generation token (see above).
+		$this->server->update_awareness( $room, 42, array( 'name' => 'peer' ) );
+		$this->server->handle_request( $this->request() );
+		$waiter = $this->server->waiter();
+		$this->assertFalse( $waiter->wait( 1.0 ), 'Nothing changed.' );
+
+		// The peer's twenty seconds pass: its stream refreshes the same state.
+		$storage = new WP_Sync_Table_Storage();
+		$entries = $storage->get_awareness_state( $room );
+		foreach ( $entries as &$entry ) {
+			$entry['updated_at'] = time() - 20;
+		}
+		unset( $entry );
+		$storage->refresh_awareness_state( $room, $entries );
+		$this->server->update_awareness( $room, 42, array( 'name' => 'peer' ) );
+		$this->assertGreaterThanOrEqual( time() - 1, $storage->get_awareness_state( $room )[1]['updated_at'], 'The refresh landed.' );
+		$this->assertFalse( $waiter->wait( 1.0 ), 'A refresh that moves only a timestamp wakes no stream.' );
+
+		$this->server->update_awareness(
+			$room,
+			42,
+			array(
+				'name'   => 'peer',
+				'cursor' => 3,
+			)
+		);
+		$this->assertTrue( $waiter->wait( 1.0 ), 'A state change does.' );
+		remove_filter( 'wp_sync_awareness_timestamp_granularity', $exact );
+	}
+
 	public function test_a_write_during_the_read_still_wakes_the_next_check() {
 		add_filter( 'wp_sync_sse_redis_url', '__return_empty_string' );
 		$this->server->redis        = null;

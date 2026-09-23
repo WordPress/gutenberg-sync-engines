@@ -225,6 +225,43 @@ class Tests_Collaboration_WpSyncTableStorage extends WP_UnitTestCase {
 		$this->assertSame( '1', $storage->get_room_versions( array( $room ) )[ $room ] );
 	}
 
+	public function test_a_quiet_awareness_write_lands_without_a_bump_or_a_notice() {
+		$changed = 0;
+		add_action(
+			'gutenberg_sync_engines_room_changed',
+			static function () use ( &$changed ) {
+				++$changed;
+			}
+		);
+		$check = function () use ( &$changed ) {
+			$storage = $this->storage();
+			$room    = $this->room();
+			$entry   = array(
+				'client_id'  => 1,
+				'state'      => array(),
+				'updated_at' => 100,
+				'wp_user_id' => 1,
+			);
+
+			$this->assertTrue( $storage->set_awareness_state( $room, array( $entry ) ) );
+			$this->assertSame( 1, $changed );
+			$version = $storage->get_room_versions( array( $room ) );
+			$this->assertNotNull( $version[ $room ] );
+
+			$entry['updated_at'] = 110;
+			$this->assertTrue( $storage->refresh_awareness_state( $room, array( $entry ) ) );
+			$this->assertSame( array( $entry ), $this->storage()->get_awareness_state( $room ), 'The write lands.' );
+			$this->assertSame( 1, $changed, 'No notice.' );
+			$this->assertSame( $version, $storage->get_room_versions( array( $room ) ), 'No bump.' );
+
+			$this->assertTrue( $storage->reset_room( $room ) );
+			$changed = 0;
+		};
+
+		$check();
+		$this->with_persistent_object_cache( $check );
+	}
+
 	public function test_room_versions_live_only_in_a_persistent_object_cache() {
 		$this->with_persistent_object_cache(
 			function () {

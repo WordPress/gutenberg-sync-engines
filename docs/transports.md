@@ -130,7 +130,15 @@ order:
 | Version counter in the room-meta table | no cache at all | one indexed query twice a second |
 
 The version counter is a number the room storage bumps after every
-successful write (updates, presence, room meta, a reset). The stream
+successful write that changes what a reader can see (updates, presence,
+room meta, a reset). One write is left out on purpose: a presence
+refresh that moves only an entry's timestamp (the same clients in the
+same states) is written without a bump and without a Redis notice. The
+timestamp still lands, because a later reader expires entries by it,
+but nobody is woken for it. The same holds when presence lives in the
+Presence API's table: a refresh of an unchanged row sends no notice.
+Anyone arriving, leaving, expiring, or changing state bumps and
+notifies as before. The stream
 reads the counters of all its rooms in one lookup and re-reads storage
 when any differs from the snapshot it took just before its last read; a
 write landing during that read therefore still wakes the next check. The
@@ -294,7 +302,11 @@ for a hidden tab, and it reopens the stream at once when it is visible
 again. A hidden tab that is also alone goes quiet like any other. Every twenty seconds the stream
 refreshes presence only for a client still
 listed in the room, using its current state. It does not recreate an entry
-removed by a leave or room reset. Five-second heartbeat comments reset the
+removed by a leave or room reset. The refresh changes only the entry's
+timestamp, so it wakes no other stream on the room: without that, each
+stream would re-read storage every time any other stream refreshed, and
+N tabs on one post would cost N×N reads every twenty seconds on top of
+their own catch-up reads. Five-second heartbeat comments reset the
 browser's twenty-five-second inactivity timeout; a silent connection is aborted.
 
 The server shortens the stream to five seconds below a positive PHP execution

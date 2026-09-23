@@ -119,6 +119,12 @@ if ( ! class_exists( 'WP_Sync_Presence_API_Awareness_Backend' ) ) {
 		 * spent its share of the caller's window unwritten and skipping
 		 * otherwise, so an idle poll stays read-only.
 		 *
+		 * A refresh of an unchanged row (same user, same state, only older)
+		 * is written without waking anyone: no peer can see the timestamp,
+		 * and every stream on the room would otherwise re-read storage each
+		 * time any other stream refreshed its presence. A client arriving or
+		 * changing state wakes the streams as before.
+		 *
 		 * @since 0.0.2
 		 *
 		 * @param string               $room      Room identifier.
@@ -130,9 +136,10 @@ if ( ! class_exists( 'WP_Sync_Presence_API_Awareness_Backend' ) ) {
 		 * @return array<int, array<string, mixed>> The room's live entries.
 		 */
 		public function put( string $room, int $client_id, array $state, int $user_id, int $timeout ): array {
-			$now     = time();
-			$entries = $this->entries( $room, $timeout );
-			$refresh = max( 1, intdiv( $timeout, self::REFRESH_FRACTION ) );
+			$now       = time();
+			$entries   = $this->entries( $room, $timeout );
+			$refresh   = max( 1, intdiv( $timeout, self::REFRESH_FRACTION ) );
+			$unchanged = false;
 
 			foreach ( $entries as $index => $entry ) {
 				if ( $entry['client_id'] !== $client_id ) {
@@ -141,10 +148,9 @@ if ( ! class_exists( 'WP_Sync_Presence_API_Awareness_Backend' ) ) {
 
 				// What comes back from the table has been through JSON, so it is
 				// compared encoded rather than against what went in.
-				if ( $now - $entry['updated_at'] < $refresh
-					&& $entry['wp_user_id'] === $user_id
-					&& wp_json_encode( $entry['state'] ) === wp_json_encode( $state )
-				) {
+				$unchanged = $entry['wp_user_id'] === $user_id
+					&& wp_json_encode( $entry['state'] ) === wp_json_encode( $state );
+				if ( $unchanged && $now - $entry['updated_at'] < $refresh ) {
 					return $entries;
 				}
 
@@ -155,7 +161,7 @@ if ( ! class_exists( 'WP_Sync_Presence_API_Awareness_Backend' ) ) {
 			// The explicit timestamp turns off the Presence API's own write
 			// skip, which runs as long as the caller's whole window and so
 			// would let a live client reach the edge of it unwritten.
-			if ( wp_set_presence( $room, self::CLIENT_PREFIX . $client_id, $state, $user_id, gmdate( 'Y-m-d H:i:s', $now ) ) ) {
+			if ( wp_set_presence( $room, self::CLIENT_PREFIX . $client_id, $state, $user_id, gmdate( 'Y-m-d H:i:s', $now ) ) && ! $unchanged ) {
 				self::changed( $room );
 			}
 
