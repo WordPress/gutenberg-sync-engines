@@ -88,13 +88,17 @@ for the full engine-decision numbers.
 ## Maintainers
 
 This plugin is maintained by the WordPress Core team, with contributions from
-the community. See the [CODEOWNERS](.github/CODEOWNERS) file for the current list
-of maintainers.
+the community. The maintainers are:
+
+- Chris Zarate ([@chriszarate](https://github.com/chriszarate))
+- Alec Geatches ([@alecgeatches](https://github.com/alecgeatches))
+- Joe Fusco ([@josephfusco](https://github.com/josephfusco))
 
 ## Feedback
 
 Open GitHub issues or discuss in `#feature-realtime-collaboration` channel in
-[WordPress Slack](https://make.wordpress.org/chat/).
+[WordPress Slack](https://make.wordpress.org/chat/). To contribute, see
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Architecture
 
