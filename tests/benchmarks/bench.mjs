@@ -77,6 +77,7 @@ const { values: args, positionals } = parseArgs( {
 const HELP = `npm run bench -- [--suite=<name>] [--key=value …]
 
 Suites (--suite=; default: host):
+  text-slices  JavaScript core cost after repeated paragraph splits; no WordPress.
   host       The host cost report: what the plugin adds to a server —
              baseline/sync/delta/delta-% tables plus summary stats, ONE
              engine per run. The baseline is the same people producing the
@@ -163,6 +164,7 @@ if ( positionals.length ) {
 // engines-suite-only arguments (--scenarios=/--certify=/--concurrency=).
 // ---------------------------------------------------------------------
 const SUITE_SCRIPTS = {
+	'text-slices': 'tests/benchmarks/text-slices.mjs',
 	host: 'tests/benchmarks/host/host-benchmark.mjs',
 	transport: 'tests/benchmarks/transport/benchmark-transport.mjs',
 };
@@ -197,7 +199,7 @@ if ( 'engines' !== SUITE ) {
 			);
 		} else {
 			console.error(
-				`unknown suite "${ SUITE }" — known: host (default), engines, transport`
+				`unknown suite "${ SUITE }" — known: host (default), engines, transport, text-slices`
 			);
 		}
 		process.exit( 1 );

@@ -10,6 +10,8 @@ release, which the release script generates from the commit history.
 
 ## Unreleased
 
+## 0.0.2 — September 2026
+
 ### Added
 
 -   Server-sent events transport (`sse`) over ordinary WordPress requests:
@@ -61,12 +63,34 @@ release, which the release script generates from the commit history.
     by default. When presence recording is turned off, awareness falls
     back to the built-in store and the editor keeps showing collaborators.
 
+-   Intent-log now preserves formatting and safe deletions across concurrent
+    paragraph splits, including repeated splits and joins. Each edit keeps
+    one outcome, and undo covers all affected paragraphs. Protocol 2 requires
+    open editors using the previous version to reconnect with updated assets.
+
 -   Every awareness read and write in the plugin now goes through one
     `WP_Sync_Awareness` class, where the transports, the advisory channel
     and the rooms CLI each carried their own copy. Reads now exclude
     expired entries everywhere, which they did not on the client id
     ownership check, in `has_live_awareness_besides()` or in
     `wp collaboration rooms`. The store itself is unchanged.
+
+### All changes since v0.0.1
+
+-   SSE: keep the stream open while sending updates ([#121](https://github.com/WordPress/gutenberg-sync-engines/pull/121))
+-   CI: split the e2e job into one job per engine ([#124](https://github.com/WordPress/gutenberg-sync-engines/pull/124))
+-   Fuzzer: stop getting stuck behind DE-RTC's pending card ([#122](https://github.com/WordPress/gutenberg-sync-engines/pull/122))
+-   Add maintainers ([#116](https://github.com/WordPress/gutenberg-sync-engines/pull/116))
+-   Correct host benchmark measurements ([#108](https://github.com/WordPress/gutenberg-sync-engines/pull/108))
+-   SSE: a hidden tab holds no stream ([#107](https://github.com/WordPress/gutenberg-sync-engines/pull/107))
+-   SSE: fall back to the short-polling cadence when no stream can be opened ([#110](https://github.com/WordPress/gutenberg-sync-engines/pull/110))
+-   Add a server-sent events transport and retire long polling ([#105](https://github.com/WordPress/gutenberg-sync-engines/pull/105))
+-   Keep Presence API collaborators alive and stand down without its table ([#104](https://github.com/WordPress/gutenberg-sync-engines/pull/104))
+-   Add a drop-in awareness backend seam and a Presence API backend on it ([#102](https://github.com/WordPress/gutenberg-sync-engines/pull/102))
+-   Route every awareness read and write through one class ([#103](https://github.com/WordPress/gutenberg-sync-engines/pull/103))
+-   Cleanup README and clarify purpose ([#101](https://github.com/WordPress/gutenberg-sync-engines/pull/101))
+-   Update bundled Gutenberg from trunk ([#99](https://github.com/WordPress/gutenberg-sync-engines/pull/99))
+-   Try the plugin on WordPress Playground: `npm run playground` and a public blueprint ([#98](https://github.com/WordPress/gutenberg-sync-engines/pull/98))
 
 ## 0.0.1 — September 2026
 

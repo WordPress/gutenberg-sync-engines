@@ -22,6 +22,7 @@ import {
 	subtreeContains,
 } from './document.js';
 import { IntentTypes } from './intents.js';
+import { textSliceIntents } from './text-slices.js';
 
 /** @typedef {import('./engine-types').EngineBlock} EngineBlock */
 /** @typedef {import('./engine-types').EngineDocument} EngineDocument */
@@ -155,6 +156,17 @@ function applyTextInsert( field, offset, text ) {
  * @return {ReducerResult} { doc, disposition: { status: 'applied'|'voided', reason? } }.
  */
 export function applyIntent( doc, intent ) {
+	if ( intent.textSlices ) {
+		let next = doc;
+		for ( const part of textSliceIntents( intent ) ) {
+			const result = applyIntent( next, part );
+			if ( result.disposition.status !== 'applied' ) {return {
+				 ...result, doc };
+			}
+			next = result.doc;
+		}
+		return applied( next );
+	}
 	const next = cloneDocument( doc );
 	const { payload } = /** @type {IntentEnvelope & { payload: ReducerPayload }} */ ( intent );
 

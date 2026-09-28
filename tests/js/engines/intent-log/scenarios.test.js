@@ -105,7 +105,7 @@ test( 'split × insert at the exact split point lands at the head of the tail', 
 	assert.equal( getBlock( doc, 'a-tail' ).fields.content.text, '* world' );
 } );
 
-test( 'split × format across the split point clips to the first half (formats never escalate)', () => {
+test( 'split × formatting and deletion follow both halves', () => {
 	const server = createServer( baseDoc() );
 	serverIngestBatch( server, [
 		makeActor( 'alice' )( IntentTypes.SPLIT_BLOCK, {
@@ -130,14 +130,14 @@ test( 'split × format across the split point clips to the first half (formats n
 		} ),
 	] );
 	assert.equal( formatCrossing.status, 'applied' );
-	// The destructive twin of the same range still escalates.
-	assert.deepEqual( deleteCrossing, {
-		status: 'escalated',
-		reason: 'range-crosses-split',
-	} );
-	assert.deepEqual(
-		getBlock( headDoc( server ), 'p1' ).fields.content.formats,
-		[ { start: 3, end: 5, format: 'bold' } ]
+	assert.deepEqual( deleteCrossing, { status: 'applied' } );
+	assert.equal(
+		getBlock( headDoc( server ), 'p1' ).fields.content.text,
+		'Hel'
+	);
+	assert.equal(
+		getBlock( headDoc( server ), 'a-tail' ).fields.content.text,
+		'rld'
 	);
 } );
 
