@@ -597,7 +597,7 @@ describe( 'getEntityRecord', () => {
 		expect( dispatch.setCollaborationSupported ).not.toHaveBeenCalled();
 	} );
 
-	it( 'mirrors review items to the store without raising notices', async () => {
+	it( 'mirrors review items to the store and aggregates notices past the threshold', async () => {
 		const ENTITIES_WITH_SYNC = [
 			{
 				name: 'post',
@@ -644,10 +644,8 @@ describe( 'getEntityRecord', () => {
 			summary: 'text',
 		} );
 
-		// The list is mirrored into the store; escalations surface only
-		// through the review panel and the in-canvas conflict UI, never as
-		// notices. An onEscalation handler still exists so the sync manager
-		// does not fall back to console warnings.
+		// Below the threshold: the list is mirrored and the per-item
+		// escalation notice is created.
 		handlers.onProposalsChange( [ makeItem( 'p1' ) ] );
 		handlers.onEscalation( {
 			isLocal: true,
@@ -660,17 +658,42 @@ describe( 'getEntityRecord', () => {
 			1,
 			[ makeItem( 'p1' ) ]
 		);
-		expect( notices.createNotice ).not.toHaveBeenCalled();
+		expect( notices.createNotice ).toHaveBeenCalledTimes( 1 );
 
-		// Emptying the list clears the store key.
+		// A burst past the threshold sweeps per-item notices, creates one
+		// aggregate notice, and suppresses further per-item notices.
+		const burst = [ 'p1', 'p2', 'p3', 'p4' ].map( makeItem );
+		handlers.onProposalsChange( burst );
+		burst.forEach( ( item ) =>
+			handlers.onEscalation( {
+				isLocal: true,
+				proposalId: item.id,
+				summary: 'text',
+			} )
+		);
+		expect( notices.removeNotice ).toHaveBeenCalledWith(
+			'core-data-sync-escalation-postType-post-1-p1'
+		);
+		expect( notices.createNotice ).toHaveBeenCalledWith(
+			'warning',
+			expect.stringContaining( '4' ),
+			expect.objectContaining( {
+				id: 'core-data-sync-review-aggregate-postType-post-1',
+			} )
+		);
+		expect( notices.createNotice ).toHaveBeenCalledTimes( 2 );
+
+		// Emptying the list clears the aggregate notice and the store key.
 		handlers.onProposalsChange( [] );
+		expect( notices.removeNotice ).toHaveBeenCalledWith(
+			'core-data-sync-review-aggregate-postType-post-1'
+		);
 		expect( dispatch.setSyncReviewItems ).toHaveBeenLastCalledWith(
 			'postType',
 			'post',
 			1,
 			[]
 		);
-		expect( notices.createNotice ).not.toHaveBeenCalled();
 	} );
 
 	it( 'provides transient properties when read/write config is supplied', async () => {

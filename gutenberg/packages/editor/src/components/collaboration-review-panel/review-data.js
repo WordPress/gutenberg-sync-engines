@@ -8,9 +8,6 @@ import { unlock } from '../../lock-unlock';
 
 export const REASON_LABELS = {
 	'frame-conflict': __( 'It conflicted with a collaborator’s change.' ),
-	'attr-conflict': __(
-		'It changed block settings a collaborator also changed.'
-	),
 	'dependent-on-escalated': __(
 		'It depended on another edit that was set aside.'
 	),
@@ -20,21 +17,11 @@ export const REASON_LABELS = {
 };
 
 /**
- * Whether the current user may approve content held for unfiltered-HTML
- * review. UI hint only, since ingest re-enforces per the authoring user's
- * capability regardless of what the client shows.
- *
- * @return {boolean} Whether approval is available.
- */
-export function canApproveUnfilteredHtml() {
-	return false !== window._wpCollaborationCanUnfilteredHtml;
-}
-
-/**
  * Whether the current user may restore a group of review items. Restoring
  * a requires-approval conflict IS the approval (the content re-publishes
  * under the restorer's account), so it is reserved for users who can
- * publish unfiltered HTML.
+ * publish unfiltered HTML. UI hint only — ingest re-enforces per the
+ * authoring user's capability regardless.
  *
  * @param {Array} items The group's review items.
  * @return {boolean} Whether restore is available.
@@ -42,47 +29,11 @@ export function canApproveUnfilteredHtml() {
 export function canRestoreItems( items ) {
 	return (
 		items.every( ( item ) => 'requires-approval' !== item.reason ) ||
-		canApproveUnfilteredHtml()
+		false !== window._wpCollaborationCanUnfilteredHtml
 	);
 }
 
 const EMPTY_CLIENT_IDS = {};
-
-/**
- * The review items targeting a given block. Matches by durable block
- * identity (syncId) first, then by top-level index for positionally
- * addressed engines. Parked insertions never match: they propose a block
- * that does not exist yet, so there is no block to target (their inline
- * approval card remains).
- *
- * @param {Function} select   Registry select (inside a useSelect).
- * @param {Array}    items    Open review items.
- * @param {string}   clientId The block's client id.
- * @return {Array} The items targeting the block.
- */
-export function itemsTargetingBlock( select, items, clientId ) {
-	const { getBlockAttributes, getBlockRootClientId, getBlockIndex } =
-		select( blockEditorStore );
-	const syncId = getBlockAttributes( clientId )?.metadata?.syncId;
-	const isTopLevel = '' === getBlockRootClientId( clientId );
-	const index = getBlockIndex( clientId );
-
-	return items.filter( ( item ) => {
-		if ( item.proposedInsertion ) {
-			return false;
-		}
-
-		if ( item.targetId ) {
-			return item.targetId === syncId;
-		}
-
-		return (
-			undefined !== item.targetIndex &&
-			isTopLevel &&
-			item.targetIndex === index
-		);
-	} );
-}
 
 /**
  * Groups review items by their unit (a batch of edits made together), so a

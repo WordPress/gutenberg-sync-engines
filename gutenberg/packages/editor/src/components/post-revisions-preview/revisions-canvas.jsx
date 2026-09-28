@@ -12,7 +12,7 @@ import {
 import { useDiffMarkers } from './diff-markers';
 // The diff CSS, the removed-block SVG filter, the accessible descriptions,
 // and the BlockListBlock filter that stamps diff classes live in
-// block-diff-view.js, shared with the collaboration review dialogs.
+// block-diff-view.jsx, shared with hosts outside the revisions screen.
 import {
 	DiffDescriptions,
 	REVISION_DIFF_STYLES,

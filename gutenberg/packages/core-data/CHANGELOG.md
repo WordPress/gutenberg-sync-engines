@@ -2,10 +2,6 @@
 
 ## Unreleased
 
-### Enhancements
-
--   Collaboration: Sync escalations no longer raise editor notices (neither the per-escalation warning nor the aggregate counter). The open review items are still mirrored into the store; the review panel and the in-canvas conflict UI are the surfaces for them.
-
 ### Bug Fixes
 
 -   The `save<Entity>` and `delete<Entity>` shortcut actions resolve with their saved or deleted record types instead of `void` ([#77162](https://github.com/WordPress/gutenberg/pull/77162)).
