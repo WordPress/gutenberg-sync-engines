@@ -85,7 +85,7 @@ if ( ! class_exists( 'WP_De_RTC_Autosave_Commits' ) ) {
 			if ( ! function_exists( 'wp_is_collaboration_enabled' ) || ! wp_is_collaboration_enabled() ) {
 				return new WP_Error( 'rest_sync_disabled', __( 'Collaboration is not enabled.', 'gutenberg' ), array( 'status' => 403 ) );
 			}
-			if ( ! class_exists( 'WP_Sync_Post_Meta_Storage' ) || ! class_exists( 'WP_De_RTC_Engine' ) ) {
+			if ( ! interface_exists( 'WP_Sync_Storage' ) || ! class_exists( 'WP_De_RTC_Engine' ) ) {
 				return $result;
 			}
 

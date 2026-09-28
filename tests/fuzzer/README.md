@@ -14,7 +14,7 @@ npm run fuzz
 ```
 
 That runs the default matrix — `{intent-log, yjs-server, de-rtc} ×
-{http-polling, http-long-polling, websocket}` — with 5 seeds per combo,
+{http-polling, sse, websocket}` — with 5 seeds per combo,
 12 actions per seed, 2 collaborating browsers. It starts the TESTS wp-env
 (`.wp-env.tests.json`) if needed, flips the engine/transport per combo,
 manages the websocket daemon, rechecks failures, and writes a summary.
@@ -24,6 +24,11 @@ Websocket combos need host port 8787 for a daemon serving the TESTS
 database, so the runner removes the dev env's auto-started daemon
 (`wp-sync-ws-daemon`, which serves the DEV database) for the duration of
 the run; `npm run env start` or `npm run rtc:ws` brings it back.
+
+SSE combos need the Redis container the tests env's `afterStart` hook
+starts beside the site; the runner refuses an sse combo without it, since
+tabs would silently receive over polling and certify nothing. Sync faults
+stay on for sse: a failed stream request is exactly the fallback path.
 
 Common variations:
 
@@ -118,7 +123,7 @@ few durable invariants instead of many brittle UI details.*
   two transports. Here engines and transports are pluggable, so the runner
   sweeps the cross product: it flips `wp_sync_engine` and
   `gutenberg_sync_engines_transport` on the tests site via wp-cli between
-  combos, and wipes `wp_sync_storage` rooms so no combo inherits another
+  combos, and empties every room (`wp collaboration storage reset`) so no combo inherits another
   engine's room lineage (rooms are engine-stamped; the websocket daemon
   strips the stamps that let HTTP transports heal stale collection rooms).
 - **Engine-neutral oracles.** No `_crdt_document` assertions — that meta is
@@ -213,4 +218,5 @@ The runner sets these; direct `npx playwright test
 | `RTC_FUZZ_DISABLE_SYNC_FAULTS` / `RTC_FUZZ_DISABLE_RELOAD` | unset | Noise reduction |
 | `RTC_FUZZ_CONVERGENCE_TIMEOUT_MS` | 20000 | Per-step convergence budget |
 | `RTC_FUZZ_TRACE` | `off` | Playwright trace mode |
+| `RTC_FUZZ_CPU_THROTTLE` | unset | Slow every editor page N× via devtools CPU emulation (reproduces busy-machine races on an idle machine; issue #38 needed 5) |
 | `RTC_FUZZ_JSON_REPORT` / `RTC_FUZZ_OUTPUT_DIR` | unset | Runner's result channels |

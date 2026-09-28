@@ -1,13 +1,8 @@
 /**
- * Internal dependencies
- */
-// eslint-disable-next-line import/no-unresolved -- Provided at runtime as wp.sync.
-import type { EngineUpdate } from '@wordpress/sync';
-
-/**
- * A parked (escalated) proposal as the server's `proposal-parked` row
- * carries it. `changedBlocks` are the proposal's top-level blocks that
- * differed from its base, with their indices, so a restore can overlay
+ * A parked (escalated) proposal as the server's `parked` row
+ * carries it. `changedBlocks` are the proposal's blocks that differed
+ * from its base — identified by syncId (and path) when the server merged
+ * by identity, always with a top-level index — so a restore can overlay
  * them at sensible anchors.
  */
 export interface DeRtcParkedProposal {
@@ -19,7 +14,14 @@ export interface DeRtcParkedProposal {
 	/** Server time at escalation. */
 	at?: number;
 	baseVersion?: string;
-	changedBlocks: Array< { index: number; html: string } >;
+	changedBlocks: Array< {
+		index: number;
+		html: string;
+		/** The block's durable identity (identity-merged parks). */
+		syncId?: string;
+		/** The block's path in the proposal (child indices from the root). */
+		path?: number[];
+	} >;
 	/** A conflicting entity-property register (property-conflict rows). */
 	property?: { name: string; value: unknown };
 	excerpt?: string;
@@ -33,16 +35,8 @@ export interface DeRtcParkedProposal {
 }
 
 /**
- * Client-sent row type closing a parked proposal. Matches
- * WP_De_RTC_Engine::UPDATE_TYPE_RESOLVED.
- */
-export const DE_RTC_RESOLVED_TYPE = 'resolved';
-
-/**
  * The per-entity open-proposal ledger the session codec feeds (parked and
- * resolved rows) and the engine's review source reads. Sessions register
- * an emitter so resolutions travel out through the ordinary local-update
- * lane.
+ * resolved rows) and the engine's review source reads.
  */
 export interface DeRtcReviewState {
 	noteParked: ( parked: DeRtcParkedProposal ) => void;
@@ -50,15 +44,11 @@ export interface DeRtcReviewState {
 	getOpen: () => DeRtcParkedProposal[];
 	/** Returns an unsubscribe function. */
 	onChange: ( listener: () => void ) => () => void;
-	/** Registers the outbound lane for resolution rows (last one wins). */
-	setEmitter: (
-		emitter: ( ( update: EngineUpdate ) => void ) | null
-	) => void;
 	/**
-	 * Registers the REST resolution lane (B5, last one wins). When set,
-	 * resolutions POST here first — resolutions are MUTATIONS and belong
-	 * on an authenticated REST route, not the advisory transport — and
-	 * fall back to the transport row only when the POST rejects.
+	 * Registers the REST resolution lane (B5, last one wins).
+	 * Resolutions POST here — resolutions are MUTATIONS and belong on an
+	 * authenticated REST route, not the advisory transport. This is the
+	 * only outbound lane; the server rejects client-sent resolution rows.
 	 */
 	setRestResolver: (
 		resolver:
@@ -69,7 +59,7 @@ export interface DeRtcReviewState {
 			| null
 	) => void;
 	/**
-	 * Optimistically closes a parked proposal and emits the `resolved` row.
+	 * Optimistically closes a parked proposal and POSTs the resolution.
 	 * The `restored` resolution is sent AFTER the caller re-applied the
 	 * parked content as ordinary local edits.
 	 */
@@ -88,7 +78,6 @@ export function createDeRtcReviewState(): DeRtcReviewState {
 	const open = new Map< string, DeRtcParkedProposal >();
 	const resolvedIds = new Set< string >();
 	const listeners = new Set< () => void >();
-	let emitter: ( ( update: EngineUpdate ) => void ) | null = null;
 	let restResolver:
 		| ( (
 				proposalId: string,
@@ -102,9 +91,10 @@ export function createDeRtcReviewState(): DeRtcReviewState {
 
 	/**
 	 * Merge-not-stack key: one review task per author per
-	 * target — a property register, or a block index set. A revised
-	 * parked proposal from the same author over the same target FOLDS
-	 * into the open task instead of raising a second one.
+	 * target — a property register, or a block set (by identity when
+	 * the blocks carry one, else by index). A revised parked proposal
+	 * from the same author over the same target FOLDS into the open
+	 * task instead of raising a second one.
 	 *
 	 * @param parked Parked proposal.
 	 * @return Fold key.
@@ -115,8 +105,12 @@ export function createDeRtcReviewState(): DeRtcReviewState {
 			: `blocks:${ parked.authorClientId }:${ (
 					parked.changedBlocks ?? []
 			  )
-					.map( ( block ) => Number( block.index ) )
-					.sort( ( a, b ) => a - b )
+					.map( ( block ) =>
+						'string' === typeof block.syncId
+							? block.syncId
+							: String( Number( block.index ) )
+					)
+					.sort()
 					.join( ',' ) }`;
 
 	return {
@@ -167,42 +161,38 @@ export function createDeRtcReviewState(): DeRtcReviewState {
 			return () => listeners.delete( listener );
 		},
 
-		setEmitter( nextEmitter ) {
-			emitter = nextEmitter;
-		},
-
 		setRestResolver( nextResolver ) {
 			restResolver = nextResolver;
 		},
 
 		resolve( proposalId, resolution ) {
-			// Optimistic: the server's resolved row (and disposition) confirm
-			// idempotently; an unknown id still acks as resolved server-side.
-			// A folded task resolves EVERY revision it superseded with it
-			// (merge-not-stack: one decision closes the whole lineage).
+			// Optimistic: the server acks idempotently, so an unknown id
+			// still resolves server-side. A folded task resolves EVERY
+			// revision it superseded with it (merge-not-stack: one
+			// decision closes the whole lineage).
 			const item = open.get( proposalId );
 			const ids = [ proposalId, ...( item?.supersededIds ?? [] ) ];
 			ids.forEach( ( id ) => resolvedIds.add( id ) );
 			if ( open.delete( proposalId ) ) {
 				notify();
 			}
-			const emitRow = ( id: string ) =>
-				emitter?.( {
-					data: JSON.stringify( {
-						proposalId: id,
-						resolution,
-					} ),
-					type: DE_RTC_RESOLVED_TYPE,
-				} );
-			ids.forEach( ( id ) => {
-				if ( restResolver ) {
-					// REST first (B5); the transport row is the fallback so
-					// a transient POST failure never strands the resolution
-					// (both lanes ack idempotently server-side).
-					restResolver( id, resolution ).catch( () => emitRow( id ) );
-				} else {
-					emitRow( id );
+			const resolver = restResolver;
+			if ( ! resolver ) {
+				// No lane (session torn down): the parked row is durable
+				// server-side, so the task resurfaces on the next load.
+				return;
+			}
+			Promise.all(
+				ids.map( ( id ) => resolver( id, resolution ) )
+			).catch( () => {
+				// A failed POST must not strand the decision: reopen the
+				// task so the reviewer can decide again. Ids whose POST
+				// did land re-ack idempotently on the retry.
+				ids.forEach( ( id ) => resolvedIds.delete( id ) );
+				if ( item ) {
+					open.set( proposalId, item );
 				}
+				notify();
 			} );
 		},
 	};

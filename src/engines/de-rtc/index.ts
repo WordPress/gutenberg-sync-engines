@@ -1,7 +1,6 @@
 export { createDeRtcEngine } from './engine';
 export {
 	createDeRtcSessionCodec,
-	DE_RTC_CONTENT_TYPE,
 	DE_RTC_ENGINE_PROTOCOL,
 	DE_RTC_ENGINE_SLUG,
 	DE_RTC_PROPOSAL_TYPE,

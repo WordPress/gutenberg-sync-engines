@@ -32,7 +32,7 @@ class Tests_Collaboration_WpIntentLogCancel extends WP_UnitTestCase {
 	}
 
 	private static function engine(): WP_Intent_Log_Engine {
-		return new WP_Intent_Log_Engine( new WP_Sync_Post_Meta_Storage() );
+		return new WP_Intent_Log_Engine( new WP_Sync_Table_Storage() );
 	}
 
 	/**

@@ -29,6 +29,13 @@
  * Known limitation: classic (freeform) content occupies a path index in the
  * editor but not in the server's parse — such posts fall back to adoption.
  *
+ * ENGINES SERVED: the plugin enqueues this stamper for every engine whose
+ * blocks carry `metadata.syncId` — intent-log and de-rtc. Under de-rtc the
+ * editor is the identity authority for blocks born in a session (the
+ * server stamps only room genesis, deterministically, and the blocks of
+ * engine-unaware writers), so all three lanes run: genesis, random, and
+ * dedupe. The stand-down below is intent-log's alone.
+ *
  * IN-SESSION STAND-DOWN: while the intent-log engine is ANNOUNCED
  * (window._wpCollaborationSync.engine), only the genesis pass runs here.
  * The capture bridge mints identity for blocks created during a live

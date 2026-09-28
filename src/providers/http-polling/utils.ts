@@ -14,33 +14,9 @@ import {
 	type UpdateQueue,
 } from './types';
 
-const DEFAULT_SYNC_API_PATH = '/wp-sync/v1/updates';
-
-/*
- * The REST path the shared manager posts to. HTTP short-polling uses the
- * default; the long-polling transport points it at its own held-open route
- * (see providers/http-long-polling). Site-wide, because a single config
- * value selects one transport for the whole site.
- */
-let syncApiPath = DEFAULT_SYNC_API_PATH;
-
-/**
- * Sets the sync endpoint path the manager posts to.
- *
- * @param path REST path.
- */
-export function setSyncApiPath( path: string ): void {
-	syncApiPath = path;
-}
-
-/**
- * The current sync endpoint path.
- *
- * @return REST path.
- */
-export function getSyncApiPath(): string {
-	return syncApiPath;
-}
+// The REST path the shared manager posts to. The SSE transport keeps its
+// sends here too; only its receive half moves to the stream route.
+const syncApiPath = '/wp-sync/v1/updates';
 
 export function uint8ArrayToBase64( data: Uint8Array ): string {
 	let binary = '';
@@ -155,8 +131,9 @@ export function createUpdateQueue(
  * Post a sync update and receive updates the client is missing.
  *
  * @param payload The sync payload including data and after cursor
- * @param signal  Optional abort signal (a parked long-poll is aborted when
- *                local updates arrive so sends never wait out the hold).
+ * @param signal  Optional abort signal (a parked stream exchange is aborted
+ *                when local updates arrive so sends never wait for the
+ *                next event).
  * @return The sync server response
  */
 export function postSyncUpdate(

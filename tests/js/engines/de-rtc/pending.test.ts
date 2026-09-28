@@ -67,7 +67,7 @@ describe( 'contested-block pending lifecycle (bridge)', () => {
 	let doc: Y.Doc;
 	let bridge: ReturnType< typeof createDeRtcDocBridge >;
 	let contests: any[];
-	let resolved: number[];
+	let resolved: Array< number | string >;
 
 	beforeEach( () => {
 		doc = new Y.Doc();
@@ -156,9 +156,10 @@ describe( 'parked review tasks fold (merge-not-stack)', () => {
 	it( 'a revised parked proposal supersedes; one resolution closes the lineage', () => {
 		const review = createDeRtcReviewState();
 		const sent: any[] = [];
-		review.setEmitter( ( update ) =>
-			sent.push( JSON.parse( update.data ) )
-		);
+		review.setRestResolver( ( proposalId, resolution ) => {
+			sent.push( { proposalId, resolution } );
+			return Promise.resolve( {} );
+		} );
 
 		review.noteParked( {
 			proposalId: 'p-9-1',

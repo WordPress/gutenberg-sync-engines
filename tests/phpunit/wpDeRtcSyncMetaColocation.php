@@ -35,7 +35,7 @@ class Tests_Collaboration_WpDeRtcSyncMetaColocation extends WP_UnitTestCase {
 	}
 
 	private function engine(): WP_De_RTC_Engine {
-		return new WP_De_RTC_Engine( new WP_Sync_Post_Meta_Storage() );
+		return new WP_De_RTC_Engine( new WP_Sync_Table_Storage() );
 	}
 
 	private function make_post(): int {
@@ -71,9 +71,9 @@ class Tests_Collaboration_WpDeRtcSyncMetaColocation extends WP_UnitTestCase {
 	private function bootstrap_room( int $post_id ): string {
 		$room   = 'postType/post:' . $post_id;
 		$engine = $this->engine();
-		$this->assertSame( self::GENESIS_CONTENT, $engine->materialize( $room ) );
+		$this->assertSame( $this->genesis( $post_id ), $engine->materialize( $room ) );
 
-		$proposed = str_replace( 'Alpha block original text.', 'Alpha block collaborated text.', self::GENESIS_CONTENT );
+		$proposed = str_replace( 'Alpha block original text.', 'Alpha block collaborated text.', $this->genesis( $post_id ) );
 		$result   = $engine->handle_updates( $room, 201, 0, array( $this->proposal( 'p-1', 'v1', $proposed ) ), array() );
 		$this->assertSame( 'applied', $result['dispositions'][0]['status'] );
 		$this->assertSame( 'v2', $result['dispositions'][0]['version'] );
@@ -88,7 +88,7 @@ class Tests_Collaboration_WpDeRtcSyncMetaColocation extends WP_UnitTestCase {
 		wp_update_post(
 			array(
 				'ID'           => $post_id,
-				'post_content' => str_replace( 'Alpha block original text.', 'Alpha block collaborated text.', self::GENESIS_CONTENT ),
+				'post_content' => str_replace( 'Alpha block original text.', 'Alpha block collaborated text.', $this->genesis( $post_id ) ),
 			)
 		);
 
@@ -137,7 +137,7 @@ class Tests_Collaboration_WpDeRtcSyncMetaColocation extends WP_UnitTestCase {
 		wp_update_post(
 			array(
 				'ID'           => $post_id,
-				'post_content' => str_replace( 'Beta block original text.', 'Beta revised for the revision.', self::GENESIS_CONTENT ),
+				'post_content' => str_replace( 'Beta block original text.', 'Beta revised for the revision.', $this->genesis( $post_id ) ),
 			)
 		);
 
@@ -159,23 +159,16 @@ class Tests_Collaboration_WpDeRtcSyncMetaColocation extends WP_UnitTestCase {
 		wp_update_post(
 			array(
 				'ID'           => $post_id,
-				'post_content' => str_replace( 'Alpha block original text.', 'Alpha block collaborated text.', self::GENESIS_CONTENT ),
+				'post_content' => str_replace( 'Alpha block original text.', 'Alpha block collaborated text.', $this->genesis( $post_id ) ),
 			)
 		);
 
 		// Simulate a room reset (engine flip / stale-room cleanup): the
-		// storage post disappears, the saved post is all that remains.
-		$storage_ids = get_posts(
-			array(
-				'post_type'      => 'wp_sync_storage',
-				'post_status'    => 'publish',
-				'name'           => md5( $room ),
-				'posts_per_page' => 1,
-				'fields'         => 'ids',
-			)
-		);
-		$this->assertNotEmpty( $storage_ids );
-		wp_delete_post( (int) $storage_ids[0], true );
+		// room's rows disappear, the saved post is all that remains.
+		$storage = new WP_Sync_Table_Storage();
+		$this->assertTrue( $storage->get_room_size( $room )['found'] );
+		$this->assertTrue( $storage->reset_room( $room ) );
+		$this->assertFalse( $storage->get_room_size( $room )['found'] );
 
 		// A fresh engine re-runs genesis from the saved post: lineage must
 		// RESUME at v2 (adopted), not restart at v1.
@@ -188,5 +181,65 @@ class Tests_Collaboration_WpDeRtcSyncMetaColocation extends WP_UnitTestCase {
 		$result   = $engine->handle_updates( $room, 202, 0, array( $this->proposal( 'p-2', 'v2', $proposed ) ), array() );
 		$this->assertSame( 'applied', $result['dispositions'][0]['status'] );
 		$this->assertSame( 'v3', $result['dispositions'][0]['version'], 'The resumed lineage must continue past the adopted version.' );
+	}
+
+	/**
+	 * The room's genesis content: the saved post with every block stamped
+	 * with its deterministic identity (what the room actually serves).
+	 *
+	 * @param int $post_id Post ID.
+	 * @return string Stamped genesis content.
+	 */
+	private function genesis( int $post_id ): string {
+		return WP_De_RTC_Block_Identity::stamp_genesis( self::GENESIS_CONTENT, $post_id );
+	}
+
+	/**
+	 * A client that parsed a SAVED post carries the co-located sync-meta
+	 * script as a stray block (the editor renders it as a freeform block
+	 * and proposes it back). The proposal lane strips it exactly as the
+	 * save preflight does: bookkeeping never becomes content.
+	 */
+	public function test_a_proposal_carrying_the_sync_meta_pseudo_block_lands_stripped() {
+		$post_id = $this->make_post();
+		$room    = 'postType/post:' . $post_id;
+		$engine  = $this->engine();
+		$genesis = $engine->materialize( $room );
+		$this->assertSame( $this->genesis( $post_id ), $genesis );
+
+		$stray    = "\n\n<p><script data-sync-meta-format=\"automerge\" data-wp-sync-meta=\"distributed-editing\" type=\"application/json\">{\"version_snapshots\":{}}</script></p>";
+		$proposed = str_replace( 'Alpha block original text.', 'Alpha block edited after a reload.', $genesis ) . $stray;
+		$result   = $engine->handle_updates( $room, 201, 0, array( $this->proposal( 'p-stray', 'v1', $proposed ) ), array() );
+		$this->assertSame( 'applied', $result['dispositions'][0]['status'] );
+
+		$canonical = $engine->materialize( $room );
+		$this->assertStringContainsString( 'edited after a reload', $canonical );
+		$this->assertStringNotContainsString( 'data-wp-sync-meta', $canonical );
+		$this->assertStringNotContainsString( '<script', $canonical );
+	}
+
+	/**
+	 * The editor loads `content.raw` over REST; the co-located script must
+	 * not be in it, or the editor parses it as a block and proposes it back.
+	 */
+	public function test_rest_raw_content_is_served_without_the_sync_meta_script() {
+		$post_id = $this->make_post();
+		$this->bootstrap_room( $post_id );
+		wp_update_post(
+			array(
+				'ID'           => $post_id,
+				'post_content' => self::GENESIS_CONTENT,
+			)
+		);
+		$this->assertStringContainsString( 'data-wp-sync-meta', get_post( $post_id )->post_content );
+
+		WP_De_RTC_Sync_Meta_Colocation::register_rest_filters();
+		$request = new WP_REST_Request( 'GET', '/wp/v2/posts/' . $post_id );
+		$request->set_param( 'context', 'edit' );
+		$response = rest_get_server()->dispatch( $request );
+		$this->assertSame( 200, $response->get_status() );
+		$raw = $response->get_data()['content']['raw'];
+		$this->assertStringNotContainsString( 'data-wp-sync-meta', $raw );
+		$this->assertStringContainsString( 'Alpha block', $raw );
 	}
 }

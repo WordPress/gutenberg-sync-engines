@@ -61,11 +61,16 @@
 	<rule ref="WordPress.WP.AlternativeFunctions">
 		<exclude-pattern>/tests/*</exclude-pattern>
 		<exclude-pattern>/includes/transports/websocket/*</exclude-pattern>
+		<exclude-pattern>/includes/transports/sse/class-wp-sync-redis.php</exclude-pattern>
 	</rule>
 
 	<!-- Test fixtures and benchmark profiles colocate small helper
-	     classes with their only consumer. -->
+	     classes, and stand-ins for another plugin's global functions,
+	     with their only consumer. -->
 	<rule ref="Generic.Files.OneObjectStructurePerFile">
+		<exclude-pattern>/tests/*</exclude-pattern>
+	</rule>
+	<rule ref="Universal.Files.SeparateFunctionsFromOO">
 		<exclude-pattern>/tests/*</exclude-pattern>
 	</rule>
 

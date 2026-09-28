@@ -11,6 +11,40 @@ use these terms freely; none of them is standard outside this project
   server from the post's saved content when the first person opens it.
 - **Materialize** — turn the shared document back into ordinary
   `post_content` so WordPress can save it.
+- **Advisory channel** — the link between the tabs editing one post:
+  browser to browser over WebRTC (`webrtc-advisory`, the default) or
+  relayed by the sync daemon over a WebSocket (`websocket-advisory`). It
+  carries presence and "I landed rows, go and poll" notices, never
+  content; nothing on it is trusted for anything but display and a
+  decision to poll sooner.
+- **Roster** — under `websocket-advisory`, the daemon's in-memory list of
+  the tabs following a room (client id, presence token, latest
+  presence), sent to every follower whenever it changes. It is the
+  channel's coverage answer over that link.
+- **Access token** — a signed, two-minute pass WordPress hands an editor tab
+  for its socket handshake when a `WP_SYNC_WEBSOCKET_ACCESS_TOKEN_SECRET` is
+  configured: it names the user, the site, and the rooms the tab may
+  follow, and any server sharing the secret can check it without
+  asking WordPress. It is what lets a host run its own relay
+  (`examples/advisory-relay/`) instead of the sync daemon.
+- **Signaling** — how tabs find each other and exchange the WebRTC
+  handshake: a per-tab presence token and a mailbox, both riding the
+  heartbeat WordPress already sends from every editor screen.
+- **Head-cursor check** — the heartbeat answer carries the room's newest
+  row id; a tab whose own cursor is behind it polls. This is how rows
+  written by anyone not on the advisory channel (scripts, WP-CLI, a
+  dropped peer) reach a tab that has no poll timer.
+- **Coverage** — the advisory channel's answer to "is every peer I know
+  about reachable?": every discovered token and every client id in the
+  last awareness map has an open channel. Only full coverage lets a tab
+  leave the timer cadence.
+- **Generation** — the token a room carries that changes whenever the
+  room is reset (its first row's id). A client that sees a different
+  generation than it started with knows its rows and cursor are gone
+  and bootstraps again from the fresh genesis.
+- **Unsaved-changes policy** — the setting that decides a per-post room's
+  lifetime: "discard" resets an empty room to the saved post (the
+  default), "keep" lets it live on as a shared working copy.
 - **Cursor** — a client's position in the room's update history. Opaque
   to clients; they echo it back to say "give me everything after this."
 - **Disposition** — the server's verdict on one update: applied, parked
@@ -20,7 +54,9 @@ use these terms freely; none of them is standard outside this project
   the history it was written against is gone. The client is expected to
   redo the work from a fresher state.
 - **Park / parked** — set an edit aside, saved but not applied, for a
-  person to decide about later (in the review panel).
+  person to decide about later (in the review panel). Both engines with
+  a review lane (intent-log and de-rtc) store a parked edit in the room
+  log as a `parked` row and close it with a `resolved` row.
 - **Escalate** — refuse to merge automatically and park the edit
   instead.
 - **Review lane** — the whole path a parked edit travels: durable
@@ -75,6 +111,9 @@ use these terms freely; none of them is standard outside this project
   whose truth is one whole document per version.
 - **Oracle** — a benchmark check that decides whether a run was correct
   (for example, "did any edit disappear?").
+- **Slow awareness** — the optional mode where editors exchange only the
+  block they are in, once per interval, instead of live cursors. See
+  `docs/awareness-high-latency.md`.
 - **syncId** — the stable identity stamped on each block
   (`metadata.syncId`) so engines can track a block across edits and
   saves.

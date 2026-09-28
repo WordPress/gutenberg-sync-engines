@@ -17,7 +17,7 @@ import {
  * Editing's save-centric model on the room protocol. Clients propose
  * whole content against the version they last incorporated; the SERVER
  * three-way-merges every proposal with the ported DE-RTC merge core and
- * broadcasts canonical content rows.
+ * announces each canonical version.
  *
  * These specs flip the site's `wp_sync_engine` option to `de-rtc` and
  * exercise the full stack: editor changes → de-rtc session codec →
@@ -31,6 +31,16 @@ import {
  * exercised by the review-lane spec below). Title and entity
  * properties ride the proposal wire as per-property registers.
  */
+
+/*
+ * The block serializer escapes `--` inside comment attributes as
+ * `\u002d\u002d` so the block delimiter stays a valid HTML comment.
+ * Genesis syncIds are base64url and can contain consecutive dashes, so
+ * undo that escape before matching ids against raw persisted content.
+ */
+function unescapeCommentDashes( raw: string ): string {
+	return raw.replaceAll( '\\u002d', '-' );
+}
 
 async function setSyncEngine(
 	requestUtils: RequestUtils,
@@ -84,7 +94,7 @@ async function openSession(
 	await collaborationUtils.waitForMutualDiscovery();
 }
 
-test.describe( 'Collaboration - de-rtc engine', () => {
+test.describe( 'Collaboration - de-rtc engine @engine-de-rtc', () => {
 	test.beforeEach( async ( { requestUtils } ) => {
 		await setSyncEngine( requestUtils, 'de-rtc' );
 	} );
@@ -457,11 +467,10 @@ test.describe( 'Collaboration - de-rtc engine', () => {
 				.first()
 		).toBeVisible();
 
-		// Resolutions are MUTATIONS and must travel over the REST review
-		// lane (B5), not the advisory transport. Arm the listener BEFORE
-		// rejecting: a broken route would otherwise be masked by the
-		// client's silent transport-row fallback and this spec would
-		// still pass.
+		// Resolutions are MUTATIONS and travel ONLY over the REST review
+		// lane (B5) — the transport-row fallback is gone. Arm the
+		// listener BEFORE rejecting so the spec proves the route really
+		// ran.
 		const resolveResponse = noticePage.waitForResponse(
 			( response ) =>
 				decodeURIComponent( response.url() ).includes(
@@ -526,5 +535,138 @@ test.describe( 'Collaboration - de-rtc engine', () => {
 			] );
 			expect( blocks1 ).toEqual( blocks2 );
 		} ).toPass( { timeout: 20000 } );
+	} );
+
+	test( 'every block carries a durable identity that both users share, that persists into saved content, and that survives reload', async ( {
+		collaborationUtils,
+		requestUtils,
+		editor,
+	} ) => {
+		const post = await requestUtils.createPost( {
+			title: 'De-RTC Durable Ids Test',
+			status: 'draft',
+			content:
+				'<!-- wp:paragraph -->\n<p>Existing content</p>\n<!-- /wp:paragraph -->',
+			date_gmt: new Date().toISOString(),
+		} );
+
+		await openSession( collaborationUtils, post.id );
+		const { editor2 } = collaborationUtils;
+		const page1 = editor.page;
+
+		const idsOf = async ( currentEditor: typeof editor ) => {
+			const blocks = await currentEditor.getBlocks();
+			return blocks.map(
+				( block ) =>
+					( block.attributes.metadata as { syncId?: string } )?.syncId
+			);
+		};
+
+		// The saved paragraph gets its deterministic genesis id from the
+		// room, and both users agree on it.
+		await expect( async () => {
+			const [ mine ] = await idsOf( editor );
+			const [ theirs ] = await idsOf( editor2 );
+			expect( mine ).toBeTruthy();
+			expect( theirs ).toBe( mine );
+		} ).toPass( { timeout: 15000 } );
+
+		// A block born in the session is stamped in the editor; its id
+		// reaches the peer with the block.
+		await editor.insertBlock( {
+			name: 'core/paragraph',
+			attributes: { content: 'Born in the session' },
+		} );
+		let ids: Array< string | undefined > = [];
+		await expect( async () => {
+			ids = await idsOf( editor );
+			expect( ids ).toHaveLength( 2 );
+			expect( ids[ 1 ] ).toBeTruthy();
+			expect( await idsOf( editor2 ) ).toEqual( ids );
+		} ).toPass( { timeout: 15000 } );
+		// Settled, not merely first-stamped: stable across a quiet period.
+		await page1.waitForTimeout( 2000 );
+		expect( await idsOf( editor ) ).toEqual( ids );
+
+		await editor.saveDraft();
+
+		// The ids ride the block delimiters into persisted content…
+		const saved = await requestUtils.rest< { content: { raw: string } } >( {
+			path: `/wp/v2/posts/${ post.id }`,
+			params: { context: 'edit' },
+		} );
+		const raw = unescapeCommentDashes( saved.content.raw );
+		expect( raw ).toContain( `"syncId":"${ ids[ 0 ] }"` );
+		expect( raw ).toContain( `"syncId":"${ ids[ 1 ] }"` );
+
+		// …and survive a full reload unchanged.
+		await page1.reload();
+		await expect( async () => {
+			expect( await idsOf( editor ) ).toEqual( ids );
+		} ).toPass( { timeout: 20000 } );
+	} );
+
+	test( 'edits inside the same Group by two users both survive, merged by block identity', async ( {
+		collaborationUtils,
+		requestUtils,
+		editor,
+	} ) => {
+		const post = await requestUtils.createPost( {
+			title: 'De-RTC Nested Merge Test',
+			status: 'draft',
+			content:
+				'<!-- wp:group {"layout":{"type":"constrained"}} -->\n<div class="wp-block-group"><!-- wp:paragraph -->\n<p>First inner</p>\n<!-- /wp:paragraph -->\n\n<!-- wp:paragraph -->\n<p>Second inner</p>\n<!-- /wp:paragraph --></div>\n<!-- /wp:group -->',
+			date_gmt: new Date().toISOString(),
+		} );
+
+		await openSession( collaborationUtils, post.id );
+		const { editor2, page2 } = collaborationUtils;
+		const page1 = editor.page;
+
+		for ( const currentEditor of [ editor, editor2 ] ) {
+			await expect(
+				currentEditor.canvas.locator( '[data-type="core/paragraph"]' )
+			).toHaveCount( 2 );
+		}
+
+		// User 1 types into the first inner paragraph while user 2 types
+		// into the second — the same top-level Group on both sides, which
+		// positional matching could only park.
+		await editor.canvas
+			.locator( '[data-type="core/paragraph"]' )
+			.first()
+			.click();
+		await page1.keyboard.press( 'End' );
+		await editor2.canvas
+			.locator( '[data-type="core/paragraph"]' )
+			.nth( 1 )
+			.click();
+		await page2.keyboard.press( 'End' );
+		await Promise.all( [
+			page1.keyboard.type( ' plus one', { delay: 40 } ),
+			page2.keyboard.type( ' plus two', { delay: 40 } ),
+		] );
+
+		for ( const currentEditor of [ editor, editor2 ] ) {
+			await expect( async () => {
+				const blocks = await currentEditor.getBlocks();
+				expect( blocks ).toHaveLength( 1 );
+				expect( blocks[ 0 ].name ).toBe( 'core/group' );
+				expect(
+					blocks[ 0 ].innerBlocks.map(
+						( block ) => block.attributes.content
+					)
+				).toEqual( [
+					'First inner plus one',
+					'Second inner plus two',
+				] );
+			} ).toPass( { timeout: 20000 } );
+		}
+
+		// Nothing parked: both edits merged, no review item.
+		await page1.waitForTimeout( 2000 );
+		await expect(
+			page1.getByRole( 'button', { name: 'Reject', exact: true } )
+		).toHaveCount( 0 );
 	} );
 } );

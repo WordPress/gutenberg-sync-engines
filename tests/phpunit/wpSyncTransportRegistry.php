@@ -14,7 +14,7 @@ class Tests_Collaboration_WpSyncTransportRegistry extends WP_UnitTestCase {
 	 * @return WP_Sync_Transport_Registry Registry.
 	 */
 	private function registry(): WP_Sync_Transport_Registry {
-		$storage = new WP_Sync_Post_Meta_Storage();
+		$storage = new WP_Sync_Table_Storage();
 		return new WP_Sync_Transport_Registry( $storage, new WP_Sync_Engine_Registry( $storage ) );
 	}
 

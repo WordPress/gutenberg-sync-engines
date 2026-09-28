@@ -28,6 +28,3 @@ export const CRDT_STATE_MAP_SAVED_BY_KEY = 'savedBy';
 
 /** State-map key: the CRDT document schema version. */
 export const CRDT_STATE_MAP_VERSION_KEY = 'version';
-
-/** Transaction origin for the manager's own (non-user) writes. */
-export const LOCAL_SYNC_MANAGER_ORIGIN = 'syncManager';

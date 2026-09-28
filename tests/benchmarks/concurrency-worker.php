@@ -2,9 +2,9 @@
 /**
  * One simulated client for the multi-process concurrency measurement —
  * invoked N times IN PARALLEL against the same room by
- * `npm run bench -- concurrency=N` (see bench.mjs).
+ * `npm run bench -- --concurrency=N` (see bench.mjs).
  *
- * Unlike the single-process harness, this path uses the REAL postmeta
+ * Unlike the single-process harness, this path uses the REAL table
  * storage (processes can only contend through a shared database) and
  * constructs a FRESH engine + storage per iteration (each production
  * request starts with empty per-request caches). What it measures is what
@@ -51,7 +51,7 @@ $room = 'postType/post:' . $post_id;
 // keeps its document/observed state between requests), while engine and
 // storage are rebuilt per iteration (each HTTP request starts cold).
 $wp_sync_bench_fresh_engine = static function () use ( $engine_slug ) {
-	return ( new WP_Sync_Engine_Registry( new WP_Sync_Post_Meta_Storage() ) )->get_engine( $engine_slug );
+	return ( new WP_Sync_Engine_Registry( new WP_Sync_Table_Storage() ) )->get_engine( $engine_slug );
 };
 
 $wp_sync_bench_workload = array(

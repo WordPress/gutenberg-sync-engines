@@ -36,19 +36,6 @@ const REST_BASES: Record< string, string > = {
 };
 
 /**
- * Whether an entity type rides the REST lanes (commit AND review
- * resolution — B5 follows the commit split): types without a commit
- * route keep the transport for both.
- *
- * @param objectType Sync object type (e.g. `postType/post`).
- * @return Whether the type has REST routes.
- */
-export function hasDeRtcCommitRoute( objectType: string ): boolean {
-	const match = /^postType\/(.+)$/.exec( objectType );
-	return Boolean( match && REST_BASES[ match[ 1 ] ] );
-}
-
-/**
  * Builds the commit adapter for one entity, or null when the entity's
  * type has no commit route (collections, unsupported post types — those
  * sessions keep the transport proposal lane).

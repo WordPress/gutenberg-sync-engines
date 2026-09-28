@@ -18,6 +18,7 @@ import { getBlockType, getSaveContent } from '@wordpress/blocks';
  * Internal dependencies
  */
 import { createAwarenessDoc } from './awareness-sync';
+import { registerAwareness } from '../awareness/registry';
 import {
 	applyDerivedIntents,
 	deriveIntents,
@@ -30,6 +31,7 @@ import {
 } from './intent-log-bridge';
 import {
 	createIntentLogSession,
+	randomClientId,
 	type IntentLogSession,
 } from './intent-log-session';
 import { mintSyncId } from './intent-log/sync-id.js';
@@ -1079,11 +1081,12 @@ export function createIntentLogManager( debug = false ): SyncManager {
 		 * `clientID` (and a destroy listener) from its doc argument, so a
 		 * stub suffices — presence is transport data, engine-independent.
 		 */
-		const clientId = Math.floor( Math.random() * ( 2 ** 31 - 1 ) ) + 1;
+		const clientId = randomClientId();
 		const awareness = syncConfig.createAwareness?.(
 			createAwarenessDoc( clientId ) as never,
 			objectId
 		);
+		registerAwareness( objectType, objectId, awareness );
 		const session = createIntentLogSession( {
 			userId,
 			clientId,
@@ -1569,7 +1572,7 @@ export function createIntentLogManager( debug = false ): SyncManager {
 		/*
 		 * Escalation notices derive from the SETTLED open-proposal list, on
 		 * a microtask after the delivery batch: a bootstrap replay delivers
-		 * proposal rows before their resolution rows, and notifying on raw
+		 * parked rows before their resolution rows, and notifying on raw
 		 * arrival would re-surface long-resolved conflicts on every reload.
 		 */
 		const notifiedProposalIds = new Set< string >();
@@ -1764,7 +1767,7 @@ export function createIntentLogManager( debug = false ): SyncManager {
 			return;
 		}
 
-		const clientId = Math.floor( Math.random() * ( 2 ** 31 - 1 ) ) + 1;
+		const clientId = randomClientId();
 		const awareness = syncConfig.createAwareness?.(
 			createAwarenessDoc( clientId ) as never
 		);

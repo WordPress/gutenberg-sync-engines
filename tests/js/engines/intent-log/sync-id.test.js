@@ -1,10 +1,7 @@
 import assert from 'node:assert/strict';
 
-import {
-	canonicalGenesisInput,
-	genesisSyncId,
-	mintSyncId,
-} from '../../../../src/engines/intent-log/sync-id.js';
+import { mintSyncId } from '../../../../src/engines/intent-log/sync-id.js';
+import { canonicalGenesisInput, genesisSyncId } from './genesis-sync-id.js';
 import FROZEN from './test-vectors/sync-id.json';
 
 test( 'genesis matches every frozen cross-language vector', () => {

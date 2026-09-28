@@ -1,0 +1,22 @@
+{
+  "$schema": "https://playground.wordpress.net/blueprint-schema.json",
+  "landingPage": "/wp-admin/post-new.php",
+  "login": true,
+  "steps": [
+    {
+      "step": "installPlugin",
+      "pluginData": {
+        "resource": "url",
+        "url": "https://github.com/Automattic/gutenberg-sync-engines/releases/latest/download/gutenberg-sync-engines.zip",
+        "caption": "Downloading Gutenberg Sync Engines (latest release, bundles Gutenberg)"
+      },
+      "options": {
+        "activate": true
+      }
+    },
+    {
+      "step": "runPHP",
+      "code": "<?php require_once '/wordpress/wp-load.php'; if ( ! username_exists( 'editor' ) ) { wp_insert_user( array( 'user_login' => 'editor', 'user_pass' => 'password', 'user_email' => 'editor@example.com', 'display_name' => 'Editor', 'role' => 'editor' ) ); } global $wpdb; foreach ( array( 'admin', 'editor' ) as $login ) { $user = get_user_by( 'login', $login ); if ( $user ) { update_user_meta( $user->ID, $wpdb->get_blog_prefix() . 'persisted_preferences', array( 'core/edit-post' => array( 'welcomeGuide' => false ), '_modified' => gmdate( 'c' ) ) ); } }"
+    }
+  ]
+}

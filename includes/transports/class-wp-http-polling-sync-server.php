@@ -61,13 +61,24 @@ if ( ! class_exists( 'WP_HTTP_Polling_Sync_Server' ) ) {
 		const AWARENESS_TIMEOUT = 30;
 
 		/**
-		 * Threshold used to signal clients to send a compaction update.
+		 * Default rounding of awareness timestamps, in seconds. A poll that
+		 * carries the same state inside the same bucket changes nothing, so
+		 * the transport skips the write (see `awareness_timestamp()`).
 		 *
-		 * @since 7.0.0
-		 * @deprecated 7.2.0 Compaction policy is engine-owned.
+		 * @since 0.0.1
 		 * @var int
 		 */
-		const COMPACTION_THRESHOLD = 50;
+		const AWARENESS_TIMESTAMP_GRANULARITY = 10;
+
+		/**
+		 * Room meta key of the room's generation token (see room_generation()).
+		 * Write-once per room lifetime, which is why the table storage may
+		 * serve it from the object cache (`WP_Sync_Table_Storage::GENERATION_KEY`
+		 * names the same key).
+		 *
+		 * @since 0.0.1
+		 */
+		const GENERATION_META_KEY = 'generation';
 
 		/**
 		 * Maximum total size (in bytes) of the request body.
@@ -94,6 +105,14 @@ if ( ! class_exists( 'WP_HTTP_Polling_Sync_Server' ) ) {
 		const MAX_UPDATE_DATA_SIZE = MB_IN_BYTES;
 
 		/**
+		 * The cursor a request whose rows arrive separately reads from: past every row,
+		 * so the read returns no stored rows but still reports the head.
+		 *
+		 * @since 0.0.2
+		 */
+		const READ_FROM_HEAD = PHP_INT_MAX;
+
+		/**
 		 * Storage backend for sync updates.
 		 *
 		 * @since 7.0.0
@@ -114,13 +133,49 @@ if ( ! class_exists( 'WP_HTTP_Polling_Sync_Server' ) ) {
 		 *
 		 * @since 7.0.0
 		 *
-		 * @param WP_Sync_Storage              $storage Storage backend for sync updates.
-		 * @param WP_Sync_Engine_Registry|null $engines Engine registry. Defaults to a
-		 *                                              registry over the given storage.
+		 * @param WP_Sync_Storage                               $storage  Storage backend for sync updates.
+		 * @param WP_Sync_Engine_Registry|null                  $engines  Engine registry. Defaults to a
+		 *                                                                registry over the given storage.
+		 * @param Gutenberg_Sync_Engines_Advisory_Presence|null $presence Presence lane deciding room
+		 *                                                                lifetime. Defaults to the
+		 *                                                                plugin's when available.
 		 */
-		public function __construct( WP_Sync_Storage $storage, ?WP_Sync_Engine_Registry $engines = null ) {
-			$this->storage = $storage;
-			$this->engines = $engines ?? new WP_Sync_Engine_Registry( $storage );
+		public function __construct( WP_Sync_Storage $storage, ?WP_Sync_Engine_Registry $engines = null, ?Gutenberg_Sync_Engines_Advisory_Presence $presence = null ) {
+			if ( null === $presence && class_exists( 'Gutenberg_Sync_Engines_Advisory_Presence' ) ) {
+				$presence = new Gutenberg_Sync_Engines_Advisory_Presence( $storage );
+			}
+			$this->presence  = $presence;
+			$this->storage   = $storage;
+			$this->engines   = $engines ?? new WP_Sync_Engine_Registry( $storage );
+			$this->awareness = new WP_Sync_Awareness( $storage );
+		}
+
+		/**
+		 * Who is in a room, over whichever store serves this request.
+		 *
+		 * @since 0.0.2
+		 * @var WP_Sync_Awareness
+		 */
+		protected WP_Sync_Awareness $awareness;
+
+		/**
+		 * The presence lane deciding room lifetime (join/leave resets), or
+		 * null when the plugin's presence class is unavailable.
+		 *
+		 * @since 0.0.1
+		 * @var Gutenberg_Sync_Engines_Advisory_Presence|null
+		 */
+		protected $presence;
+
+		/**
+		 * The presence lane this transport consults for room lifetime.
+		 *
+		 * @since 0.0.1
+		 *
+		 * @return Gutenberg_Sync_Engines_Advisory_Presence|null
+		 */
+		public function get_presence(): ?Gutenberg_Sync_Engines_Advisory_Presence {
+			return $this->presence;
 		}
 
 		/**
@@ -166,7 +221,7 @@ if ( ! class_exists( 'WP_HTTP_Polling_Sync_Server' ) ) {
 
 		/**
 		 * The shared route argument schema (the `rooms[]` payload). Extracted
-		 * so transport variants — e.g. the long-poll route — validate an
+		 * so transport variants — e.g. the SSE stream route — validate an
 		 * identical request shape.
 		 *
 		 * @since 7.2.0
@@ -192,42 +247,58 @@ if ( ! class_exists( 'WP_HTTP_Polling_Sync_Server' ) ) {
 			);
 
 			$room_args = array(
-				'after'           => array(
+				'after'                    => array(
 					'minimum'  => 0,
 					'required' => true,
 					'type'     => 'integer',
 				),
-				'awareness'       => array(
+				'awareness'                => array(
 					'required' => true,
 					'type'     => array( 'object', 'null' ),
 				),
-				'client_id'       => array(
+				'client_id'                => array(
 					'minimum'  => 1,
 					'required' => true,
 					'type'     => 'integer',
 				),
 				// Optional engine handshake stamp: when present, the request
 				// fails with 409 unless it matches the room's engine.
-				'engine'          => array(
+				'engine'                   => array(
 					'required' => false,
 					'type'     => 'string',
 				),
 				// Debug envelope opt-in (see the sync inspector).
-				'debug'           => array(
+				'debug'                    => array(
 					'required' => false,
 					'type'     => 'boolean',
 				),
-				'engine_protocol' => array(
+				// A send made beside an open stream (the SSE transport): the
+				// request stores its updates and is answered with the verdicts
+				// and the room's head cursor, but no stored rows. See
+				// process_room_request().
+				'rows_received_separately' => array(
+					'required' => false,
+					'type'     => 'boolean',
+				),
+				'engine_protocol'          => array(
 					'minimum'  => 1,
 					'required' => false,
 					'type'     => 'integer',
 				),
-				'room'            => array(
+				// The tab's presence token (Gutenberg_Sync_Engines_Advisory_Presence):
+				// a tab's first request with it is its join, which under the
+				// default policy resets a per-post room nobody else is in.
+				'presence_token'           => array(
+					'required'  => false,
+					'type'      => 'string',
+					'maxLength' => 64,
+				),
+				'room'                     => array(
 					'required' => true,
 					'type'     => 'string',
 					'pattern'  => '^[^/]+/[^/:]+(?::\\S+)?$',
 				),
-				'updates'         => array(
+				'updates'                  => array(
 					'items'    => $typed_update_args,
 					'minItems' => 0,
 					'required' => true,
@@ -236,7 +307,7 @@ if ( ! class_exists( 'WP_HTTP_Polling_Sync_Server' ) ) {
 			);
 
 			return array(
-				'rooms' => array(
+				'rooms'    => array(
 					'items'    => array(
 						'properties' => $room_args,
 						'type'       => 'object',
@@ -244,6 +315,14 @@ if ( ! class_exists( 'WP_HTTP_Polling_Sync_Server' ) ) {
 					'maxItems' => self::MAX_ROOMS_PER_REQUEST,
 					'required' => true,
 					'type'     => 'array',
+				),
+				// The advisory channel's signaling probe (per-tab token and
+				// handshake messages), answered alongside the rooms so an
+				// active poll loop is a faster carrier than the heartbeat.
+				// See Gutenberg_Sync_Engines_Advisory_Presence.
+				'advisory' => array(
+					'type'     => 'object',
+					'required' => false,
 				),
 			);
 		}
@@ -275,7 +354,7 @@ if ( ! class_exists( 'WP_HTTP_Polling_Sync_Server' ) ) {
 				$room      = $room['room'];
 
 				// Check that the client_id is not already owned by another user.
-				$existing_awareness = $this->storage->get_awareness_state( $room );
+				$existing_awareness = $this->awareness->entries( $room, self::AWARENESS_TIMEOUT );
 				foreach ( $existing_awareness as $entry ) {
 					if ( $client_id === $entry['client_id'] && $wp_user_id !== $entry['wp_user_id'] ) {
 						return new WP_Error(
@@ -357,6 +436,14 @@ if ( ! class_exists( 'WP_HTTP_Polling_Sync_Server' ) ) {
 				$response['rooms'][] = $room_response;
 			}
 
+			$probe = $request->get_param( 'advisory' );
+			if ( is_array( $probe ) && class_exists( 'Gutenberg_Sync_Engines_Advisory_Presence' ) ) {
+				$answer = ( new Gutenberg_Sync_Engines_Advisory_Presence( $this->storage ) )->answer_probe( $probe );
+				if ( null !== $answer ) {
+					$response['advisory'] = $answer;
+				}
+			}
+
 			return new WP_REST_Response( $response, 200 );
 		}
 
@@ -382,6 +469,19 @@ if ( ! class_exists( 'WP_HTTP_Polling_Sync_Server' ) ) {
 			$cursor    = (int) $room_request['after'];
 			$room      = (string) $room_request['room'];
 			$updates   = $room_request['updates'] ?? array();
+
+			/*
+			 * Room lifetime: a tab's FIRST request carrying its presence token
+			 * is its join. If nobody else is in this per-post room, the
+			 * room's unsaved content belongs to no one still here and is
+			 * reset to the saved post before anything else happens (lineage
+			 * included, so the mismatch check below sees a fresh room). See
+			 * docs/plan/room-lifetime.md.
+			 */
+			$presence_token = $room_request['presence_token'] ?? '';
+			if ( null !== $this->presence && is_string( $presence_token ) && '' !== $presence_token ) {
+				$this->presence->note_sync_request( $room, $presence_token, $client_id );
+			}
 
 			$engine = $this->engines->get_engine_for_room( $room );
 
@@ -413,9 +513,27 @@ if ( ! class_exists( 'WP_HTTP_Polling_Sync_Server' ) ) {
 				return $ingest;
 			}
 
-			// Engine produces the catch-up payload for this client.
-			$room_response              = $engine->get_updates_since( $room, $client_id, $cursor, $context );
+			/*
+			 * Engine produces the catch-up payload for this client. A
+			 * client receiving over an open stream (`rows_received_separately: true`) gets
+			 * no stored rows here: the stream is the only path that
+			 * delivers them and moves its cursor, so nothing is delivered
+			 * twice or skipped. Reading from past the head still refreshes
+			 * the storage's cursor cache (`end_cursor` is the head this
+			 * write produced, which the client waits for on the stream) and
+			 * still returns what an engine synthesizes for this client and
+			 * never stores (de-rtc's fetch answer). The same far-cursor read
+			 * is what WP_De_RTC_Autosave_Commits uses to mark a cursor.
+			 */
+			$read_cursor = ! empty( $room_request['rows_received_separately'] ) ? self::READ_FROM_HEAD : $cursor;
+
+			$room_response              = $engine->get_updates_since( $room, $client_id, $read_cursor, $context );
 			$room_response['awareness'] = $merged_awareness;
+
+			$generation = $this->room_generation( $room, (int) ( $room_response['end_cursor'] ?? 0 ) );
+			if ( null !== $generation ) {
+				$room_response['generation'] = $generation;
+			}
 
 			// Engines that produce per-update dispositions (an intent log's
 			// applied/escalated/voided outcomes) surface them; relay-style
@@ -425,6 +543,99 @@ if ( ! class_exists( 'WP_HTTP_Polling_Sync_Server' ) ) {
 			}
 
 			return $room_response;
+		}
+
+		/**
+		 * The room's generation token, minted on the first read after the
+		 * room's first row is written and stable until the room is reset.
+		 *
+		 * A reset (`WP_Sync_Storage::reset_room()`) deletes every row and
+		 * every room-meta key, so the next read finds no token and mints a
+		 * fresh one — and a client that bootstrapped under the old token
+		 * knows its rows and cursor are gone. The token is derived from the
+		 * id of the room's FIRST stored row where the storage exposes it
+		 * (racing first readers derive the same value), else a random id.
+		 * Rooms without rows have no generation yet (nothing to restart).
+		 *
+		 * Shared with the WebSocket daemon, which stamps its pushed frames
+		 * the same way.
+		 *
+		 * @since 0.0.1
+		 *
+		 * @param string $room       Room identifier.
+		 * @param int    $end_cursor The room's current cursor (0 = no rows).
+		 * @return string|null The generation token, or null when the room has
+		 *                     no rows or the storage keeps no room meta.
+		 */
+		public function room_generation( string $room, int $end_cursor ): ?string {
+			if (
+				$end_cursor <= 0 ||
+				! method_exists( $this->storage, 'get_room_meta' ) ||
+				! method_exists( $this->storage, 'set_room_meta' )
+			) {
+				return null;
+			}
+
+			$stored = $this->storage->get_room_meta( $room, self::GENERATION_META_KEY );
+			if ( is_string( $stored ) && '' !== $stored ) {
+				return $stored;
+			}
+
+			$generation = $this->derive_room_generation( $room );
+			$this->storage->set_room_meta( $room, self::GENERATION_META_KEY, $generation );
+			return $generation;
+		}
+
+		/**
+		 * Derives a fresh generation token for a room that has rows but no
+		 * token yet. With the plugin's table storage and the framework's
+		 * postmeta storage the id of the room's first row is used: it is
+		 * unique per genesis (ids are site-wide monotonic) and identical for
+		 * two first readers racing to mint it. Other storages get a random
+		 * id.
+		 *
+		 * @since 0.0.1
+		 *
+		 * @global wpdb $wpdb WordPress database abstraction object.
+		 *
+		 * @param string $room Room identifier.
+		 * @return string Generation token.
+		 */
+		private function derive_room_generation( string $room ): string {
+			if ( $this->storage instanceof WP_Sync_Table_Storage ) {
+				$first_row = (int) $this->storage->peek_room( $room )['first_cursor'];
+				if ( $first_row > 0 ) {
+					return 'g' . $first_row;
+				}
+			}
+
+			if ( $this->storage instanceof WP_Sync_Post_Meta_Storage ) {
+				global $wpdb;
+
+				// phpcs:disable WordPress.DB.DirectDatabaseQuery -- Read-only lookups against the storage post; the storage class exposes no first-row accessor and its own accessors bypass the meta cache the same way.
+				$post_id = (int) $wpdb->get_var(
+					$wpdb->prepare(
+						"SELECT ID FROM {$wpdb->posts} WHERE post_name = %s AND post_type = %s ORDER BY ID ASC LIMIT 1",
+						md5( $room ),
+						WP_Sync_Post_Meta_Storage::POST_TYPE
+					)
+				);
+				if ( $post_id > 0 ) {
+					$first_row = (int) $wpdb->get_var(
+						$wpdb->prepare(
+							"SELECT MIN(meta_id) FROM {$wpdb->postmeta} WHERE post_id = %d AND meta_key = %s",
+							$post_id,
+							WP_Sync_Post_Meta_Storage::SYNC_UPDATE_META_KEY
+						)
+					);
+					// phpcs:enable WordPress.DB.DirectDatabaseQuery
+					if ( $first_row > 0 ) {
+						return 'g' . $first_row;
+					}
+				}
+			}
+
+			return wp_generate_uuid4();
 		}
 
 		/**
@@ -630,6 +841,35 @@ if ( ! class_exists( 'WP_HTTP_Polling_Sync_Server' ) ) {
 		}
 
 		/**
+		 * The `updated_at` an awareness entry written now carries: the
+		 * current time rounded UP to the next multiple of the granularity.
+		 * Two polls inside one bucket produce identical entries, so the
+		 * second one has nothing to write; the entry is still expired by
+		 * `AWARENESS_TIMEOUT` seconds after the bucket, at most one bucket
+		 * later than it would be with exact timestamps.
+		 *
+		 * @since 0.0.1
+		 *
+		 * @param int $now Current Unix time.
+		 * @return int Rounded Unix time.
+		 */
+		public static function awareness_timestamp( int $now ): int {
+			/**
+			 * Filters how coarsely awareness timestamps are rounded, in
+			 * seconds. 1 disables the rounding (every poll writes).
+			 *
+			 * @since 0.0.1
+			 *
+			 * @param int $granularity Rounding step in seconds. Default 10.
+			 */
+			$granularity = (int) apply_filters( 'wp_sync_awareness_timestamp_granularity', self::AWARENESS_TIMESTAMP_GRANULARITY );
+			if ( $granularity < 1 ) {
+				$granularity = 1;
+			}
+			return (int) ceil( $now / $granularity ) * $granularity;
+		}
+
+		/**
 		 * Processes and stores an awareness update from a client.
 		 *
 		 * @since 7.0.0
@@ -640,36 +880,10 @@ if ( ! class_exists( 'WP_HTTP_Polling_Sync_Server' ) ) {
 		 * @return array<int, array<string, mixed>> Map of client ID to awareness state.
 		 */
 		private function process_awareness_update( string $room, int $client_id, ?array $awareness_update ): array {
-			$existing_awareness = $this->storage->get_awareness_state( $room );
-			$updated_awareness  = array();
-			$current_time       = time();
-
-			foreach ( $existing_awareness as $entry ) {
-				// Remove this client's entry (it will be updated below).
-				if ( $client_id === $entry['client_id'] ) {
-					continue;
-				}
-
-				// Remove entries that have expired.
-				if ( $current_time - $entry['updated_at'] >= self::AWARENESS_TIMEOUT ) {
-					continue;
-				}
-
-				$updated_awareness[] = $entry;
-			}
-
-			// Add this client's awareness state.
-			if ( null !== $awareness_update ) {
-				$updated_awareness[] = array(
-					'client_id'  => $client_id,
-					'state'      => $awareness_update,
-					'updated_at' => $current_time,
-					'wp_user_id' => get_current_user_id(),
-				);
-			}
-
-			// This action can fail, but it shouldn't fail the entire request.
-			$this->storage->set_awareness_state( $room, $updated_awareness );
+			// A null update is this client leaving the room.
+			$updated_awareness = null === $awareness_update
+				? $this->awareness->forget( $room, $client_id, self::AWARENESS_TIMEOUT )
+				: $this->awareness->put( $room, $client_id, $awareness_update, get_current_user_id(), self::AWARENESS_TIMEOUT );
 
 			// Convert to client_id => state map for response.
 			$response = array();

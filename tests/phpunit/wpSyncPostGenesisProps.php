@@ -104,7 +104,7 @@ class Tests_Collaboration_WpSyncPostGenesisProps extends WP_UnitTestCase {
 			)
 		);
 
-		$engine   = new WP_Intent_Log_Engine( new WP_Sync_Post_Meta_Storage() );
+		$engine   = new WP_Intent_Log_Engine( new WP_Sync_Table_Storage() );
 		$response = $engine->get_updates_since( 'postType/post:' . $post_id, 101, 0, array() );
 		$snapshot = null;
 		foreach ( $response['updates'] as $update ) {

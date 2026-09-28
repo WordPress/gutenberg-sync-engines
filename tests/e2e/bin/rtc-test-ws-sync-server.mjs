@@ -11,6 +11,7 @@
 
 import http from 'node:http';
 import process from 'node:process';
+import { parseArgs } from 'node:util';
 import {
 	docs,
 	setPersistence,
@@ -31,11 +32,8 @@ if ( ! Number.isInteger( RTC_WS_DELAY ) || RTC_WS_DELAY < 0 ) {
 }
 
 function parsePortArg() {
-	const portIndex = process.argv.indexOf( '--port' );
-	const rawPort =
-		portIndex === -1
-			? process.env.GUTENBERG_RTC_TEST_WS_PORT
-			: process.argv[ portIndex + 1 ];
+	const { values } = parseArgs( { options: { port: { type: 'string' } } } );
+	const rawPort = values.port ?? process.env.GUTENBERG_RTC_TEST_WS_PORT;
 
 	if ( ! rawPort ) {
 		return DEFAULT_PORT;

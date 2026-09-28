@@ -17,7 +17,7 @@ import * as Y from 'yjs';
 import { createDeRtcEngine } from '../../../../src/engines/de-rtc/engine';
 import {
 	DE_RTC_ANNOUNCE_TYPE,
-	DE_RTC_PROPOSAL_PARKED_TYPE,
+	DE_RTC_PARKED_TYPE,
 	DE_RTC_PROPOSAL_TYPE,
 	DE_RTC_RESOLVED_TYPE,
 	DE_RTC_SNAPSHOT_TYPE,
@@ -77,7 +77,7 @@ const parkedRow = (
 	changedBlocks: Array< { index: number; html: string } >,
 	excerpt = 'lost words'
 ) => ( {
-	type: DE_RTC_PROPOSAL_PARKED_TYPE,
+	type: DE_RTC_PARKED_TYPE,
 	data: JSON.stringify( {
 		proposalId,
 		reason,
@@ -97,6 +97,10 @@ describe( 'de-rtc review lane (client)', () => {
 	beforeEach( () => {
 		syncConfig = makeSyncConfig();
 		engine = createDeRtcEngine();
+		apiFetchMock.mockReset();
+		apiFetchMock.mockResolvedValue( {
+			disposition: { status: 'resolved' },
+		} );
 	} );
 
 	function makeEntity() {
@@ -195,7 +199,7 @@ describe( 'de-rtc review lane (client)', () => {
 		).toHaveLength( 0 );
 	} );
 
-	it( 'dismiss emits a resolved row through the session wire', () => {
+	it( 'dismiss POSTs the resolution — no transport row, even without a commit route', async () => {
 		const { session, sent } = makeEntity();
 		session.receiveUpdate( snapshotRow( 'v1', contentOf( BLOCK_A ) ) );
 		session.receiveUpdate(
@@ -212,17 +216,24 @@ describe( 'de-rtc review lane (client)', () => {
 		expect(
 			engine.review.getOpenItems( 'postType/book', '1' )
 		).toHaveLength( 0 );
-		const resolvedRows = sent.filter(
-			( update ) => DE_RTC_RESOLVED_TYPE === update.type
-		);
-		expect( resolvedRows ).toHaveLength( 1 );
-		expect( JSON.parse( resolvedRows[ 0 ].data ) ).toEqual( {
-			proposalId: 'p-9-1',
-			resolution: 'dismissed',
+		await Promise.resolve();
+
+		expect( apiFetchMock ).toHaveBeenCalledWith( {
+			data: {
+				client_id: session.clientId,
+				proposalId: 'p-9-1',
+				resolution: 'dismissed',
+				room: 'postType/book:1',
+			},
+			method: 'POST',
+			path: '/wp-sync/v1/de-rtc/resolve',
 		} );
+		expect(
+			sent.filter( ( update ) => DE_RTC_RESOLVED_TYPE === update.type )
+		).toHaveLength( 0 );
 	} );
 
-	it( 'restore overlays the parked blocks, re-proposes them, reaches the editor, and resolves', () => {
+	it( 'restore overlays the parked blocks, re-proposes them, reaches the editor, and resolves', async () => {
 		const { entity, session, sent } = makeEntity();
 		const onRemoteChange = jest.fn();
 		entity.observe( { onRemoteChange, onPeerSave: jest.fn() } );
@@ -244,8 +255,9 @@ describe( 'de-rtc review lane (client)', () => {
 		expect( changes.blocks ).toEqual( [ BLOCK_A, BLOCK_C ] );
 		// …reached the editor like a remote change…
 		expect( onRemoteChange ).toHaveBeenCalled();
-		// …and went out as an ordinary proposal under the restorer, followed
-		// by the restored resolution.
+		// …and went out as an ordinary proposal under the restorer, with
+		// the restored resolution POSTed to the REST review route (never
+		// a transport row).
 		const proposals = sent.filter(
 			( update ) => DE_RTC_PROPOSAL_TYPE === update.type
 		);
@@ -253,13 +265,19 @@ describe( 'de-rtc review lane (client)', () => {
 		expect(
 			JSON.parse( JSON.parse( proposals[ 0 ].data ).proposedContent )
 		).toEqual( [ BLOCK_A, BLOCK_C ] );
-		const resolvedRows = sent.filter(
-			( update ) => DE_RTC_RESOLVED_TYPE === update.type
+		await Promise.resolve();
+		expect( apiFetchMock ).toHaveBeenCalledWith(
+			expect.objectContaining( {
+				data: expect.objectContaining( {
+					proposalId: 'p-9-1',
+					resolution: 'restored',
+				} ),
+				path: '/wp-sync/v1/de-rtc/resolve',
+			} )
 		);
-		expect( JSON.parse( resolvedRows[ 0 ].data ) ).toEqual( {
-			proposalId: 'p-9-1',
-			resolution: 'restored',
-		} );
+		expect(
+			sent.filter( ( update ) => DE_RTC_RESOLVED_TYPE === update.type )
+		).toHaveLength( 0 );
 		expect(
 			engine.review.getOpenItems( 'postType/book', '1' )
 		).toHaveLength( 0 );
@@ -301,12 +319,10 @@ describe( 'de-rtc review lane (client)', () => {
 		).toHaveLength( 1 );
 	} );
 
-	describe( 'REST resolution lane (B5, commit-route types)', () => {
+	describe( 'REST resolution lane (B5, the only resolution lane)', () => {
 		function makePostEntity() {
 			const entity = engine.createEntity( {
 				syncConfig,
-				// postType/post HAS a commit route, so resolutions POST to
-				// the REST review route instead of riding the transport.
 				objectType: 'postType/post',
 				objectId: '1',
 			} as any );
@@ -316,14 +332,7 @@ describe( 'de-rtc review lane (client)', () => {
 			return { entity, session, sent };
 		}
 
-		beforeEach( () => {
-			apiFetchMock.mockReset();
-		} );
-
 		it( 'dismiss POSTs the resolution and sends NO transport row', async () => {
-			apiFetchMock.mockResolvedValue( {
-				disposition: { intentId: 'p-9-1', status: 'resolved' },
-			} );
 			const { session, sent } = makePostEntity();
 			session.receiveUpdate(
 				parkedRow( 'p-9-1', 'manual-conflict-required', 9, [] )
@@ -359,7 +368,7 @@ describe( 'de-rtc review lane (client)', () => {
 			).toHaveLength( 0 );
 		} );
 
-		it( 'falls back to the transport row when the POST rejects', async () => {
+		it( 'a failed POST reopens the task — there is no transport fallback', async () => {
 			apiFetchMock.mockRejectedValue( new Error( 'offline' ) );
 			const { session, sent } = makePostEntity();
 			session.receiveUpdate(
@@ -372,18 +381,39 @@ describe( 'de-rtc review lane (client)', () => {
 				'p-9-1',
 				'dismissed'
 			);
-			// Let the rejection settle and the fallback fire.
+			// Optimistic close, then the rejection settles.
+			expect(
+				engine.review.getOpenItems( 'postType/post', '1' )
+			).toHaveLength( 0 );
+			await Promise.resolve();
 			await Promise.resolve();
 			await Promise.resolve();
 
-			const resolvedRows = sent.filter(
-				( update ) => DE_RTC_RESOLVED_TYPE === update.type
-			);
-			expect( resolvedRows ).toHaveLength( 1 );
-			expect( JSON.parse( resolvedRows[ 0 ].data ) ).toEqual( {
-				proposalId: 'p-9-1',
-				resolution: 'dismissed',
+			// No transport row ever goes out…
+			expect(
+				sent.filter(
+					( update ) => DE_RTC_RESOLVED_TYPE === update.type
+				)
+			).toHaveLength( 0 );
+			// …and the task is back open so the reviewer can decide again.
+			expect(
+				engine.review.getOpenItems( 'postType/post', '1' )
+			).toHaveLength( 1 );
+
+			// A retry once the route is reachable closes it for good.
+			apiFetchMock.mockResolvedValue( {
+				disposition: { status: 'resolved' },
 			} );
+			engine.review.resolveProposal(
+				'postType/post',
+				'1',
+				'p-9-1',
+				'dismissed'
+			);
+			await Promise.resolve();
+			expect(
+				engine.review.getOpenItems( 'postType/post', '1' )
+			).toHaveLength( 0 );
 		} );
 	} );
 

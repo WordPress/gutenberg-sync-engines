@@ -3,7 +3,13 @@
 /**
  * Local RTC transport switcher.
  *
- * Three modes, selected by --mode=<websockets|daemon|http>:
+ * Modes, selected by --mode=<websockets|daemon|http|doctor|cache>:
+ *
+ *   cache: --on copies the Redis Object Cache drop-in in (a persistent
+ *   object cache on the env's sync-redis container, through the plugin's
+ *   bundled Predis client — no PHP extension), --off removes it; --tests
+ *   targets the tests env. With the drop-in on, the SSE transport detects
+ *   Redis by itself and the room storage keeps presence in the cache.
  *
  *   websockets: one-command start for the real websocket transport. Ensures
  *   wp-env is running, points the site at the websocket transport, and runs
@@ -50,16 +56,29 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import { parseArgs } from 'node:util';
 
 const REPO_ROOT = process.cwd();
 const TEST_PROVIDER_PLUGIN_SLUG =
 	'sync-engines-test-plugins/rtc-websocket-provider';
 const TRANSPORT_OPTION = 'gutenberg_sync_engines_transport';
+const ADVISORY_OPTION = 'gutenberg_sync_engines_advisory_channel';
 const DAEMON_CONTAINER_NAME = 'wp-sync-ws-daemon';
+
+const { values: CLI } = parseArgs( {
+	options: {
+		mode: { type: 'string', default: 'websockets' },
+		port: { type: 'string' },
+		detach: { type: 'boolean', default: false },
+		on: { type: 'boolean', default: false },
+		off: { type: 'boolean', default: false },
+		tests: { type: 'boolean', default: false },
+	},
+} );
 
 const DEFAULT_PORT = 8787;
 const WS_PORT = Number.parseInt(
-	getArg( 'port' ) || process.env.WP_SYNC_WEBSOCKET_PORT || '',
+	CLI.port || process.env.WP_SYNC_WEBSOCKET_PORT || '',
 	10
 );
 // The announced socket URL (ws://<WP_SYNC_WEBSOCKET_HOST>:<WP_SYNC_WEBSOCKET_PORT>)
@@ -67,16 +86,13 @@ const WS_PORT = Number.parseInt(
 // matched by WP_SYNC_WEBSOCKET_PORT in .wp-env.json's config.
 const PORT = Number.isNaN( WS_PORT ) ? DEFAULT_PORT : WS_PORT;
 
-function getArg( name ) {
-	const arg = process.argv.find( ( a ) => a.startsWith( `--${ name }=` ) );
-	return arg ? arg.slice( name.length + 3 ) : undefined;
-}
-
 function parseMode() {
-	const mode = getArg( 'mode' ) || 'websockets';
-	if ( ! [ 'websockets', 'daemon', 'http', 'doctor' ].includes( mode ) ) {
+	const mode = CLI.mode;
+	if (
+		! [ 'websockets', 'daemon', 'http', 'doctor', 'cache' ].includes( mode )
+	) {
 		throw new Error(
-			`Unknown --mode=${ mode }. Expected "websockets", "daemon", "http", or "doctor".`
+			`Unknown --mode=${ mode }. Expected "websockets", "daemon", "http", "doctor", or "cache".`
 		);
 	}
 	return mode;
@@ -139,6 +155,60 @@ function runWpCli( wpArgs, { allowFailure = false, configFile = null } = {} ) {
  * experiment rather than the old `wp_collaboration_enabled` option (which
  * Gutenberg now deletes on upgrade). Other experiments are left alone.
  */
+/**
+ * Whether the site runs a persistent object cache (the drop-in loaded).
+ *
+ * @param {Object}      options            Options.
+ * @param {string|null} options.configFile wp-env config (null: dev).
+ * @return {Promise<boolean|null>} True/false, or null when wp-cli failed.
+ */
+async function hasPersistentObjectCache( { configFile = null } = {} ) {
+	const out = await runWpCli(
+		[ 'eval', 'echo (int) wp_using_ext_object_cache();' ],
+		{ configFile, allowFailure: true }
+	);
+	return undefined === out ? null : '1' === out.trim();
+}
+
+/**
+ * cache mode: put the Redis Object Cache drop-in in or take it out.
+ */
+async function cacheMode() {
+	if ( CLI.on === CLI.off ) {
+		throw new Error( '--mode=cache needs exactly one of --on or --off.' );
+	}
+	const configFile = CLI.tests ? '.wp-env.tests.json' : null;
+	const label = CLI.tests ? 'tests env' : 'dev env';
+	if ( CLI.on ) {
+		// The plugin ships the drop-in; wp redis enable copies it in.
+		await runWpCli( [ 'plugin', 'activate', 'redis-cache' ], {
+			configFile,
+			allowFailure: true,
+		} );
+	}
+	await runWpCli( [ 'redis', CLI.on ? 'enable' : 'disable' ], {
+		configFile,
+		allowFailure: true,
+	} );
+	const state = await hasPersistentObjectCache( { configFile } );
+	if ( state !== CLI.on ) {
+		throw new Error(
+			`${ label }: the drop-in is ${
+				state ? 'still on' : 'not on'
+			} after wp redis ${
+				CLI.on ? 'enable' : 'disable'
+			} — is the redis-cache plugin installed (listed in the wp-env config) and Redis running (npm run doctor)?`
+		);
+	}
+	process.stdout.write(
+		`${ label }: Redis object cache drop-in ${
+			CLI.on
+				? 'ON — a persistent object cache on sync-redis; the SSE transport now detects Redis by itself'
+				: 'OFF — no persistent object cache'
+		}.\n`
+	);
+}
+
 async function enableCollaborationExperiment( { configFile = null } = {} ) {
 	process.stdout.write( 'Enabling collaboration experiment... ' );
 	await runWpCli(
@@ -400,7 +470,7 @@ async function runWebSocketsMode( mode ) {
 
 	const composeFile = path.join( workDirectory, 'docker-compose.yml' );
 	const sitePort = devSitePort( composeFile );
-	const detach = process.argv.includes( '--detach' );
+	const detach = CLI.detach;
 
 	const daemon = spawn(
 		'docker',
@@ -411,6 +481,7 @@ async function runWebSocketsMode( mode ) {
 			'run',
 			'--rm',
 			...( detach ? [ '-d' ] : [] ),
+			'-T',
 			'--name',
 			DAEMON_CONTAINER_NAME,
 			'-p',
@@ -422,7 +493,7 @@ async function runWebSocketsMode( mode ) {
 			'--host=0.0.0.0',
 			`--port=${ PORT }`,
 		],
-		{ stdio: 'inherit' }
+		{ stdio: [ 'ignore', 'inherit', 'inherit' ] }
 	);
 
 	if ( detach ) {
@@ -451,10 +522,9 @@ async function runWebSocketsMode( mode ) {
 		return;
 	}
 
-	// On a TTY, Ctrl+C reaches the attached docker client directly and stops
-	// the container. This handler covers non-TTY kills (a crashed terminal,
-	// `kill <pid>`): killing the docker CLIENT alone detaches and leaves the
-	// container running, so remove the container explicitly.
+	// Ctrl+C (and `kill <pid>`) lands here, not in the container: killing the
+	// docker CLIENT alone detaches and leaves the container running, so
+	// remove the container explicitly.
 	let shuttingDown = false;
 	const shutdown = () => {
 		if ( shuttingDown ) {
@@ -491,7 +561,9 @@ async function runWebSocketsMode( mode ) {
 	);
 
 	const [ code ] = await once( daemon, 'exit' );
-	process.exit( code ?? 0 );
+	// A container we removed on purpose makes the docker client exit
+	// non-zero; that is a clean stop, not a failure.
+	process.exit( shuttingDown ? 0 : code ?? 0 );
 }
 
 async function runHttpMode() {
@@ -694,6 +766,10 @@ async function runDoctorMode() {
 			[ 'option', 'get', TRANSPORT_OPTION ],
 			{ configFile, allowFailure: true }
 		);
+		const advisory = await runWpCli( [ 'option', 'get', ADVISORY_OPTION ], {
+			configFile,
+			allowFailure: true,
+		} );
 		info(
 			`collaboration ${
 				'1' === ( options || '' ).trim() ? 'enabled' : 'disabled'
@@ -701,8 +777,55 @@ async function runDoctorMode() {
 				engine || '(default: intent-log)'
 			).trim() }, transport ${ (
 				transport || '(default: http-polling)'
-			).trim() }`
+			).trim() }, advisory ${
+				( advisory || '(default: webrtc-advisory)' ).trim() || 'off'
+			}`
 		);
+
+		// The SSE transport wakes streams through Redis, which each env's
+		// afterStart hook starts as a sibling container on the env's own
+		// network (npm run redis:start). Without it SSE runs on polling.
+		const redisContainer = `${ path.basename( workDirectory ) }-redis`;
+		const redisState = spawnSync(
+			'docker',
+			[ 'inspect', '-f', '{{.State.Running}}', redisContainer ],
+			{ encoding: 'utf8' }
+		);
+		const redisRunning =
+			0 === redisState.status && 'true' === redisState.stdout.trim();
+		if ( redisRunning ) {
+			ok( `Redis running (${ redisContainer }) for the SSE transport` );
+		} else if ( 'sse' === ( transport || '' ).trim() ) {
+			fail(
+				`the site selects the SSE transport but Redis container ${ redisContainer } is ${
+					0 === redisState.status ? 'stopped' : 'absent'
+				} — every tab falls back to polling`,
+				`${
+					configFile ? 'npm run env:tests start' : 'npm run env start'
+				} (its afterStart hook runs npm run redis:start)`
+			);
+		} else {
+			info(
+				`Redis ${
+					0 === redisState.status ? 'stopped' : 'absent'
+				} (${ redisContainer }); only the SSE transport needs it`
+			);
+		}
+
+		const persistentCache = await hasPersistentObjectCache( {
+			configFile,
+		} );
+		if ( null !== persistentCache ) {
+			info(
+				persistentCache
+					? `object cache: Redis drop-in ON (persistent cache on sync-redis; SSE wakes on Redis notices; npm run cache:${
+							configFile ? 'tests:' : ''
+					  }off removes it)`
+					: `object cache: none (npm run cache:${
+							configFile ? 'tests:' : ''
+					  }on puts the Redis drop-in in)`
+			);
+		}
 
 		if ( configFile && 8889 !== sitePort ) {
 			// This checkout's tests env is NOT on the default port; if some
@@ -758,6 +881,10 @@ async function main() {
 	const mode = parseMode();
 	if ( 'doctor' === mode ) {
 		await runDoctorMode();
+		return;
+	}
+	if ( 'cache' === mode ) {
+		await cacheMode();
 		return;
 	}
 	if ( 'http' === mode ) {

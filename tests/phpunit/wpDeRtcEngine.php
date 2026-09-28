@@ -1,7 +1,7 @@
 <?php
 /**
  * Engine-level tests for the DE-RTC sync engine (WP_De_RTC_Engine),
- * driving the production WP_Sync_Engine seam against the postmeta storage
+ * driving the production WP_Sync_Engine seam against the table storage
  * with real merge-core three-way merges.
  *
  * @package Gutenberg
@@ -69,7 +69,7 @@ class Tests_Collaboration_WpDeRtcEngine extends WP_UnitTestCase {
 	 * @return WP_De_RTC_Engine Engine.
 	 */
 	private function engine(): WP_De_RTC_Engine {
-		return new WP_De_RTC_Engine( new WP_Sync_Post_Meta_Storage() );
+		return new WP_De_RTC_Engine( new WP_Sync_Table_Storage() );
 	}
 
 	/**
@@ -163,12 +163,12 @@ class Tests_Collaboration_WpDeRtcEngine extends WP_UnitTestCase {
 		$engine = $this->engine();
 		$this->assertSame( 'de-rtc', $engine->get_slug() );
 		$this->assertSame( 2, $engine->get_protocol_version() );
-		$this->assertSame( array( 'proposal', 'content', 'announce', 'fetch', 'snapshot', 'proposal-parked', 'resolved' ), $engine->get_update_types() );
+		$this->assertSame( array( 'proposal', 'announce', 'fetch', 'snapshot', 'parked', 'resolved' ), $engine->get_update_types() );
 	}
 
 	public function test_genesis_snapshot_and_lineage() {
 		$engine   = $this->engine();
-		$storage  = new WP_Sync_Post_Meta_Storage();
+		$storage  = new WP_Sync_Table_Storage();
 		$response = $engine->get_updates_since( $this->room(), 1, 0, array() );
 
 		$this->assertGreaterThan( 0, $response['end_cursor'] );
@@ -177,7 +177,7 @@ class Tests_Collaboration_WpDeRtcEngine extends WP_UnitTestCase {
 
 		$genesis = json_decode( $response['updates'][0]['data'], true );
 		$this->assertSame( 'v1', $genesis['version'] );
-		$this->assertSame( self::GENESIS_CONTENT, $genesis['content'] );
+		$this->assertSame( $this->genesis(), $genesis['content'] );
 
 		$this->assertSame( 'de-rtc', $storage->get_room_engine( $this->room() ) );
 	}
@@ -202,7 +202,7 @@ class Tests_Collaboration_WpDeRtcEngine extends WP_UnitTestCase {
 		$this->assertSame( 'applied', $result['dispositions'][0]['status'] );
 		$this->assertSame( 'v2', $result['dispositions'][0]['version'] );
 
-		// A second client sees the accepted content row.
+		// A second client sees the accepted version.
 		$peer_response = $this->engine()->get_updates_since( $this->room(), 2, 0, array() );
 		$peer_latest   = $this->latest_from_response( $peer_response );
 		$this->assertSame( 'v2', $peer_latest['version'] );
@@ -336,7 +336,7 @@ class Tests_Collaboration_WpDeRtcEngine extends WP_UnitTestCase {
 			array(
 				array(
 					'data' => '{}',
-					'type' => WP_De_RTC_Engine::UPDATE_TYPE_CONTENT,
+					'type' => WP_De_RTC_Engine::UPDATE_TYPE_ANNOUNCE,
 				),
 			),
 			array()
@@ -388,7 +388,7 @@ class Tests_Collaboration_WpDeRtcEngine extends WP_UnitTestCase {
 		$this->assertStringNotContainsString( '<script>', $this->engine()->materialize( $this->room() ) );
 		$parked = $this->rows_of_type(
 			$this->engine()->get_updates_since( $this->room(), 4, 0, array() ),
-			WP_De_RTC_Engine::UPDATE_TYPE_PROPOSAL_PARKED
+			WP_De_RTC_Engine::UPDATE_TYPE_PARKED
 		);
 		$this->assertCount( 1, $parked );
 		$this->assertSame( 'requires-unfiltered-html', $parked[0]['reason'] );
@@ -438,7 +438,7 @@ class Tests_Collaboration_WpDeRtcEngine extends WP_UnitTestCase {
 				$content = $proposed;
 			}
 
-			$storage = new WP_Sync_Post_Meta_Storage();
+			$storage = new WP_Sync_Table_Storage();
 			$floor   = $storage->get_room_meta( $this->room(), WP_De_RTC_Engine::META_FLOOR );
 			$this->assertIsNumeric( $floor, 'compaction should have recorded a floor' );
 
@@ -453,7 +453,8 @@ class Tests_Collaboration_WpDeRtcEngine extends WP_UnitTestCase {
 	}
 
 	/**
-	 * Builds a resolution update the way the client review ledger does.
+	 * Builds a resolution row the way the RETIRED transport lane did —
+	 * kept only to prove handle_updates() rejects it.
 	 *
 	 * @param string $proposal_id Parked proposal id.
 	 * @param string $resolution  restored|dismissed.
@@ -527,7 +528,7 @@ class Tests_Collaboration_WpDeRtcEngine extends WP_UnitTestCase {
 		$this->escalate_conflict();
 
 		$response = $this->engine()->get_updates_since( $this->room(), 3, 0, array() );
-		$parked   = $this->rows_of_type( $response, WP_De_RTC_Engine::UPDATE_TYPE_PROPOSAL_PARKED );
+		$parked   = $this->rows_of_type( $response, WP_De_RTC_Engine::UPDATE_TYPE_PARKED );
 
 		$this->assertCount( 1, $parked, 'the escalated proposal must park exactly one row' );
 		$row = $parked[0];
@@ -568,7 +569,7 @@ class Tests_Collaboration_WpDeRtcEngine extends WP_UnitTestCase {
 		// …and the risky block parks for a privileged reviewer.
 		$parked = $this->rows_of_type(
 			$this->engine()->get_updates_since( $this->room(), 4, 0, array() ),
-			WP_De_RTC_Engine::UPDATE_TYPE_PROPOSAL_PARKED
+			WP_De_RTC_Engine::UPDATE_TYPE_PARKED
 		);
 		$this->assertCount( 1, $parked );
 		$this->assertSame( 'p-risky', $parked[0]['proposalId'] );
@@ -607,7 +608,7 @@ class Tests_Collaboration_WpDeRtcEngine extends WP_UnitTestCase {
 		// Only the risky block parked (index 1 — the Beta paragraph).
 		$parked = $this->rows_of_type(
 			$this->engine()->get_updates_since( $this->room(), 4, 0, array() ),
-			WP_De_RTC_Engine::UPDATE_TYPE_PROPOSAL_PARKED
+			WP_De_RTC_Engine::UPDATE_TYPE_PARKED
 		);
 		$this->assertCount( 1, $parked );
 		$this->assertCount( 1, $parked[0]['changedBlocks'] );
@@ -640,7 +641,7 @@ class Tests_Collaboration_WpDeRtcEngine extends WP_UnitTestCase {
 
 		$parked = $this->rows_of_type(
 			$this->engine()->get_updates_since( $this->room(), 4, 0, array() ),
-			WP_De_RTC_Engine::UPDATE_TYPE_PROPOSAL_PARKED
+			WP_De_RTC_Engine::UPDATE_TYPE_PARKED
 		);
 		$this->assertCount( 1, $parked, 'identical risky content must park once, not once per poll cycle' );
 	}
@@ -668,10 +669,104 @@ class Tests_Collaboration_WpDeRtcEngine extends WP_UnitTestCase {
 
 		$parked = $this->rows_of_type(
 			$this->engine()->get_updates_since( $this->room(), 4, 0, array() ),
-			WP_De_RTC_Engine::UPDATE_TYPE_PROPOSAL_PARKED
+			WP_De_RTC_Engine::UPDATE_TYPE_PARKED
 		);
 		$this->assertCount( 1, $parked );
 		$this->assertSame( 'p-classic', $parked[0]['proposalId'] );
+	}
+
+	/**
+	 * Records the CURRENT behavior questioned by issue #41: a reviewer's
+	 * approval of risky content is one-shot. Restore re-proposes the risky
+	 * block under the reviewer's own capability (that lands it), but nothing
+	 * remembers the approval afterwards. The next edit by a filtered author —
+	 * even a plain typo fix around the already-approved risky markup — fails
+	 * both sequestration passes (the block is no longer byte-identical to its
+	 * base form, and kses still rewrites the approved markup), so the block
+	 * reverts to base, the typo fix is lost from canonical, and the block
+	 * parks for review all over again.
+	 *
+	 * If persistent approval becomes the policy, the last four assertions
+	 * are the ones that should flip.
+	 */
+	public function test_approval_of_a_risky_block_does_not_survive_the_next_edit_by_a_filtered_author() {
+		$engine   = $this->engine();
+		$response = $engine->get_updates_since( $this->room(), 1, 0, array() );
+		$genesis  = $this->latest_from_response( $response );
+
+		// Step 1 — a filtered author edits the Beta block to include markup
+		// kses would strip. The block reverts to its base form and parks.
+		wp_set_current_user( self::$author_id );
+		$risky_text = 'Beta block original text <script>widget()</script>';
+		$proposed   = str_replace( 'Beta block original text', $risky_text, $genesis['content'] );
+		$result     = $this->engine()->handle_updates(
+			$this->room(),
+			3,
+			0,
+			array( $this->proposal( 'p-embed', $genesis['version'], $genesis['content'], $proposed ) ),
+			array()
+		);
+		$this->assertSame( 'applied', $result['dispositions'][0]['status'] );
+		$this->assertStringNotContainsString( '<script>', (string) $this->engine()->materialize( $this->room() ) );
+
+		$parked = $this->rows_of_type(
+			$this->engine()->get_updates_since( $this->room(), 4, 0, array() ),
+			WP_De_RTC_Engine::UPDATE_TYPE_PARKED
+		);
+		$this->assertCount( 1, $parked );
+		$this->assertSame( 'p-embed', $parked[0]['proposalId'] );
+		$this->assertSame( 'requires-unfiltered-html', $parked[0]['reason'] );
+
+		// Step 2 — a reviewer with unfiltered_html restores the parked block:
+		// the parked markup re-proposes as the reviewer's own edit (that is
+		// what approval IS in this engine), and the parked row resolves.
+		wp_set_current_user( self::$editor_id );
+		$reviewer_state    = $this->latest_from_response( $this->engine()->get_updates_since( $this->room(), 1, 0, array() ) );
+		$restored_proposed = str_replace( 'Beta block original text', $risky_text, $reviewer_state['content'] );
+		$restore_result    = $this->engine()->handle_updates(
+			$this->room(),
+			1,
+			0,
+			array( $this->proposal( 'p-restore', $reviewer_state['version'], $reviewer_state['content'], $restored_proposed ) ),
+			array()
+		);
+		$this->assertSame( 'applied', $restore_result['dispositions'][0]['status'] );
+		$resolved = $this->engine()->resolve_proposal( $this->room(), 'p-embed', 'restored', 1 );
+		$this->assertSame( 'resolved', $resolved['status'] );
+
+		$approved_canonical = (string) $this->engine()->materialize( $this->room() );
+		$this->assertStringContainsString( '<script>widget()</script>', $approved_canonical, 'the restore must land the approved risky markup' );
+
+		// Step 3 — the same filtered author fixes a typo in the approved
+		// block, leaving the approved risky markup untouched.
+		wp_set_current_user( self::$author_id );
+		$author_state = $this->latest_from_response( $this->engine()->get_updates_since( $this->room(), 3, 0, array() ) );
+		$this->assertStringContainsString( '<script>widget()</script>', $author_state['content'] );
+		$typo_fixed  = str_replace( 'Beta block original text', 'Beta block corrected text', $author_state['content'] );
+		$typo_result = $this->engine()->handle_updates(
+			$this->room(),
+			3,
+			0,
+			array( $this->proposal( 'p-typo', $author_state['version'], $author_state['content'], $typo_fixed ) ),
+			array()
+		);
+		$this->assertSame( 'applied', $typo_result['dispositions'][0]['status'] );
+
+		// Step 4 — CURRENT behavior: the approval did not stick. The typo fix
+		// never lands (the block reverted to its approved base form), and the
+		// author's edit parks for review a second time.
+		$materialized = (string) $this->engine()->materialize( $this->room() );
+		$this->assertStringContainsString( 'Beta block original text', $materialized, 'current behavior: the typo fix is reverted with the block' );
+		$this->assertStringNotContainsString( 'Beta block corrected text', $materialized, 'current behavior: the typo fix does not land' );
+
+		$parked = $this->rows_of_type(
+			$this->engine()->get_updates_since( $this->room(), 4, 0, array() ),
+			WP_De_RTC_Engine::UPDATE_TYPE_PARKED
+		);
+		$this->assertCount( 2, $parked, 'current behavior: the already-approved block parks again' );
+		$this->assertSame( 'p-typo', $parked[1]['proposalId'] );
+		$this->assertSame( 'requires-unfiltered-html', $parked[1]['reason'] );
+		$this->assertStringContainsString( 'Beta block corrected text', $parked[1]['changedBlocks'][0]['html'] );
 	}
 
 	public function test_redelivered_escalation_does_not_double_park() {
@@ -689,7 +784,7 @@ class Tests_Collaboration_WpDeRtcEngine extends WP_UnitTestCase {
 
 		$parked = $this->rows_of_type(
 			$this->engine()->get_updates_since( $this->room(), 3, 0, array() ),
-			WP_De_RTC_Engine::UPDATE_TYPE_PROPOSAL_PARKED
+			WP_De_RTC_Engine::UPDATE_TYPE_PARKED
 		);
 		$this->assertCount( 1, $parked );
 	}
@@ -697,19 +792,13 @@ class Tests_Collaboration_WpDeRtcEngine extends WP_UnitTestCase {
 	public function test_resolution_lifecycle_is_idempotent() {
 		$this->escalate_conflict();
 
-		$result = $this->engine()->handle_updates(
-			$this->room(),
-			2,
-			0,
-			array( $this->resolution( 'p-b', 'dismissed' ) ),
-			array()
-		);
+		$result = $this->engine()->resolve_proposal( $this->room(), 'p-b', 'dismissed', 2 );
 		$this->assertSame(
 			array(
 				'intentId' => 'p-b',
 				'status'   => 'resolved',
 			),
-			$result['dispositions'][0]
+			$result
 		);
 
 		$response = $this->engine()->get_updates_since( $this->room(), 3, 0, array() );
@@ -720,14 +809,8 @@ class Tests_Collaboration_WpDeRtcEngine extends WP_UnitTestCase {
 		$this->assertSame( self::$editor_id, $resolved[0]['resolvedBy'] );
 
 		// A redelivered (or concurrent) resolution acks without a new row.
-		$again = $this->engine()->handle_updates(
-			$this->room(),
-			2,
-			0,
-			array( $this->resolution( 'p-b', 'dismissed' ) ),
-			array()
-		);
-		$this->assertSame( 'resolved', $again['dispositions'][0]['status'] );
+		$again = $this->engine()->resolve_proposal( $this->room(), 'p-b', 'dismissed', 2 );
+		$this->assertSame( 'resolved', $again['status'] );
 		$resolved = $this->rows_of_type(
 			$this->engine()->get_updates_since( $this->room(), 3, 0, array() ),
 			WP_De_RTC_Engine::UPDATE_TYPE_RESOLVED
@@ -735,37 +818,36 @@ class Tests_Collaboration_WpDeRtcEngine extends WP_UnitTestCase {
 		$this->assertCount( 1, $resolved );
 
 		// An unknown id (trimmed long ago, or never parked) acks too.
-		$unknown = $this->engine()->handle_updates(
-			$this->room(),
-			2,
-			0,
-			array( $this->resolution( 'p-nonexistent', 'restored' ) ),
-			array()
-		);
-		$this->assertSame( 'resolved', $unknown['dispositions'][0]['status'] );
+		$unknown = $this->engine()->resolve_proposal( $this->room(), 'p-nonexistent', 'restored', 2 );
+		$this->assertSame( 'resolved', $unknown['status'] );
 	}
 
 	public function test_malformed_resolution_is_rejected() {
-		$this->engine()->get_updates_since( $this->room(), 1, 0, array() );
+		$result = $this->engine()->resolve_proposal( $this->room(), 'p-b', 'shredded', 2 );
+		$this->assertWPError( $result );
+		$this->assertSame( 'rest_sync_invalid_intent', $result->get_error_code() );
+	}
+
+	public function test_client_sent_resolution_row_is_rejected() {
+		$this->escalate_conflict();
+
+		// The old transport lane for Adopt/Reject decisions is gone: a
+		// client-sent resolved row fails the whole request, and the
+		// proposal stays parked.
 		$result = $this->engine()->handle_updates(
 			$this->room(),
 			2,
 			0,
-			array(
-				array(
-					'data' => wp_json_encode(
-						array(
-							'proposalId' => 'p-b',
-							'resolution' => 'shredded',
-						)
-					),
-					'type' => WP_De_RTC_Engine::UPDATE_TYPE_RESOLVED,
-				),
-			),
+			array( $this->resolution( 'p-b', 'dismissed' ) ),
 			array()
 		);
 		$this->assertWPError( $result );
-		$this->assertSame( 'rest_sync_invalid_intent', $result->get_error_code() );
+		$this->assertSame( 'rest_invalid_update_type', $result->get_error_code() );
+		$resolved = $this->rows_of_type(
+			$this->engine()->get_updates_since( $this->room(), 3, 0, array() ),
+			WP_De_RTC_Engine::UPDATE_TYPE_RESOLVED
+		);
+		$this->assertCount( 0, $resolved );
 	}
 
 	/**
@@ -898,7 +980,7 @@ class Tests_Collaboration_WpDeRtcEngine extends WP_UnitTestCase {
 		$this->assertSame( 'Excerpt by A', $props['excerpt'] );
 
 		// B's losing title parked as a property-conflict review row.
-		$parked = $this->rows_of_type( $after, WP_De_RTC_Engine::UPDATE_TYPE_PROPOSAL_PARKED );
+		$parked = $this->rows_of_type( $after, WP_De_RTC_Engine::UPDATE_TYPE_PARKED );
 		$this->assertCount( 1, $parked );
 		$this->assertSame( 'p-props-b:title', $parked[0]['proposalId'] );
 		$this->assertSame( 'property-conflict', $parked[0]['reason'] );
@@ -933,7 +1015,7 @@ class Tests_Collaboration_WpDeRtcEngine extends WP_UnitTestCase {
 		$after = $this->engine()->get_updates_since( $this->room(), 2, 0, array() );
 		$this->assertSame(
 			array(),
-			$this->rows_of_type( $after, WP_De_RTC_Engine::UPDATE_TYPE_PROPOSAL_PARKED ),
+			$this->rows_of_type( $after, WP_De_RTC_Engine::UPDATE_TYPE_PARKED ),
 			'a reordered identical set must never park a conflict'
 		);
 	}
@@ -960,7 +1042,7 @@ class Tests_Collaboration_WpDeRtcEngine extends WP_UnitTestCase {
 		$props = $this->latest_properties( $after );
 		$this->assertStringNotContainsString( '<script>', (string) ( $props['title'] ?? '' ) );
 
-		$parked = $this->rows_of_type( $after, WP_De_RTC_Engine::UPDATE_TYPE_PROPOSAL_PARKED );
+		$parked = $this->rows_of_type( $after, WP_De_RTC_Engine::UPDATE_TYPE_PARKED );
 		$this->assertCount( 1, $parked );
 		$this->assertSame( 'requires-unfiltered-html', $parked[0]['reason'] );
 		$this->assertSame( 'title', $parked[0]['property']['name'] );
@@ -980,13 +1062,7 @@ class Tests_Collaboration_WpDeRtcEngine extends WP_UnitTestCase {
 				array( $this->proposal( 'p-c', $genesis['version'], $genesis['content'], $c_proposed ) ),
 				array()
 			);
-			$this->engine()->handle_updates(
-				$this->room(),
-				4,
-				0,
-				array( $this->resolution( 'p-c', 'dismissed' ) ),
-				array()
-			);
+			$this->engine()->resolve_proposal( $this->room(), 'p-c', 'dismissed', 4 );
 
 			// Drive enough accepted proposals for multiple checkpoints/trims.
 			$state   = $this->latest_from_response( $this->engine()->get_updates_since( $this->room(), 1, 0, array() ) );
@@ -1006,7 +1082,7 @@ class Tests_Collaboration_WpDeRtcEngine extends WP_UnitTestCase {
 				$content = $proposed;
 			}
 
-			$storage = new WP_Sync_Post_Meta_Storage();
+			$storage = new WP_Sync_Table_Storage();
 			$this->assertIsNumeric(
 				$storage->get_room_meta( $this->room(), WP_De_RTC_Engine::META_FLOOR ),
 				'compaction should have trimmed at least once'
@@ -1014,7 +1090,7 @@ class Tests_Collaboration_WpDeRtcEngine extends WP_UnitTestCase {
 
 			// A fresh joiner still receives the UNRESOLVED parked proposal…
 			$response = $this->engine()->get_updates_since( $this->room(), 9, 0, array() );
-			$parked   = $this->rows_of_type( $response, WP_De_RTC_Engine::UPDATE_TYPE_PROPOSAL_PARKED );
+			$parked   = $this->rows_of_type( $response, WP_De_RTC_Engine::UPDATE_TYPE_PARKED );
 			$open_ids = array_column( $parked, 'proposalId' );
 			$this->assertContains( 'p-b', $open_ids, 'unresolved parked work must survive compaction' );
 
@@ -1023,5 +1099,181 @@ class Tests_Collaboration_WpDeRtcEngine extends WP_UnitTestCase {
 		} finally {
 			remove_filter( 'wp_sync_de_rtc_checkpoint_interval', $interval_filter );
 		}
+	}
+
+	/**
+	 * Creates a fresh, isolated post/room for the #64 approval-pin tests:
+	 * this scenario needs precise parked-row counts, which the rest of
+	 * this file's shared, cumulative room cannot give a test appended at
+	 * the end (its history already carries every earlier test's parked
+	 * rows).
+	 *
+	 * @return string Room identifier for the new post.
+	 */
+	private function approval_pin_room(): string {
+		$post_id = self::factory()->post->create(
+			array(
+				'post_author'  => self::$editor_id,
+				'post_title'   => 'DE-RTC approval-pin test post',
+				'post_content' => "<!-- wp:paragraph -->\n<p>Paragraph A.</p>\n<!-- /wp:paragraph -->\n\n<!-- wp:paragraph -->\n<p>Paragraph B.</p>\n<!-- /wp:paragraph -->",
+			)
+		);
+		return 'postType/post:' . $post_id;
+	}
+
+	/**
+	 * Drives the #64 approval flow up through the reviewer's restore, on a
+	 * dedicated room: the filtered author risk-edits paragraph B (parking
+	 * it), then the editor (unfiltered_html) restores and resolves it.
+	 * Returns the post-restore canonical content/version so callers can
+	 * drive further edits against it.
+	 *
+	 * @param string $room Room identifier.
+	 * @return array{content: string, version: string} Canonical state
+	 *                                                  right after the
+	 *                                                  restore landed.
+	 */
+	private function approve_unfiltered_html_scenario( string $room ): array {
+		$engine = $this->engine();
+		$state  = $this->latest_from_response( $engine->get_updates_since( $room, 1, 0, array() ) );
+
+		// Step 1-2: the author (no unfiltered_html) edits paragraph B to
+		// include something WordPress would strip. It is set aside for
+		// review; paragraph B itself stays at its prior, unedited text.
+		wp_set_current_user( self::$author_id );
+		$risky        = str_replace( 'Paragraph B.', 'Paragraph B <script>bad()</script>.', $state['content'] );
+		$risky_result = $engine->handle_updates(
+			$room,
+			3,
+			0,
+			array( $this->proposal( 'p-risky-approval', $state['version'], $state['content'], $risky, false ) ),
+			array()
+		);
+		$this->assertSame( 'applied', $risky_result['dispositions'][0]['status'] );
+		$after_risky = (string) $this->engine()->materialize( $room );
+		$this->assertStringContainsString( 'Paragraph B.', $after_risky );
+		$this->assertStringNotContainsString( '<script>', $after_risky );
+
+		$parked = $this->rows_of_type(
+			$this->engine()->get_updates_since( $room, 4, 0, array() ),
+			WP_De_RTC_Engine::UPDATE_TYPE_PARKED
+		);
+		$this->assertCount( 1, $parked );
+		$this->assertSame( 'p-risky-approval', $parked[0]['proposalId'] );
+		$this->assertSame( 'requires-unfiltered-html', $parked[0]['reason'] );
+
+		// Step 3: the administrator (the editor role here has
+		// unfiltered_html) approves it. Client-side this re-proposes the
+		// parked bytes under the restorer's own capability — landing them
+		// in canonical — and THEN resolves the parked row as `restored`.
+		wp_set_current_user( self::$editor_id );
+		$approved_state = $this->latest_from_response( $this->engine()->get_updates_since( $room, 1, 0, array() ) );
+		$restore_result = $this->engine()->handle_updates(
+			$room,
+			2,
+			0,
+			array( $this->proposal( 'p-restore-approval', $approved_state['version'], $approved_state['content'], $risky, false ) ),
+			array()
+		);
+		$this->assertSame( 'applied', $restore_result['dispositions'][0]['status'] );
+		$approved_version = $restore_result['dispositions'][0]['version'];
+		$this->assertStringContainsString( '<script>bad()</script>', (string) $this->engine()->materialize( $room ) );
+
+		$this->engine()->resolve_proposal( $room, 'p-risky-approval', 'restored', 2 );
+
+		return array(
+			'content' => (string) $this->engine()->materialize( $room ),
+			'version' => $approved_version,
+		);
+	}
+
+	/**
+	 * The #64 repro: once a privileged reviewer restores content a
+	 * filtered author's edit would otherwise strip, a LATER edit by any
+	 * filtered author elsewhere in the post must land normally instead of
+	 * re-escalating every time it re-carries the approved bytes.
+	 */
+	public function test_restored_unfiltered_html_approval_lets_other_edits_land() {
+		$room     = $this->approval_pin_room();
+		$approved = $this->approve_unfiltered_html_scenario( $room );
+
+		// Step 4: as the SAME filtered author, a plain edit to paragraph A —
+		// nothing WordPress would strip.
+		wp_set_current_user( self::$author_id );
+		$plain_edit   = str_replace( 'Paragraph A.', 'Paragraph A, plain edit.', $approved['content'] );
+		$plain_result = $this->engine()->handle_updates(
+			$room,
+			3,
+			0,
+			array( $this->proposal( 'p-plain-after-approval', $approved['version'], $approved['content'], $plain_edit, false ) ),
+			array()
+		);
+
+		// The plain edit lands normally…
+		$this->assertSame( 'applied', $plain_result['dispositions'][0]['status'] );
+		$final = (string) $this->engine()->materialize( $room );
+		$this->assertStringContainsString( 'Paragraph A, plain edit.', $final );
+		// …and the approved content is untouched, not stripped again.
+		$this->assertStringContainsString( '<script>bad()</script>', $final );
+
+		// Nothing new needed a human this time: no second parked row.
+		$parked_after = $this->rows_of_type(
+			$this->engine()->get_updates_since( $room, 4, 0, array() ),
+			WP_De_RTC_Engine::UPDATE_TYPE_PARKED
+		);
+		$this->assertCount( 1, $parked_after, 'the plain edit must not create a second parked row' );
+	}
+
+	/**
+	 * The companion policy case for #64: the approval pin is tied to exact
+	 * bytes. A filtered author who edits the previously-approved block
+	 * itself — even slightly — produces content with no recorded
+	 * fingerprint, so it goes back to review instead of riding along.
+	 */
+	public function test_editing_previously_approved_content_still_requires_review() {
+		$room  = $this->approval_pin_room();
+		$state = $this->approve_unfiltered_html_scenario( $room );
+
+		wp_set_current_user( self::$author_id );
+		$reedited = str_replace(
+			'Paragraph B <script>bad()</script>.',
+			'Paragraph B <script>worse()</script>.',
+			$state['content']
+		);
+		$this->assertNotSame( $state['content'], $reedited, 'the previously approved block must be present to re-edit' );
+
+		$result = $this->engine()->handle_updates(
+			$room,
+			3,
+			0,
+			array( $this->proposal( 'p-reedit-approved', $state['version'], $state['content'], $reedited, false ) ),
+			array()
+		);
+		$this->assertSame( 'applied', $result['dispositions'][0]['status'] );
+
+		// The new bytes have no pinned fingerprint, so they revert to the
+		// last approved text instead of landing.
+		$materialized = (string) $this->engine()->materialize( $room );
+		$this->assertStringContainsString( '<script>bad()</script>', $materialized );
+		$this->assertStringNotContainsString( 'worse()', $materialized );
+
+		$parked = $this->rows_of_type(
+			$this->engine()->get_updates_since( $room, 4, 0, array() ),
+			WP_De_RTC_Engine::UPDATE_TYPE_PARKED
+		);
+		$this->assertCount( 2, $parked, 'the re-edit of approved content must park a second review row' );
+		$this->assertSame( 'p-reedit-approved', $parked[1]['proposalId'] );
+		$this->assertSame( 'requires-unfiltered-html', $parked[1]['reason'] );
+		$this->assertStringContainsString( 'worse()', $parked[1]['changedBlocks'][0]['html'] );
+	}
+
+	/**
+	 * The room's genesis content: the saved post with every block stamped
+	 * with its deterministic identity (what the room actually serves).
+	 *
+	 * @return string Stamped genesis content.
+	 */
+	private function genesis(): string {
+		return WP_De_RTC_Block_Identity::stamp_genesis( self::GENESIS_CONTENT, self::$post_id );
 	}
 }

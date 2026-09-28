@@ -36,7 +36,7 @@ import type {
  * - receive `snapshot` → bootstrap the local replica from the genesis doc;
  * - receive `intent`   → append the server's authoritative (transformed)
  *   form to the replica's log copy, replanning pending work over it;
- * - receive `proposal` → record an escalated intent for the review lane;
+ * - receive `parked`   → record an escalated intent for the review lane;
  * - receive `voided`   → informational marker (the ack path settles ours);
  * - send `intent` rows authored locally, optimistically applied;
  * - `dispositions` in the poll response are the ack, delivered AFTER the
@@ -68,7 +68,7 @@ export const INTENT_LOG_ENGINE_PROTOCOL = 1;
  */
 export const INTENT_LOG_UPDATE_TYPES = {
 	INTENT: 'intent',
-	PROPOSAL: 'proposal',
+	PARKED: 'parked',
 	RESOLVED: 'resolved',
 	SNAPSHOT: 'snapshot',
 	VOIDED: 'voided',
@@ -142,7 +142,6 @@ export interface IntentLogSession extends EngineSessionCodec {
 	 * terminal transport error can destroy unsent local work from the whole
 	 * solo session down to one poll interval.
 	 */
-	syncWhileSolo: true;
 
 	/**
 	 * Authors one intent against the optimistic document, applies it
@@ -316,6 +315,29 @@ export interface IntentLogSession extends EngineSessionCodec {
 
 	/** Subscribes to unsent-update discards (see onUpdatesDiscarded). */
 	onDiscard: ( listener: ( updates: EngineUpdate[] ) => void ) => void;
+
+	/**
+	 * Transport hook: the server restarted the room (its generation
+	 * changed), so every row this replica holds is gone. The replica is
+	 * dropped and the reset listeners fire exactly as for a horizon reset;
+	 * the fresh genesis that follows re-bootstraps it and the manager
+	 * recaptures the editor's own tree against it. Always re-bootstraps:
+	 * the editor tree is the durable local state, and capture re-derives
+	 * unsaved work from it against any baseline.
+	 */
+	onRoomRestart: () => 'rebootstrap';
+}
+
+/**
+ * Mints a session clientId in [1, 2^31 - 1], a positive signed 32-bit
+ * integer like a Yjs clientID, drawn from crypto randomness so that tabs
+ * sharing a site never share an id in practice.
+ *
+ * @return A fresh clientId.
+ */
+export function randomClientId(): number {
+	const [ word ] = globalThis.crypto.getRandomValues( new Uint32Array( 1 ) );
+	return ( word % ( 2 ** 31 - 1 ) ) + 1;
 }
 
 /**
@@ -327,8 +349,7 @@ export interface IntentLogSession extends EngineSessionCodec {
 export function createIntentLogSession(
 	options: IntentLogSessionOptions
 ): IntentLogSession {
-	const clientId =
-		options.clientId ?? Math.floor( Math.random() * ( 2 ** 31 - 1 ) ) + 1;
+	const clientId = options.clientId ?? randomClientId();
 	const actorId = `u${ options.userId }c${ clientId }`;
 
 	let replica: ReturnType< typeof createClient > | null = null;
@@ -504,7 +525,6 @@ export function createIntentLogSession(
 		clientId,
 		engineSlug: INTENT_LOG_ENGINE_SLUG,
 		engineProtocol: INTENT_LOG_ENGINE_PROTOCOL,
-		syncWhileSolo: true,
 
 		// ---- EngineSessionCodec (transport-facing) ----
 
@@ -600,7 +620,7 @@ export function createIntentLogSession(
 					notifyChange();
 					return;
 				}
-				case INTENT_LOG_UPDATE_TYPES.PROPOSAL: {
+				case INTENT_LOG_UPDATE_TYPES.PARKED: {
 					const proposal = decoded as IntentLogProposal;
 					// Same redelivery guard as intents: a duplicate row
 					// would double-list the proposal for review.
@@ -734,6 +754,17 @@ export function createIntentLogSession(
 
 		onUpdatesDiscarded: ( updates ) => {
 			discardListeners.forEach( ( listener ) => listener( updates ) );
+		},
+
+		onRoomRestart: () => {
+			replica = null;
+			bootstrapSeq = null;
+			observedSeq = 0;
+			appliedIntentIds = new Set();
+			deferredResetBuffer = null;
+			resetListeners.forEach( ( listener ) => listener() );
+			notifyChange();
+			return 'rebootstrap';
 		},
 
 		// ---- Bridge/dev surface ----

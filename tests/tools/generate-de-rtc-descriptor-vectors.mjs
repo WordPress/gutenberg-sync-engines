@@ -46,7 +46,7 @@ if ( ! match ) {
 
 const vectors = JSON.parse( match[ 1 ] );
 mkdirSync( dirname( fixture ), { recursive: true } );
-writeFileSync( fixture, JSON.stringify( vectors, null, '\t' ) + '\n' );
+writeFileSync( fixture, JSON.stringify( vectors, null, 2 ) + '\n' );
 process.stdout.write(
 	`Wrote ${ vectors.length } vectors to ${ fixture }\n`
 );

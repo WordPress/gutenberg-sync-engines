@@ -32,15 +32,19 @@ import {
 	createDeRtcUndoFeed,
 	type DeRtcRevertUndoManager,
 } from './revert-undo';
-import { createDeRtcCommitAdapter, hasDeRtcCommitRoute } from './commit';
+import { createDeRtcCommitAdapter } from './commit';
 import { registerSaveBaseVersion } from './save-base-version';
 import { applyServerAwarenessStates } from '../awareness-sync';
+import { registerAwareness } from '../../awareness/registry';
 import {
 	createDeRtcDocBridge,
 	DE_RTC_REMOTE_ORIGIN,
 	DE_RTC_RESTORE_ORIGIN,
 	parseCanonicalBlocks,
+	replaceBlockBySyncId,
+	syncIdOf,
 	unflattenProperties,
+	type DeRtcContestKey,
 } from './doc-bridge';
 import {
 	createDeRtcReviewState,
@@ -93,6 +97,13 @@ function createInertDeRtcCollectionCodec(
 				);
 			}
 		},
+		/*
+		 * Exempt from the transport's solo hold: commits ride the autosave
+		 * lane and the undo stack is the session's own accepted rows, so
+		 * the advisory rows this codec queues (fetches, review decisions)
+		 * must flow while alone too.
+		 */
+		sendsWhileAlone: true,
 		clientId: ydoc.clientID,
 		engineSlug: DE_RTC_ENGINE_SLUG,
 		engineProtocol: DE_RTC_ENGINE_PROTOCOL,
@@ -116,9 +127,10 @@ function createInertDeRtcCollectionCodec(
  * Distributed Editing's client obligations are deliberately small: it
  * never merges. The editor's edits land in the local doc; the session
  * codec proposes the doc's content against the version it last
- * incorporated; the SERVER three-way-merges every proposal and answers
- * with canonical content rows this entity folds back into the doc (and
- * so into the editor). Like the yjs-server engine:
+ * incorporated; the SERVER three-way-merges every proposal and announces
+ * each new version; the canonical content this entity folds back into
+ * the doc (and so into the editor) arrives as fetched snapshots. Like the
+ * yjs-server engine:
  *
  * - `hydrate` is a no-op: the server's genesis snapshot row is the
  *   document's origin (seeding from the loaded record would fork a
@@ -135,7 +147,7 @@ function createInertDeRtcCollectionCodec(
  * as an ordinary proposal in the shared history.
  *
  * Conflict review: a proposal the server escalates parks as a durable
- * `proposal-parked` row; the entity's review registry presents it
+ * `parked` row; the entity's review registry presents it
  * through the framework's review surface (panel, notices) via the
  * engine's `review` source (createSyncManager drives the handlers and
  * the resolution verbs from it), and a reviewer restores (overlaying
@@ -156,6 +168,11 @@ export function createDeRtcEngine(): SyncEngine & {
 			objectType: string,
 			objectId: unknown
 		) => Array< DeRtcBlockAuthorship | null >;
+		/** By block identity, at any depth (empty without identity). */
+		getBlockAuthorshipById: (
+			objectType: string,
+			objectId: unknown
+		) => Record< string, DeRtcBlockAuthorship >;
 	};
 } {
 	interface EntityReviewHandle {
@@ -163,23 +180,33 @@ export function createDeRtcEngine(): SyncEngine & {
 		getItems: () => ReturnType< SyncReviewSource[ 'getOpenItems' ] >;
 		restore: ( proposalId: string ) => void;
 		/** Adopt a contested block's latest canonical form. */
-		adoptContested: ( index: number ) => boolean;
+		adoptContested: ( key: DeRtcContestKey ) => boolean;
 		/** Reject a contest, keeping the local block. */
-		rejectContested: ( index: number ) => boolean;
+		rejectContested: ( key: DeRtcContestKey ) => boolean;
 	}
 
-	/** The contested-item id convention on the review surface. */
+	/**
+	 * The contested-item id convention on the review surface: the
+	 * prefix plus the contest key — the block's syncId, or its top-level
+	 * index for documents without identity.
+	 */
 	const CONTESTED_PREFIX = 'contested-';
-	const contestedIndexOf = ( proposalId: string ): number | null =>
-		proposalId.startsWith( CONTESTED_PREFIX )
-			? Number( proposalId.slice( CONTESTED_PREFIX.length ) )
-			: null;
+	const contestedKeyOf = ( proposalId: string ): DeRtcContestKey | null => {
+		if ( ! proposalId.startsWith( CONTESTED_PREFIX ) ) {
+			return null;
+		}
+		const key = proposalId.slice( CONTESTED_PREFIX.length );
+		return /^\d+$/.test( key ) ? Number( key ) : key;
+	};
 	const entityReviews = new Map< string, EntityReviewHandle >();
 	// Per-entity authorship trackers: block-grain "who last
 	// touched this", derived from the canonical row feed.
 	const entityAuthorship = new Map<
 		string,
-		() => Array< DeRtcBlockAuthorship | null >
+		{
+			byIndex: () => Array< DeRtcBlockAuthorship | null >;
+			byId: () => Record< string, DeRtcBlockAuthorship >;
+		}
 	>();
 	const reviewKey = ( objectType: string, objectId: unknown ) =>
 		`${ objectType }:${ String( objectId ) }`;
@@ -213,11 +240,11 @@ export function createDeRtcEngine(): SyncEngine & {
 			const handle = entityReviews.get(
 				reviewKey( objectType, objectId )
 			);
-			const index = contestedIndexOf( proposalId );
-			if ( null !== index ) {
+			const contestKey = contestedKeyOf( proposalId );
+			if ( null !== contestKey ) {
 				// Any resolution of a contested item that is not an
 				// adoption is a REJECT: keep the local block.
-				handle?.rejectContested( index );
+				handle?.rejectContested( contestKey );
 				return;
 			}
 			handle?.review.resolve( proposalId, resolution );
@@ -226,10 +253,10 @@ export function createDeRtcEngine(): SyncEngine & {
 			const handle = entityReviews.get(
 				reviewKey( objectType, objectId )
 			);
-			const index = contestedIndexOf( proposalId );
-			if ( null !== index ) {
+			const contestKey = contestedKeyOf( proposalId );
+			if ( null !== contestKey ) {
 				// Restore of a contested item is the ADOPT verb.
-				handle?.adoptContested( index );
+				handle?.adoptContested( contestKey );
 				return;
 			}
 			handle?.restore( proposalId );
@@ -246,38 +273,40 @@ export function createDeRtcEngine(): SyncEngine & {
 		review: reviewSource,
 		authorship: {
 			getBlockAuthorship: ( objectType, objectId ) =>
-				entityAuthorship.get( reviewKey( objectType, objectId ) )?.() ??
-				[],
+				entityAuthorship
+					.get( reviewKey( objectType, objectId ) )
+					?.byIndex() ?? [],
+			getBlockAuthorshipById: ( objectType, objectId ) =>
+				entityAuthorship
+					.get( reviewKey( objectType, objectId ) )
+					?.byId() ?? {},
 		},
 		createEntity( { syncConfig, objectType, objectId } ): EngineEntity {
 			const ydoc = createYjsDoc( { objectType } );
 			const recordMap = ydoc.getMap( CRDT_RECORD_MAP_KEY );
 			const awareness = syncConfig.createAwareness?.( ydoc );
+			registerAwareness( objectType, objectId, awareness );
 			const bridge = createDeRtcDocBridge( ydoc, syncConfig );
 			const review = createDeRtcReviewState();
 			// The REST review lane (B5): resolutions are mutations, so they
-			// POST to the plugin's authenticated route; review.ts falls back
-			// to the transport row when the POST rejects (older servers 404
-			// here, and the row path stays accepted for legacy clients). It
-			// follows the commit split — types without a commit route keep
-			// the transport lane for resolutions too. The room string
+			// POST to the plugin's authenticated route — for EVERY entity
+			// type; the transport's resolution-row lane is gone and the
+			// server rejects client-sent resolved rows. The room string
 			// mirrors the providers' convention.
-			if ( hasDeRtcCommitRoute( objectType ) ) {
-				review.setRestResolver( ( proposalId, resolution ) =>
-					apiFetch( {
-						data: {
-							client_id: ydoc.clientID,
-							proposalId,
-							resolution,
-							room: objectId
-								? `${ objectType }:${ objectId }`
-								: objectType,
-						},
-						method: 'POST',
-						path: '/wp-sync/v1/de-rtc/resolve',
-					} )
-				);
-			}
+			review.setRestResolver( ( proposalId, resolution ) =>
+				apiFetch( {
+					data: {
+						client_id: ydoc.clientID,
+						proposalId,
+						resolution,
+						room: objectId
+							? `${ objectType }:${ objectId }`
+							: objectType,
+					},
+					method: 'POST',
+					path: '/wp-sync/v1/de-rtc/resolve',
+				} )
+			);
 			const undoFeed = createDeRtcUndoFeed();
 			const authorship = createDeRtcAuthorship( undoFeed );
 			// Save-through-the-room: this post's REST saves carry
@@ -294,10 +323,10 @@ export function createDeRtcEngine(): SyncEngine & {
 				objectId,
 				saveControl
 			);
-			entityAuthorship.set(
-				reviewKey( objectType, objectId ),
-				authorship.getBlockAuthorship
-			);
+			entityAuthorship.set( reviewKey( objectType, objectId ), {
+				byIndex: authorship.getBlockAuthorship,
+				byId: authorship.getBlockAuthorshipById,
+			} );
 
 			// Edits made before the server snapshot arrives, replayed in
 			// order once it does.
@@ -366,6 +395,20 @@ export function createDeRtcEngine(): SyncEngine & {
 						String( changed?.html ?? '' )
 					);
 					parsed.forEach( ( block, offset ) => {
+						// By identity first: the parked block replaces the
+						// block carrying its syncId wherever it sits (a
+						// nested leaf restores into its container). Then
+						// by recorded index; a block with no place appends.
+						const syncId =
+							0 === offset && 'string' === typeof changed.syncId
+								? changed.syncId
+								: syncIdOf( block );
+						if (
+							syncId &&
+							replaceBlockBySyncId( next, syncId, block )
+						) {
+							return;
+						}
 						const index = Number( changed.index ) + offset;
 						if (
 							next[ index ] &&
@@ -391,20 +434,21 @@ export function createDeRtcEngine(): SyncEngine & {
 			 * (Adopt = restore, Reject = dismiss).
 			 */
 			const contested = new Map<
-				number,
-				{ version: string; html: string; edits: number }
+				DeRtcContestKey,
+				{ version: string; html: string; edits: number; index: number }
 			>();
 			bridge.onContested( ( event ) => {
-				const existing = contested.get( event.index );
-				contested.set( event.index, {
+				const existing = contested.get( event.key );
+				contested.set( event.key, {
 					version: event.version,
 					html: event.html,
 					edits: ( existing?.edits ?? 0 ) + 1,
+					index: event.index,
 				} );
 				notifyKey( key );
 			} );
-			bridge.onContestResolved( ( index ) => {
-				if ( contested.delete( index ) ) {
+			bridge.onContestResolved( ( contestKey ) => {
+				if ( contested.delete( contestKey ) ) {
 					notifyKey( key );
 				}
 			} );
@@ -424,10 +468,10 @@ export function createDeRtcEngine(): SyncEngine & {
 
 			entityReviews.set( key, {
 				review,
-				adoptContested: ( index ) =>
-					bridge.adoptContestedBlock( index ),
-				rejectContested: ( index ) =>
-					bridge.rejectContestedBlock( index ),
+				adoptContested: ( contestKey ) =>
+					bridge.adoptContestedBlock( contestKey ),
+				rejectContested: ( contestKey ) =>
+					bridge.rejectContestedBlock( contestKey ),
 				getItems: () => [
 					...review.getOpen().map( ( parked ) => ( {
 						id: parked.proposalId,
@@ -444,20 +488,28 @@ export function createDeRtcEngine(): SyncEngine & {
 							( parked.revisions ?? 1 ) > 1
 								? `${ parked.excerpt } (${ parked.revisions } revisions)`
 								: parked.excerpt || undefined,
-						// De-rtc addresses blocks positionally: the first
-						// changed block anchors the inline card (B3).
+						// The first changed block anchors the inline card:
+						// by identity (a nested block anchors to itself),
+						// with its top-level index as the fallback.
+						...( 'string' ===
+						typeof parked.changedBlocks?.[ 0 ]?.syncId
+							? { targetId: parked.changedBlocks[ 0 ].syncId }
+							: {} ),
 						targetIndex: parked.changedBlocks?.[ 0 ]?.index,
 					} ) ),
 					...Array.from( contested.entries() ).map(
-						( [ index, item ] ) => ( {
-							id: `contested-${ index }`,
-							unitId: `contested-${ index }`,
+						( [ contestKey, item ] ) => ( {
+							id: `contested-${ contestKey }`,
+							unitId: `contested-${ contestKey }`,
 							isLocal: false,
 							actorId: '',
 							reason: 'frame-conflict',
 							intentType: 'proposal',
 							summary: contestedExcerpt( item ),
-							targetIndex: index,
+							...( 'string' === typeof contestKey
+								? { targetId: contestKey }
+								: {} ),
+							targetIndex: item.index,
 						} )
 					),
 				],

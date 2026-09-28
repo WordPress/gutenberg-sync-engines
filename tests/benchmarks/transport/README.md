@@ -22,8 +22,10 @@ edit-to-visible latency as a user experiences it.
   typing). The idle phase is the steady-state carrying cost per collaborator
   that hosts should size for. Byte counts are message bodies only; HTTP
   headers add roughly another 0.5–1 KB per request on top.
-- **Observed transport** — self-labeled from the traffic actually seen
-  (websocket frames / `/long-poll` / `/updates`), and compared against the
+- **Observed transport** — advisory WebSocket frames count toward traffic
+  but do not establish a WebSocket content transport. Content `sync` frames
+  are required. The transport is self-labeled from the traffic actually seen
+  (websocket frames / `/sse` streams / `/updates`), and compared against the
   requested transport. A mismatch usually means a
   `WP_COLLABORATION_TRANSPORT` constant/env override on the site, or a
   failed negotiation.
@@ -57,7 +59,7 @@ node tests/benchmarks/transport/benchmark-transport.mjs \
     transport=http-polling trials=30 json=polling.json
 
 node tests/benchmarks/transport/benchmark-transport.mjs \
-    transport=http-long-polling trials=30 json=long-polling.json
+    transport=sse trials=30 json=sse.json
 ```
 
 Arguments are bare `key=value` tokens (the engine benchmark's convention):
@@ -67,6 +69,8 @@ Arguments are bare `key=value` tokens (the engine benchmark's convention):
 | `transport=` | `current` | Transport to measure; switched via the Settings →   |
 |              |           | Collaboration screen and restored afterwards.       |
 | `engine=`    | `current` | Engine to measure under (`intent-log`/`yjs-server`). |
+| `cache=`     | `current` | Persistent object cache for the run: `none`, `redis` (the Redis Object Cache drop-in on the env's Redis; this checkout's wp-env sites only), or leave alone. Restored after. |
+| `wake=`      | `auto`    | What an SSE stream sleeps on: `auto` (whatever the site has), `redis`, `cache` (needs `cache=redis`), `table` (needs `cache=none`). The report's `sseWaitObserved` says what the streams actually got. |
 | `trials=`    | `30`      | Measured token round-trips.                         |
 | `warmup=`    | `3`       | Unmeasured leading trials.                          |
 | `idle=`      | `30`      | Idle-phase seconds (`0` skips the phase).           |
@@ -140,19 +144,16 @@ under `engine=yjs-server` until that is fixed.
   interval (~1–1.5 s) and a max near two. Requests continue at the same
   cadence while idle; that idle request rate × collaborators is the host's
   steady-state load.
-- **http-long-polling**: receive latency drops to near-push (the server
-  re-checks storage every 500 ms while holding the request), so expect a p50
-  in the hundreds of milliseconds. The cost moves server-side: each held
-  request occupies a PHP worker for up to its wait budget (default 20 s) —
-  the *request count* here understates worker occupancy; see the capacity
-  warning in `includes/transports/class-wp-http-long-polling-sync-server.php`.
-  Note also that held requests wake on awareness changes, and with
-  collaborators present each client's awareness heartbeat keeps releasing
-  the other's held request — so the idle *request rate* can exceed
-  short-polling's (observed ~94 vs ~56 requests/min per window) even though
-  each request is short-lived.
-- **websocket**: true push — observed p50 ≈ 30 ms edit-to-visible (~20×
-  better than long-polling, ~60× better than polling) with the lowest idle
+- **sse**: receive latency drops to near-push: with Redis the stream is
+  written the moment a row lands; without it the server re-checks storage
+  every 500 ms while holding the stream, so expect a p50 in the hundreds of
+  milliseconds. The cost moves server-side: each open stream occupies a
+  PHP worker for its whole length (up to five minutes) — the *request
+  count* here understates worker occupancy, and without Redis each stream
+  also costs two storage reads a second. See
+  `docs/transports.md#server-sent-events`.
+- **websocket**: true push — observed p50 ≈ 30 ms edit-to-visible (~60×
+  better than polling) with the lowest idle
   wire volume by far (~14 frames/idle-30 s per window vs ~28–49 HTTP
   requests). The price is the heaviest hosting ask: a persistent daemon,
   TLS termination, and an exposed port.
@@ -162,34 +163,35 @@ of this benchmark differ for engine reasons too — compare transports under
 one engine at a time, and use the engine benchmark for engine-vs-engine
 server cost.
 
-## The N-window soak (`soak-transport.mjs`)
+## The N-window soak
 
-The trial benchmark above answers "what does one edit cost"; the soak
-answers "what does an hour of real co-editing cost per user" — the
-end-to-end validation of the hosting cost cards' composed projections:
+The hour-scale multi-window validation run is a debugging and analysis
+tool, not a benchmark: it lives at `tests/debugging/soak-transport.mjs`
+with its documentation in `tests/debugging/README.md`. It imports this
+directory's `lib.mjs`, so the soak and this benchmark use identical
+counters, tagging, and server-log collection.
 
-```bash
-node tests/benchmarks/transport/soak-transport.mjs \
-    engine=de-rtc transport=http-polling windows=3 soak=3600 \
-    json=soak-de-rtc.json
+### SSE
+
+Start the test site with `npm run env:tests start`; its lifecycle hook starts
+and connects Redis. Select it with `transport=sse`, for example:
+
+```sh
+WP_BASE_URL=http://localhost:8889 npm run bench -- --suite=transport --transport=sse --engine=intent-log --trials=30 --json=/tmp/sse.json
 ```
 
-N windows share one post; each window owns ONE paragraph and edits only
-it in staggered bursts with think time (deterministic jitter — reruns
-pace the same), so the run has real multi-writer merge traffic without
-constant same-block conflict. Window 0 saves the post periodically
-(`save=` seconds; under de-rtc the save carries `base_version` through
-the room) and inserts a latency probe every `probe=` seconds that every
-other window's in-page watcher stamps on arrival. Wire counters are
-sampled per minute per window (`minuteSamples` in the JSON), and the
-diagnostics request log — cleared at start, scenario-tagged `soak` —
-supplies the server-side totals.
+Use the port printed by wp-env. SSE response bytes are measured while the
+stream is open. JSON counters include `sseRequests`, `sseStreams`, and
+`sseBytesReceived`; only a successful stream with received bytes counts as
+observed SSE. A Redis outage can make the run use polling, so check the
+observed transport. Setup and recovery details are in
+[the transport guide](../../../docs/transports.md#server-sent-events-with-redis).
 
-The run FAILS unless every window converges to the identical serialized
-document within 90 s of the soak ending. The report is per user-hour
-(mean across windows): client requests and KB up/down, server requests,
-dispatch ms, CPU ms, and DB queries — the same units the cost cards in
-`docs/engine-comparison.md` compose from engine-seam floors, so a run
-directly validates (or corrects) the card for that
-engine/transport/user-count. Shared plumbing lives in `lib.mjs`; both
-tools use identical counters, tagging, and server-log collection.
+Add `--recovery` to the transport benchmark to interrupt the receiving tab,
+accept an edit while it is offline, and require it to catch up without a reload.
+The JSON report includes the recovery time separately from normal edit latency.
+
+For longer-stream checks, add `--idle=65` to cross several twenty-second
+catch-up reads, or `--idle=310` to include five-minute renewal. A positive PHP
+execution limit can shorten streams; compare the `sseRequests` counters with
+the site's limit when interpreting reconnect counts.

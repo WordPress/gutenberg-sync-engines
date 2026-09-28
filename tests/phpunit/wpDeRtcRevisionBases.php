@@ -35,7 +35,7 @@ class Tests_Collaboration_WpDeRtcRevisionBases extends WP_UnitTestCase {
 	}
 
 	private function engine(): WP_De_RTC_Engine {
-		return new WP_De_RTC_Engine( new WP_Sync_Post_Meta_Storage() );
+		return new WP_De_RTC_Engine( new WP_Sync_Table_Storage() );
 	}
 
 	private function proposal( string $proposal_id, string $base_version, string $proposed ): array {
@@ -81,7 +81,7 @@ class Tests_Collaboration_WpDeRtcRevisionBases extends WP_UnitTestCase {
 			)
 		);
 		$room    = 'postType/post:' . $post_id;
-		$this->assertSame( self::GENESIS_CONTENT, $this->engine()->materialize( $room ) );
+		$this->assertSame( $this->genesis( $post_id ), $this->engine()->materialize( $room ) );
 
 		// An aware save at v1 writes the lineage (and thus a revision
 		// carrying v1's snapshot) — then the room advances far past the
@@ -93,12 +93,12 @@ class Tests_Collaboration_WpDeRtcRevisionBases extends WP_UnitTestCase {
 			)
 		);
 		$this->assertNotEmpty( wp_get_post_revisions( $post_id ) );
-		$this->advance_past_window( $room, self::GENESIS_CONTENT );
+		$this->advance_past_window( $room, $this->genesis( $post_id ) );
 
 		// A deep-lagged client proposes from v1, editing the untouched
 		// Beta block. The room no longer holds v1 — the revision does.
 		$engine   = $this->engine();
-		$proposed = str_replace( 'Beta block original text.', 'Beta from the deep past.', self::GENESIS_CONTENT );
+		$proposed = str_replace( 'Beta block original text.', 'Beta from the deep past.', $this->genesis( $post_id ) );
 		$result   = $engine->handle_updates( $room, 500, 0, array( $this->proposal( 'p-lagged', 'v1', $proposed ) ), array() );
 
 		$this->assertSame( 'applied', $result['dispositions'][0]['status'], 'An aged-out base carried by a revision must merge, not void.' );
@@ -115,16 +115,27 @@ class Tests_Collaboration_WpDeRtcRevisionBases extends WP_UnitTestCase {
 			)
 		);
 		$room    = 'postType/post:' . $post_id;
-		$this->assertSame( self::GENESIS_CONTENT, $this->engine()->materialize( $room ) );
+		$this->assertSame( $this->genesis( $post_id ), $this->engine()->materialize( $room ) );
 
 		// No aware save ever happened: no revision carries v1.
-		$this->advance_past_window( $room, self::GENESIS_CONTENT );
+		$this->advance_past_window( $room, $this->genesis( $post_id ) );
 
 		$engine   = $this->engine();
-		$proposed = str_replace( 'Beta block original text.', 'Beta from the deep past.', self::GENESIS_CONTENT );
+		$proposed = str_replace( 'Beta block original text.', 'Beta from the deep past.', $this->genesis( $post_id ) );
 		$result   = $engine->handle_updates( $room, 501, 0, array( $this->proposal( 'p-lagged', 'v1', $proposed ) ), array() );
 
 		$this->assertSame( 'voided', $result['dispositions'][0]['status'] );
 		$this->assertSame( 'unknown-base-version', $result['dispositions'][0]['reason'], 'With no lineage anywhere, the deep-lag contract stands.' );
+	}
+
+	/**
+	 * The room's genesis content: the saved post with every block stamped
+	 * with its deterministic identity (what the room actually serves).
+	 *
+	 * @param int $post_id Post ID.
+	 * @return string Stamped genesis content.
+	 */
+	private function genesis( int $post_id ): string {
+		return WP_De_RTC_Block_Identity::stamp_genesis( self::GENESIS_CONTENT, $post_id );
 	}
 }

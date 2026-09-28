@@ -695,7 +695,7 @@ class Tests_Collaboration_WpSyncEngineBenchmark extends WP_UnitTestCase {
 		$parked   = array_filter(
 			$response['updates'],
 			static function ( $update ) {
-				return WP_De_RTC_Engine::UPDATE_TYPE_PROPOSAL_PARKED === $update['type'];
+				return WP_De_RTC_Engine::UPDATE_TYPE_PARKED === $update['type'];
 			}
 		);
 		$this->assertGreaterThan( 0, count( $parked ), 'Conflicts must surface as parked review rows.' );

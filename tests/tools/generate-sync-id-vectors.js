@@ -16,7 +16,7 @@
 import {
 	canonicalGenesisInput,
 	genesisSyncId,
-} from '../../src/engines/intent-log/sync-id.js';
+} from '../js/engines/intent-log/genesis-sync-id.js';
 
 const CASES = [
 	{ revision: { postId: 1, revisionId: 1 }, path: [] },
@@ -56,6 +56,6 @@ process.stdout.write(
 			vectors,
 		},
 		null,
-		'\t'
+		2
 	) + '\n'
 );

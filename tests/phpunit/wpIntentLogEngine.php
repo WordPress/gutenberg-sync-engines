@@ -139,6 +139,47 @@ class Tests_Collaboration_WpIntentLogEngine extends WP_Test_REST_TestCase {
 		$this->assertArrayNotHasKey( 'dispositions', $room_response );
 	}
 
+	public function test_a_send_marked_receive_false_is_answered_with_the_verdict_and_head_but_no_stored_rows() {
+		// A tab receiving over an open stream sends beside it: the server
+		// stores the intent and answers with its verdict and the room's
+		// head cursor, but delivers no stored rows (the stream does).
+		$insert        = self::intent_update(
+			array(
+				'intentId' => 'i-1',
+				'baseSeq'  => 0,
+				'type'     => 'insert_text',
+				'payload'  => array(
+					'syncId' => self::paragraph_id(),
+					'field'  => 'content',
+					'offset' => 0,
+					'text'   => 'x',
+				),
+			)
+		);
+		$room_response = $this->poll( array( $insert ), array( 'rows_received_separately' => true ) );
+
+		$this->assertSame( array(), $room_response['updates'], 'No stored rows: the stream delivers them.' );
+		$this->assertSame(
+			array(
+				array(
+					'intentId' => 'i-1',
+					'status'   => 'applied',
+				),
+			),
+			$room_response['dispositions']
+		);
+		$this->assertGreaterThan( 0, $room_response['end_cursor'], 'The head this write produced, for the client to wait for on its stream.' );
+
+		// The rows are there for any reader, the author included.
+		$author = $this->poll();
+		$this->assertSame(
+			array( WP_Intent_Log_Engine::UPDATE_TYPE_SNAPSHOT, WP_Intent_Log_Engine::UPDATE_TYPE_INTENT ),
+			array_column( $author['updates'], 'type' )
+		);
+		$this->assertSame( $room_response['end_cursor'], $author['end_cursor'], 'The send reported the head the ordinary read reaches.' );
+		$this->assertArrayNotHasKey( 'dispositions', $author );
+	}
+
 	public function test_applied_intent_returns_disposition_and_reaches_other_clients_transformed() {
 		$insert        = self::intent_update(
 			array(
@@ -224,7 +265,7 @@ class Tests_Collaboration_WpIntentLogEngine extends WP_Test_REST_TestCase {
 			array_filter(
 				$catchup['updates'],
 				static function ( $update ) {
-					return WP_Intent_Log_Engine::UPDATE_TYPE_PROPOSAL === $update['type'];
+					return WP_Intent_Log_Engine::UPDATE_TYPE_PARKED === $update['type'];
 				}
 			)
 		);
@@ -558,7 +599,7 @@ class Tests_Collaboration_WpIntentLogEngine extends WP_Test_REST_TestCase {
 			// The parked proposal SURVIVED the trim.
 			$proposals = array();
 			foreach ( $join['updates'] as $update ) {
-				if ( WP_Intent_Log_Engine::UPDATE_TYPE_PROPOSAL === $update['type'] ) {
+				if ( WP_Intent_Log_Engine::UPDATE_TYPE_PARKED === $update['type'] ) {
 					$proposals[] = json_decode( $update['data'], true );
 				}
 			}
@@ -683,14 +724,14 @@ class Tests_Collaboration_WpIntentLogEngine extends WP_Test_REST_TestCase {
 	public function test_proposals_carry_review_context_and_resolve_idempotently() {
 		$proposal_id = $this->escalate_attr_conflict( '1' );
 
-		// The proposal row carries review context: settlement seq, server
+		// The parked row carries review context: settlement seq, server
 		// time, and a content excerpt of the target block.
 		$catchup   = $this->poll( array(), array( 'client_id' => 303 ) );
 		$proposals = array_values(
 			array_filter(
 				$catchup['updates'],
 				static function ( $update ) {
-					return WP_Intent_Log_Engine::UPDATE_TYPE_PROPOSAL === $update['type'];
+					return WP_Intent_Log_Engine::UPDATE_TYPE_PARKED === $update['type'];
 				}
 			)
 		);
@@ -764,7 +805,7 @@ class Tests_Collaboration_WpIntentLogEngine extends WP_Test_REST_TestCase {
 			$join         = $this->poll( array(), array( 'client_id' => 606 ) );
 			$proposal_ids = array();
 			foreach ( $join['updates'] as $update ) {
-				if ( WP_Intent_Log_Engine::UPDATE_TYPE_PROPOSAL === $update['type'] ) {
+				if ( WP_Intent_Log_Engine::UPDATE_TYPE_PARKED === $update['type'] ) {
 					$decoded        = json_decode( $update['data'], true );
 					$proposal_ids[] = $decoded['intent']['intentId'];
 				}
@@ -836,7 +877,7 @@ class Tests_Collaboration_WpIntentLogEngine extends WP_Test_REST_TestCase {
 		// this room (the lineage check passes on null).
 		$this->poll();
 
-		$storage = new WP_Sync_Post_Meta_Storage();
+		$storage = new WP_Sync_Table_Storage();
 		$this->assertSame(
 			WP_Intent_Log_Engine::SLUG,
 			$storage->get_room_engine( $this->room() )
@@ -884,7 +925,7 @@ class Tests_Collaboration_WpIntentLogEngine extends WP_Test_REST_TestCase {
 		 * wrapper element; the block validator rejected the markup on the
 		 * next parse.
 		 */
-		$engine = new WP_Intent_Log_Engine( new WP_Sync_Post_Meta_Storage() );
+		$engine = new WP_Intent_Log_Engine( new WP_Sync_Table_Storage() );
 		$this->poll(
 			array(
 				self::intent_update(
@@ -937,7 +978,7 @@ class Tests_Collaboration_WpIntentLogEngine extends WP_Test_REST_TestCase {
 	}
 
 	public function test_materialize_round_trips_content_with_sync_ids() {
-		$engine = new WP_Intent_Log_Engine( new WP_Sync_Post_Meta_Storage() );
+		$engine = new WP_Intent_Log_Engine( new WP_Sync_Table_Storage() );
 		$this->poll(
 			array(
 				self::intent_update(
@@ -988,7 +1029,7 @@ class Tests_Collaboration_WpIntentLogEngine extends WP_Test_REST_TestCase {
 	}
 
 	/**
-	 * Proposal rows currently in the room feed, decoded.
+	 * Parked rows currently in the room feed, decoded.
 	 *
 	 * @param int $client_id Polling client.
 	 * @return array Decoded proposal payloads.
@@ -997,7 +1038,7 @@ class Tests_Collaboration_WpIntentLogEngine extends WP_Test_REST_TestCase {
 		$catchup = $this->poll( array(), array( 'client_id' => $client_id ) );
 		$rows    = array();
 		foreach ( $catchup['updates'] as $update ) {
-			if ( WP_Intent_Log_Engine::UPDATE_TYPE_PROPOSAL === $update['type'] ) {
+			if ( WP_Intent_Log_Engine::UPDATE_TYPE_PARKED === $update['type'] ) {
 				$rows[] = json_decode( $update['data'], true );
 			}
 		}
@@ -1127,10 +1168,10 @@ class Tests_Collaboration_WpIntentLogEngine extends WP_Test_REST_TestCase {
 		$this->assertArrayHasKey( 'time', $proposals[0] );
 
 		// Nothing reached the document.
-		$engine = new WP_Intent_Log_Engine( new WP_Sync_Post_Meta_Storage() );
+		$engine = new WP_Intent_Log_Engine( new WP_Sync_Table_Storage() );
 		$this->assertStringNotContainsString( '<script>', (string) $engine->materialize( $this->room() ) );
 
-		// Redelivery acks identically without a second proposal row.
+		// Redelivery acks identically without a second parked row.
 		$again = $this->poll(
 			array( self::object_block_intent( 'kses-1', '<script>alert(1)</script>' ) )
 		);
@@ -1150,7 +1191,7 @@ class Tests_Collaboration_WpIntentLogEngine extends WP_Test_REST_TestCase {
 		);
 		$this->assertSame( 'applied', $response['dispositions'][0]['status'] );
 
-		$engine  = new WP_Intent_Log_Engine( new WP_Sync_Post_Meta_Storage() );
+		$engine  = new WP_Intent_Log_Engine( new WP_Sync_Table_Storage() );
 		$content = $engine->materialize( $this->room() );
 		$this->assertStringContainsString( '<a href="https://example.com/">Hello</a>', $content );
 	}
@@ -1164,7 +1205,7 @@ class Tests_Collaboration_WpIntentLogEngine extends WP_Test_REST_TestCase {
 		);
 		$this->assertSame( 'applied', $applied['dispositions'][0]['status'] );
 
-		$engine = new WP_Intent_Log_Engine( new WP_Sync_Post_Meta_Storage() );
+		$engine = new WP_Intent_Log_Engine( new WP_Sync_Table_Storage() );
 		$this->assertStringContainsString( '<script>alert(1)</script>', (string) $engine->materialize( $this->room() ) );
 
 		/*
@@ -1318,7 +1359,7 @@ class Tests_Collaboration_WpIntentLogEngine extends WP_Test_REST_TestCase {
 		);
 		$this->assertSame( 'applied', $response['dispositions'][0]['status'] );
 
-		$engine  = new WP_Intent_Log_Engine( new WP_Sync_Post_Meta_Storage() );
+		$engine  = new WP_Intent_Log_Engine( new WP_Sync_Table_Storage() );
 		$content = $engine->materialize( $this->room() );
 		$this->assertStringNotContainsString( '<script>', $content );
 		$this->assertStringContainsString( '&lt;script&gt;', $content );
@@ -1353,7 +1394,7 @@ class Tests_Collaboration_WpIntentLogEngine extends WP_Test_REST_TestCase {
 		$this->assertSame( array( 'requires-approval', 'requires-approval' ), $reasons );
 		$this->assertCount( 2, $this->proposal_rows() );
 
-		$engine = new WP_Intent_Log_Engine( new WP_Sync_Post_Meta_Storage() );
+		$engine = new WP_Intent_Log_Engine( new WP_Sync_Table_Storage() );
 		$this->assertStringNotContainsString( 'kses-nb', (string) $engine->materialize( $this->room() ) );
 	}
 
@@ -1416,7 +1457,7 @@ class Tests_Collaboration_WpIntentLogEngine extends WP_Test_REST_TestCase {
 		);
 		$this->assertSame( 'applied', $response['dispositions'][0]['status'] );
 
-		$engine = new WP_Intent_Log_Engine( new WP_Sync_Post_Meta_Storage() );
+		$engine = new WP_Intent_Log_Engine( new WP_Sync_Table_Storage() );
 		$this->assertStringContainsString( '<script>x</script>', (string) $engine->materialize( $this->room() ) );
 	}
 
@@ -1555,7 +1596,7 @@ class Tests_Collaboration_WpIntentLogEngine extends WP_Test_REST_TestCase {
 		$this->assertSame( 'requires-approval', $swapped['dispositions'][0]['reason'] );
 
 		// The document still holds the benign value.
-		$engine  = new WP_Intent_Log_Engine( new WP_Sync_Post_Meta_Storage() );
+		$engine  = new WP_Intent_Log_Engine( new WP_Sync_Table_Storage() );
 		$content = (string) $engine->materialize( $this->room() );
 		$this->assertStringContainsString( '[script]alert(1);[/script]', $content );
 		$this->assertStringNotContainsString( '<script>alert(1);</script>', $content );
@@ -1605,7 +1646,7 @@ class Tests_Collaboration_WpIntentLogEngine extends WP_Test_REST_TestCase {
 
 		// Materialize emits the classic run BARE: no comment delimiters,
 		// content byte-preserved.
-		$engine  = new WP_Intent_Log_Engine( new WP_Sync_Post_Meta_Storage() );
+		$engine  = new WP_Intent_Log_Engine( new WP_Sync_Table_Storage() );
 		$content = (string) $engine->materialize( $room );
 		$this->assertStringContainsString( '<div>classic <strong>legacy</strong> run</div>', $content );
 		$this->assertStringNotContainsString( 'wp:freeform', $content );

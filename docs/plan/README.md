@@ -139,9 +139,12 @@ gh label create "agent:parked"        -c "#5319E7" -d "Cannot move forward; the 
 ## Working through them
 
 ```
-/shape-issues          # investigate what was filed, write it up properly
-/loop /issue-cycle     # work through everything labelled agent:ready
+/loop /shape-issue     # investigate what was filed, write it up properly
+/loop /solve-issue     # work through everything labelled agent:ready
 ```
+
+Either also takes a single issue number directly (e.g.
+`/shape-issue #60`) to work one issue without starting a loop.
 
 `LOOP.md` is the ledger while the loop runs. The queue itself is
 GitHub:
@@ -152,6 +155,8 @@ gh issue list --label "agent:ready"
 
 ## When an issue ships
 
-Update `CHANGELOG.md` as part of the change, per `AGENTS.md`. Close the
+If the change is significant (a new feature, setting, or extension
+point, or a behavior change — not a bug fix or tooling work), add a
+`CHANGELOG.md` entry as part of the change, per `AGENTS.md`. Close the
 issue. If it taught us something that would save the next person a
 week, add a line to [history.md](history.md).

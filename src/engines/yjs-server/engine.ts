@@ -30,6 +30,7 @@ import {
 import { createYjsDoc, markEntityAsSaved, serializeCrdtDoc } from '../yjs/doc';
 import { docContainsSnapshot, encodeDocSnapshot } from '../yjs/snapshot';
 import { createUndoManager } from '../yjs/undo';
+import { registerAwareness } from '../../awareness/registry';
 import {
 	createYjsServerSessionCodec,
 	YJS_SERVER_ENGINE_PROTOCOL,
@@ -71,13 +72,14 @@ export function createYjsServerEngine(): SyncEngine {
 		// Same per-peer Yjs undo as the relay: undo is client-local
 		// machinery, orthogonal to where the canonical merge happens.
 		createUndoManager,
-		createEntity( { syncConfig, objectType } ): EngineEntity {
+		createEntity( { syncConfig, objectType, objectId } ): EngineEntity {
 			const ydoc = createYjsDoc( { objectType } );
 			const recordMap = ydoc.getMap( CRDT_RECORD_MAP_KEY );
 			const stateMap = ydoc.getMap( CRDT_STATE_MAP_KEY );
 			const now = Date.now();
 
 			const awareness = syncConfig.createAwareness?.( ydoc );
+			registerAwareness( objectType, objectId, awareness );
 
 			const isBootstrapped = () =>
 				undefined !== stateMap.get( VERSION_KEY );

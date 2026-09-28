@@ -140,7 +140,7 @@ describe( 'de-rtc revert-edit undo', () => {
 		expect( manager.hasRedo() ).toBe( false );
 	} );
 
-	it( 'the session codec feeds rows with own-detection', () => {
+	it( 'the session codec feeds canonical snapshots to the undo feed as peer rows', () => {
 		const rows: any[] = [];
 		feed.subscribe( ( row ) => rows.push( row ) );
 		const codec = createDeRtcSessionCodec( {
@@ -155,14 +155,14 @@ describe( 'de-rtc revert-edit undo', () => {
 				content: contentOf( A, B ),
 			} ),
 		} );
+		// A peer's version, delivered as the fetch answer (own accepted
+		// proposals reach the feed from the announce path instead).
 		codec.receiveUpdate( {
-			type: 'content',
+			type: 'snapshot',
 			data: JSON.stringify( {
 				version: 'v2',
-				baseVersion: 'v1',
 				content: contentOf( A_PEER, B ),
-				authorClientId: 424242, // A peer, not this doc.
-				proposalId: 'p-424242-1',
+				ephemeral: true,
 			} ),
 		} );
 
@@ -170,7 +170,7 @@ describe( 'de-rtc revert-edit undo', () => {
 		expect( rows[ 0 ] ).toMatchObject( { version: 'v1', own: false } );
 		expect( rows[ 1 ] ).toMatchObject( {
 			version: 'v2',
-			baseVersion: 'v1',
+			baseVersion: null,
 			own: false,
 		} );
 	} );

@@ -32,14 +32,30 @@ import {
 	serverIngestBatch,
 } from './rebase.js';
 
+/** @typedef {import('./engine-types').ClientReplica} ClientReplica */
+/** @typedef {import('./engine-types').EngineDocument} EngineDocument */
+/** @typedef {import('./engine-types').IntentDisposition} IntentDisposition */
+/** @typedef {import('./engine-types').IntentEnvelope} IntentEnvelope */
+/** @typedef {import('./engine-types').IntentLogServer} IntentLogServer */
+
+/**
+ * One flushed intent's predicted vs actual disposition, for the
+ * simulator's prediction oracle.
+ *
+ * @typedef {Object} FlushReportRow
+ * @property {string}                 intentId  Intent id.
+ * @property {IntentDisposition|null} predicted The client's prediction.
+ * @property {IntentDisposition}      [actual]  The server's disposition.
+ */
+
 /**
  * Creates a client replica.
  *
- * @param {string} actorId    Actor id.
- * @param {Object} initialDoc Genesis document.
- * @param {number} [firstSeq] Engine seq of the initial document (> 0 when
- *                            bootstrapping from a server checkpoint).
- * @return {Object} Client state.
+ * @param {string}         actorId    Actor id.
+ * @param {EngineDocument} initialDoc Genesis document.
+ * @param {number}         [firstSeq] Engine seq of the initial document (> 0 when
+ *                                    bootstrapping from a server checkpoint).
+ * @return {ClientReplica} Client state.
  */
 export function createClient( actorId, initialDoc, firstSeq = 0 ) {
 	return {
@@ -64,10 +80,13 @@ export function createClient( actorId, initialDoc, firstSeq = 0 ) {
 		baseDoc: cloneDocument( initialDoc ),
 		doc: cloneDocument( initialDoc ),
 		// intentId → predicted disposition, from the latest replan.
-		predictions: new Map(),
+		predictions: /** @type {Map<string, IntentDisposition>} */ ( new Map() ),
 	};
 }
 
+/**
+ * @param {ClientReplica} client Client.
+ */
 function replan( client ) {
 	if ( client.outbox.length === 0 ) {
 		client.doc = client.baseDoc;
@@ -97,7 +116,7 @@ function replan( client ) {
  * a pending intent's baseSeq, and rebases against docAt(baseSeq) — both
  * remain reachable after the trim.
  *
- * @param {Object} client Client.
+ * @param {ClientReplica} client Client.
  */
 export function trimClientLog( client ) {
 	const pendingFloor = client.outbox.length
@@ -121,9 +140,9 @@ export function trimClientLog( client ) {
  * applies it optimistically. (Equivalent to a full replan: the new intent
  * is last in the batch and its slice is empty at authoring time.)
  *
- * @param {Object} client Client.
- * @param {Object} intent Intent (authored against client.doc).
- * @return {Object} Local apply disposition.
+ * @param {ClientReplica}  client Client.
+ * @param {IntentEnvelope} intent Intent (authored against client.doc).
+ * @return {IntentDisposition} Local apply disposition.
  */
 export function authorIntent( client, intent ) {
 	client.outbox.push( intent );
@@ -142,7 +161,7 @@ export function authorIntent( client, intent ) {
  * frame, so its effect on the head is whatever the planner's rebase makes of
  * it — exactly what a replan computes.
  *
- * @param {Object} client Client.
+ * @param {ClientReplica} client Client.
  */
 export function replanClient( client ) {
 	replan( client );
@@ -152,9 +171,9 @@ export function replanClient( client ) {
  * The client's prediction for a pending intent's server disposition. Exact
  * once the client is caught up to the server head.
  *
- * @param {Object} client   Client.
- * @param {string} intentId Intent id.
- * @return {Object|null} Predicted disposition.
+ * @param {ClientReplica} client   Client.
+ * @param {string}        intentId Intent id.
+ * @return {IntentDisposition|null} Predicted disposition.
  */
 export function predictedDisposition( client, intentId ) {
 	return client.predictions.get( intentId ) ?? null;
@@ -164,9 +183,9 @@ export function predictedDisposition( client, intentId ) {
  * Absorbs new log entries and replans pending work over them — the same
  * code path for a poll delta or an "offline for hours" reconnect batch.
  *
- * @param {Object}   client   Client.
- * @param {Object[]} entries  New log entries, starting at client.cursor.
- * @param {number}   startSeq Log index of entries[0] (=== client.cursor).
+ * @param {ClientReplica}    client   Client.
+ * @param {IntentEnvelope[]} entries  New log entries, starting at client.cursor.
+ * @param {number}           startSeq Log index of entries[0] (=== client.cursor).
  */
 export function clientReceive( client, entries, startSeq ) {
 	if ( startSeq !== client.cursor ) {
@@ -186,8 +205,8 @@ export function clientReceive( client, entries, startSeq ) {
  * without pushing the outbox. Models a poll or reconnect that receives
  * before it sends.
  *
- * @param {Object} server Server.
- * @param {Object} client Client.
+ * @param {IntentLogServer} server Server.
+ * @param {ClientReplica}   client Client.
  */
 export function catchUp( server, client ) {
 	clientReceive(
@@ -201,14 +220,15 @@ export function catchUp( server, client ) {
  * Full sync cycle: catch up, record predictions, push the outbox, verify
  * the server agreed, catch up over the accepted entries.
  *
- * @param {Object} server Server.
- * @param {Object} client Client.
- * @return {Object[]} Per-intent { intentId, predicted, actual } for the
- *                    flushed batch, for the prediction oracle.
+ * @param {IntentLogServer} server Server.
+ * @param {ClientReplica}   client Client.
+ * @return {FlushReportRow[]} Per-intent { intentId, predicted, actual } for the
+ *                            flushed batch, for the prediction oracle.
  */
 export function flushClient( server, client ) {
 	catchUp( server, client );
 	const batch = client.outbox;
+	/** @type {FlushReportRow[]} */
 	const report = batch.map( ( intent ) => ( {
 		intentId: intent.intentId,
 		predicted: predictedDisposition( client, intent.intentId ),

@@ -90,13 +90,10 @@ jobs:
           npm ci --ignore-scripts
           npm run build
 
-      # The conformance suites run on the runner's PHP directly (no
-      # WordPress). automerge-php's grapheme-cluster paths need the fixed
-      # GB11 rules of PCRE2 >= 10.43, which PHP bundles from 8.4 — under
-      # PHP <= 8.3 (PCRE2 10.42, including the stock runner PHP) two
-      # adjacent emoji-ZWJ sequences count as ONE \X cluster and exactly
-      # 2 of its 680 tests fail. Pin 8.4.
-      - name: Set up PHP for the conformance suites
+      # phpcs and the y-php conformance suite run on the runner's PHP
+      # directly (no WordPress). The automerge-php suite does NOT — see
+      # its step below.
+      - name: Set up PHP for phpcs and y-php
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.4'
@@ -123,10 +120,33 @@ jobs:
       # ported upstream Automerge JS/Rust tests (680 mapped). Needs no
       # Composer install (hand-rolled runner). The runner exits non-zero
       # on any failing test; keep its report visible either way.
+      #
+      # It runs in the official php image, NOT on setup-php's PHP. Its
+      # grapheme-cluster paths need the fixed GB11 rules of PCRE2 >= 10.43,
+      # and that is a property of the PCRE2 library PHP links, not of the
+      # PHP version: PHP 8.4 bundles 10.44, but distro-style builds link
+      # the system libpcre2 — 10.42 on Ubuntu 24.04 — and setup-php's
+      # Ubuntu packages started doing exactly that on 2026-09-03 (same
+      # PHP 8.4.25, two tests newly failing: two adjacent emoji-ZWJ
+      # sequences counted as ONE \X cluster). The official image is built
+      # against the bundled PCRE2. The guard turns any regression of that
+      # assumption into a message naming the cause instead of two cryptic
+      # test failures.
       - name: automerge-php conformance
+        env:
+          PHP_IMAGE: php:8.4-cli
         run: |
+          docker run --rm "$PHP_IMAGE" php -r '
+            $pcre = PCRE_VERSION_MAJOR . "." . PCRE_VERSION_MINOR;
+            printf( "PHP %s, PCRE2 %s, mbstring %s\n", PHP_VERSION, PCRE_VERSION, extension_loaded( "mbstring" ) ? "on" : "OFF" );
+            if ( version_compare( $pcre, "10.43", "<" ) || ! extension_loaded( "mbstring" ) ) {
+              echo "automerge-php conformance needs PCRE2 >= 10.43 (GB11 grapheme rules) and mbstring; pick an image whose PHP is built against the bundled PCRE2.\n";
+              exit( 1 );
+            }
+          '
           status=0
-          php includes/lib/automerge-php/tests/run.php > automerge-conformance.json || status=$?
+          docker run --rm -v "$PWD:/app" -w /app "$PHP_IMAGE" \
+            php includes/lib/automerge-php/tests/run.php > automerge-conformance.json || status=$?
           php -r '
             $report = json_decode( (string) file_get_contents( "automerge-conformance.json" ), true );
             if ( ! is_array( $report ) ) {
@@ -151,10 +171,60 @@ jobs:
       - name: PHPUnit
         run: npm run test:php
 
+  bench:
+    name: Benchmark invariants (certify sweep)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            gutenberg/package-lock.json
+
+      - name: Install plugin dependencies
+        run: npm ci
+
+      - name: Install and build the vendored Gutenberg subtree
+        run: |
+          cd gutenberg
+          npm ci --ignore-scripts
+          npm run build
+
+      - name: Build the plugin bundle
+        run: npm run build
+
+      - name: Start wp-env (tests)
+        run: npm run env:tests start
+
+      - name: Certify sweep
+        run: npm run bench -- --certify=3
+
+  # One job per engine, run side by side. Each engine's specs carry an
+  # `@engine-<slug>` tag; RTC_E2E_ENGINE picks one slice (see
+  # tests/e2e/playwright.config.ts). The `none` slice runs the specs that
+  # belong to no engine, so the four slices together are the whole suite.
   e2e:
-    name: End-to-end (Playwright)
+    name: End-to-end (${{ matrix.label }})
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    strategy:
+      # One engine failing must not cancel the others.
+      fail-fast: false
+      matrix:
+        include:
+          - engine: intent-log
+            label: intent-log
+          - engine: yjs-server
+            label: yjs-server
+          - engine: de-rtc
+            label: de-rtc
+          - engine: none
+            label: engine-neutral
     steps:
       - uses: actions/checkout@v4
 
@@ -189,6 +259,8 @@ jobs:
       # navigation can time out in a full run; every spec is green solo —
       # see AGENTS.md).
       - name: Playwright
+        env:
+          RTC_E2E_ENGINE: ${{ matrix.engine }}
         run: npm run test:e2e
 
       # cancelled() covers timed-out runs, where we also want artifacts
@@ -196,7 +268,7 @@ jobs:
         if: failure() || cancelled()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-artifacts
+          name: e2e-${{ matrix.label }}-artifacts
           path: artifacts/
           retention-days: 7
 
@@ -246,5 +318,53 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: e2e-websocket-artifacts
+          path: artifacts/
+          retention-days: 7
+
+  e2e-sse:
+    name: End-to-end server-sent events (Redis)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            gutenberg/package-lock.json
+
+      - name: Install plugin dependencies
+        run: npm ci
+
+      - name: Install and build the vendored Gutenberg subtree
+        run: |
+          cd gutenberg
+          npm ci --ignore-scripts
+          npm run build
+
+      - name: Build the plugin bundle
+        run: npm run build
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      # The tests config's afterStart hook starts Redis beside the site.
+      - name: Start wp-env (tests)
+        run: npm run env:tests start
+
+      # The sse-only suite selects the SSE transport on the tests site for
+      # its duration (global setup) and restores the previous one after
+      # (global teardown); it refuses to start without the Redis container.
+      - name: Playwright (sse-only)
+        run: npm run test:e2e:sse
+
+      - name: Upload test artifacts
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-sse-artifacts
           path: artifacts/
           retention-days: 7

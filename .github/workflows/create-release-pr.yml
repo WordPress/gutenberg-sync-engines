@@ -41,8 +41,11 @@ jobs:
             "41898282+github-actions[bot]@users.noreply.github.com"
 
       # bin/release.mjs bumps the version (package.json, plugin header,
-      # version constant, n.e.x.t placeholders), dates the changelog's
-      # Unreleased section, and commits on a release/vX.Y.Z branch.
+      # version constant, n.e.x.t placeholders), turns the changelog's
+      # Unreleased section into the version's section (hand-written
+      # highlights, then every commit since the last v* tag linked to its
+      # PR — which is why the checkout above needs the full history and
+      # tags), and commits on a release/vX.Y.Z branch.
       - name: Run release script
         id: release
         run: |

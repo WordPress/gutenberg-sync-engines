@@ -7,11 +7,28 @@ import { describe, expect, it, jest } from '@jest/globals';
 import { createDeRtcAuthorship } from '../../../../src/engines/de-rtc/authorship';
 import { createDeRtcUndoFeed } from '../../../../src/engines/de-rtc/revert-undo';
 
-jest.mock( '@wordpress/blocks', () => ( {
-	parse: ( content: string ) => ( content ? JSON.parse( content ) : [] ),
-	__unstableSerializeAndClean: ( blocks: unknown[] ) =>
-		JSON.stringify( blocks ),
-} ) );
+// Like the real parser, every parse mints a fresh clientId per block;
+// like the real serializer, the id never reaches the serialized form.
+// Comparing parsed blocks structurally would therefore never match.
+jest.mock( '@wordpress/blocks', () => {
+	let nextClientId = 0;
+	return {
+		parse: ( content: string ) =>
+			( content ? JSON.parse( content ) : [] ).map(
+				( block: object ) => ( {
+					...block,
+					clientId: `client-${ ++nextClientId }`,
+				} )
+			),
+		__unstableSerializeAndClean: (
+			blocks: Array< { clientId?: string } >
+		) =>
+			JSON.stringify(
+				// eslint-disable-next-line @typescript-eslint/no-unused-vars
+				blocks.map( ( { clientId, ...block } ) => block )
+			),
+	};
+} );
 
 const A = { name: 'core/paragraph', attributes: { content: 'Alpha' } };
 const A2 = { name: 'core/paragraph', attributes: { content: 'Alpha edited' } };

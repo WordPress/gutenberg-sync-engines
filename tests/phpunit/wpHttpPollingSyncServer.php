@@ -68,13 +68,6 @@ class Tests_Collaboration_WpHttpPollingSyncServer extends WP_Test_REST_Controlle
 		add_filter( 'wp_sync_engines', array( self::class, 'register_fixture_engine' ), 10, 2 );
 
 		parent::set_up();
-
-		// Reset storage post ID cache to ensure clean state after transaction rollback.
-		$reflection = new ReflectionProperty( 'WP_Sync_Post_Meta_Storage', 'storage_post_ids' );
-		if ( PHP_VERSION_ID < 80100 ) {
-			$reflection->setAccessible( true );
-		}
-		$reflection->setValue( null, array() );
 	}
 
 	/**
@@ -189,6 +182,92 @@ class Tests_Collaboration_WpHttpPollingSyncServer extends WP_Test_REST_Controlle
 	 */
 	public function test_get_item_schema() {
 		// Not applicable for sync endpoint.
+	}
+
+	/*
+	 * `rows_received_separately: true` (a send made beside an open stream).
+	 */
+
+	public function test_receive_false_stores_the_update_but_returns_no_stored_rows_and_the_head_cursor() {
+		wp_set_current_user( self::$editor_id );
+		$room = $this->get_post_room();
+
+		// A peer's row is already in the room; the sender has not read it.
+		$peer_head = $this->dispatch_sync(
+			array(
+				$this->build_room(
+					$room,
+					2,
+					0,
+					array(),
+					array(
+						array(
+							'data' => 'peer',
+							'type' => 'update',
+						),
+					)
+				),
+			)
+		)->get_data()['rooms'][0]['end_cursor'];
+
+		$response = $this->dispatch_sync(
+			array(
+				array_merge(
+					$this->build_room(
+						$room,
+						1,
+						0,
+						array(),
+						array(
+							array(
+								'data' => 'mine',
+								'type' => 'update',
+							),
+						)
+					),
+					array( 'rows_received_separately' => true )
+				),
+			)
+		);
+		$this->assertSame( 200, $response->get_status() );
+		$data = $response->get_data()['rooms'][0];
+		$this->assertSame( array(), $data['updates'], 'Neither the peer row nor the own row: the stream delivers stored rows.' );
+		$this->assertGreaterThan( $peer_head, $data['end_cursor'], 'The head, including the row this request stored.' );
+		$this->assertArrayHasKey( 'awareness', $data );
+		$this->assertCount( 2, $data['awareness'] );
+
+		// An ordinary read from where the sender was sees both rows.
+		$catch_up = $this->dispatch_sync( array( $this->build_room( $room, 3, 0 ) ) )->get_data()['rooms'][0];
+		$this->assertSame( array( 'peer', 'mine' ), array_column( $catch_up['updates'], 'data' ) );
+		$this->assertSame( $data['end_cursor'], $catch_up['end_cursor'], 'The ordinary read reaches the head the send reported.' );
+	}
+
+	public function test_receive_false_without_updates_reports_the_head_and_merges_awareness() {
+		wp_set_current_user( self::$editor_id );
+		$room      = $this->get_post_room();
+		$peer_head = $this->dispatch_sync(
+			array(
+				$this->build_room(
+					$room,
+					2,
+					0,
+					array(),
+					array(
+						array(
+							'data' => 'peer',
+							'type' => 'update',
+						),
+					)
+				),
+			)
+		)->get_data()['rooms'][0]['end_cursor'];
+
+		// An awareness-only send (a cursor move on a streaming tab).
+		$response = $this->dispatch_sync( array( array_merge( $this->build_room( $room, 1, 0, array( 'cursor' => 7 ) ), array( 'rows_received_separately' => true ) ) ) );
+		$data     = $response->get_data()['rooms'][0];
+		$this->assertSame( array(), $data['updates'] );
+		$this->assertSame( $peer_head, $data['end_cursor'] );
+		$this->assertSame( array( 'cursor' => 7 ), $data['awareness'][1] );
 	}
 
 	/*
@@ -684,6 +763,138 @@ class Tests_Collaboration_WpHttpPollingSyncServer extends WP_Test_REST_Controlle
 
 		$types = wp_list_pluck( $updates, 'type' );
 		$this->assertContains( 'update', $types );
+	}
+
+	/**
+	 * Runs a callback and returns every SQL statement it issued.
+	 *
+	 * @param callable $callback What to run.
+	 * @return string[] The statements, in order.
+	 */
+	private function record_queries( callable $callback ): array {
+		$seen     = array();
+		$recorder = static function ( $query ) use ( &$seen ) {
+			$seen[] = (string) $query;
+			return $query;
+		};
+		add_filter( 'query', $recorder );
+		try {
+			$callback();
+		} finally {
+			remove_filter( 'query', $recorder );
+		}
+		return $seen;
+	}
+
+	private function queries_touching( array $queries, string $table ): array {
+		return array_values(
+			array_filter(
+				$queries,
+				static function ( string $query ) use ( $table ) {
+					return false !== stripos( $query, $table );
+				}
+			)
+		);
+	}
+
+	private function write_queries( array $queries ): array {
+		return array_values(
+			array_filter(
+				$queries,
+				static function ( string $query ) {
+					return (bool) preg_match( '/^\s*(INSERT|UPDATE|DELETE|REPLACE)\b/i', $query );
+				}
+			)
+		);
+	}
+
+	public function test_a_poll_carrying_unchanged_awareness_writes_nothing() {
+		global $wpdb;
+		wp_set_current_user( self::$editor_id );
+
+		// One wide bucket so the two polls cannot straddle a boundary.
+		$wide = static fn() => HOUR_IN_SECONDS;
+		add_filter( 'wp_sync_awareness_timestamp_granularity', $wide );
+
+		$room  = $this->get_post_room();
+		$first = $this->record_queries( fn() => $this->dispatch_sync( array( $this->build_room( $room, 1, 0, array( 'user' => 'one' ) ) ) ) );
+		$this->assertNotEmpty( $this->write_queries( $this->queries_touching( $first, $wpdb->sync_room_meta ) ), 'The first poll records the client.' );
+
+		$second = $this->record_queries( fn() => $this->dispatch_sync( array( $this->build_room( $room, 1, 0, array( 'user' => 'one' ) ) ) ) );
+		$this->assertSame( array(), $this->write_queries( $second ), 'A poll that changes nothing is read-only.' );
+
+		$changed = $this->record_queries(
+			fn() => $this->dispatch_sync(
+				array(
+					$this->build_room(
+						$room,
+						1,
+						0,
+						array(
+							'user'   => 'one',
+							'cursor' => 4,
+						)
+					),
+				)
+			)
+		);
+		$this->assertNotEmpty( $this->write_queries( $this->queries_touching( $changed, $wpdb->sync_room_meta ) ), 'A changed state is written.' );
+
+		remove_filter( 'wp_sync_awareness_timestamp_granularity', $wide );
+	}
+
+	public function test_awareness_timestamps_round_up_to_the_bucket() {
+		$this->assertSame( 100, WP_HTTP_Polling_Sync_Server::awareness_timestamp( 100 ) );
+		$this->assertSame( 110, WP_HTTP_Polling_Sync_Server::awareness_timestamp( 101 ) );
+		$this->assertSame( 110, WP_HTTP_Polling_Sync_Server::awareness_timestamp( 110 ) );
+
+		$exact = static fn() => 1;
+		add_filter( 'wp_sync_awareness_timestamp_granularity', $exact );
+		$this->assertSame( 101, WP_HTTP_Polling_Sync_Server::awareness_timestamp( 101 ) );
+		remove_filter( 'wp_sync_awareness_timestamp_granularity', $exact );
+	}
+
+	public function test_an_idle_poll_with_a_persistent_object_cache_reads_one_table_once() {
+		global $wpdb;
+		wp_set_current_user( self::$editor_id );
+
+		$wide     = static fn() => HOUR_IN_SECONDS;
+		add_filter( 'wp_sync_awareness_timestamp_granularity', $wide );
+		$previous = wp_using_ext_object_cache( true );
+		try {
+			$room = $this->get_post_room();
+
+			// A room with history: one update stamps the lineage, and the
+			// first read mints the generation token.
+			$this->dispatch_sync(
+				array(
+					$this->build_room(
+						$room,
+						1,
+						0,
+						array( 'user' => 'one' ),
+						array(
+							array(
+								'type' => 'update',
+								'data' => 'dGVzdA==',
+							),
+						)
+					),
+				)
+			);
+			$response = $this->dispatch_sync( array( $this->build_room( $room, 2, 0, array( 'user' => 'two' ) ) ) );
+			$cursor   = (int) $response->get_data()['rooms'][0]['end_cursor'];
+
+			// Now the idle poll: same awareness, nothing new to fetch.
+			$idle = $this->record_queries( fn() => $this->dispatch_sync( array( $this->build_room( $room, 2, $cursor, array( 'user' => 'two' ) ) ) ) );
+
+			$this->assertSame( array(), $this->write_queries( $idle ), 'Nothing is written.' );
+			$this->assertSame( array(), $this->queries_touching( $idle, $wpdb->sync_room_meta ), 'Presence, lineage, and the generation token come from the cache.' );
+			$this->assertCount( 1, $this->queries_touching( $idle, $wpdb->sync_updates ), 'Only the cursor snapshot reads the update log.' );
+		} finally {
+			wp_using_ext_object_cache( (bool) $previous );
+			remove_filter( 'wp_sync_awareness_timestamp_granularity', $wide );
+		}
 	}
 
 	public function test_sync_own_updates_not_returned() {
@@ -1183,5 +1394,147 @@ class Tests_Collaboration_WpHttpPollingSyncServer extends WP_Test_REST_Controlle
 
 		// Room 2 should have no updates.
 		$this->assertEmpty( $data['rooms'][1]['updates'] );
+	}
+
+	/**
+	 * The advisory channel's signaling probe rides the poll and is answered
+	 * alongside the rooms (see Gutenberg_Sync_Engines_Advisory_Presence).
+	 */
+	public function test_poll_answers_the_advisory_probe_alongside_the_rooms() {
+		wp_set_current_user( self::$editor_id );
+		$room    = 'postType/post:' . self::$post_id;
+		$request = new WP_REST_Request( 'POST', '/wp-sync/v1/updates' );
+		$request->set_body_params(
+			array(
+				'rooms'    => array(
+					array(
+						'room'      => $room,
+						'client_id' => 1,
+						'after'     => 0,
+						'awareness' => array( 'user' => 'a' ),
+						'updates'   => array(),
+					),
+				),
+				'advisory' => array(
+					'room'      => $room,
+					'token'     => 'tok-poll',
+					'client_id' => 1,
+				),
+			)
+		);
+		$response = rest_get_server()->dispatch( $request );
+		$this->assertSame( 200, $response->get_status() );
+		$data = $response->get_data();
+		$this->assertArrayHasKey( 'advisory', $data );
+		$this->assertFalse( $data['advisory']['others'] );
+		$this->assertSame( array(), $data['advisory']['peers'] );
+
+		// A request without a probe carries no answer.
+		$request->set_body_params(
+			array(
+				'rooms' => array(
+					array(
+						'room'      => $room,
+						'client_id' => 1,
+						'after'     => 0,
+						'awareness' => array( 'user' => 'a' ),
+						'updates'   => array(),
+					),
+				),
+			)
+		);
+		$this->assertArrayNotHasKey( 'advisory', rest_get_server()->dispatch( $request )->get_data() );
+	}
+
+	/**
+	 * The room generation token: absent until the room has rows, stable
+	 * across requests, and different after the room is reset — the signal a
+	 * client uses to notice that its rows and cursor are gone.
+	 */
+	public function test_room_generation_is_stable_until_the_room_is_reset(): void {
+		wp_set_current_user( self::$editor_id );
+		$room   = $this->get_post_room();
+		$update = array(
+			array(
+				'data' => base64_encode( 'first' ),
+				'type' => Test_Opaque_Relay_Engine::UPDATE_TYPE_UPDATE,
+			),
+		);
+
+		$first = $this->dispatch_sync( array( $this->build_room( $room, 1, 0, array(), $update ) ) )->get_data()['rooms'][0];
+		$this->assertArrayHasKey( 'generation', $first );
+		$this->assertIsString( $first['generation'] );
+		$this->assertNotSame( '', $first['generation'] );
+
+		// A second client reading the room sees the same token.
+		$second = $this->dispatch_sync( array( $this->build_room( $room, 2, 0 ) ) )->get_data()['rooms'][0];
+		$this->assertSame( $first['generation'], $second['generation'] );
+
+		// Reset the room (rows, lineage, room meta): the next write mints a
+		// new token, so a client holding the old one learns of the restart.
+		$storage = wp_get_sync_storage();
+		$this->assertTrue( $storage->reset_room( $room ) );
+		$after = $this->dispatch_sync( array( $this->build_room( $room, 1, (int) $first['end_cursor'], array(), $update ) ) )->get_data()['rooms'][0];
+		$this->assertArrayHasKey( 'generation', $after );
+		$this->assertNotSame( $first['generation'], $after['generation'] );
+	}
+
+	/**
+	 * A room with no rows has nothing to restart, so it carries no token.
+	 */
+	public function test_room_generation_is_absent_for_an_empty_room(): void {
+		wp_set_current_user( self::$editor_id );
+		$room     = 'taxonomy/category';
+		$response = $this->dispatch_sync( array( $this->build_room( $room ) ) )->get_data()['rooms'][0];
+		$this->assertSame( 0, $response['end_cursor'] );
+		$this->assertArrayNotHasKey( 'generation', $response );
+	}
+
+	/**
+	 * A new tab's first request, carrying its presence token, finds nobody
+	 * else in the room: the room's leftovers are reset before it is served,
+	 * and the generation token changes so any stale client notices.
+	 */
+	public function test_a_new_tabs_join_resets_an_abandoned_room_and_changes_the_generation(): void {
+		wp_set_current_user( self::$editor_id );
+		$room   = $this->get_post_room();
+		$update = array(
+			array(
+				'data' => base64_encode( 'stale' ),
+				'type' => Test_Opaque_Relay_Engine::UPDATE_TYPE_UPDATE,
+			),
+		);
+
+		// An earlier session (no presence token: a tab from before the lane,
+		// or an expired one) left a row behind, and its awareness has since
+		// gone stale.
+		$first = $this->dispatch_sync( array( $this->build_room( $room, 1, 0, array(), $update ) ) )->get_data()['rooms'][0];
+		$this->assertNotEmpty( $first['generation'] );
+		$storage = gutenberg_sync_engines_storage();
+		$storage->set_awareness_state(
+			$room,
+			array_map(
+				static function ( $entry ) {
+					$entry['updated_at'] = time() - 31;
+					return $entry;
+				},
+				$storage->get_awareness_state( $room )
+			)
+		);
+
+		// A new tab joins with its token and writes: the old row is gone.
+		$join_room                   = $this->build_room( $room, 2, 0, array(), $update );
+		$join_room['presence_token'] = 'tab-new';
+		$joined                      = $this->dispatch_sync( array( $join_room ) )->get_data()['rooms'][0];
+		// The relay fixture never echoes a client's own rows, so the stale
+		// row's absence is what shows here; the storage holds the joiner's
+		// row alone.
+		$this->assertCount( 0, $joined['updates'], 'The earlier session\'s stale row is gone after the reset.' );
+		$this->assertSame( array( 2 ), array_column( $storage->get_updates_after_cursor( $room, 0 ), 'client_id' ) );
+		$this->assertNotSame( $first['generation'], $joined['generation'] );
+
+		// The same tab again (re-bootstrap from cursor 0): nothing resets.
+		$again = $this->dispatch_sync( array( $join_room ) )->get_data()['rooms'][0];
+		$this->assertSame( $joined['generation'], $again['generation'] );
 	}
 }

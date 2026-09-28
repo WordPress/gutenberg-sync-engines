@@ -12,6 +12,13 @@ gutenberg
 # and JSON vectors); reformatting would break the contract.
 src/engines/intent-log
 
+# Generated test vectors: their contract is byte parity with the generator
+# (tests/tools/generate-*) and between the Jest and PHPUnit copies, not
+# style. Prettier would collapse short arrays onto one line.
+tests/js/engines/intent-log/test-vectors
+tests/js/engines/de-rtc/test-vectors
+tests/phpunit/test-vectors
+
 # Vendored third-party code from the Yjs ecosystem.
 src/engines/yjs/y-utilities
 

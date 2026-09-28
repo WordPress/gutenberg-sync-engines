@@ -11,6 +11,9 @@ if ( ! class_exists( 'WP_WebSocket_Connection' ) ) {
 if ( ! class_exists( 'WP_WebSocket_Token_Controller' ) ) {
 	require_once __DIR__ . '/class-wp-websocket-token-controller.php';
 }
+if ( ! class_exists( 'WP_WebSocket_Access_Token' ) ) {
+	require_once __DIR__ . '/class-wp-websocket-access-token.php';
+}
 
 if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 
@@ -26,11 +29,19 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 	 * reconnecting clients catch up via their cursor, and new updates are
 	 * pushed immediately to other connected sockets subscribed to the room.
 	 *
+	 * The same socket also serves the ADVISORY channel of tabs on the short
+	 * polling transport (`{type: 'advisory', ...}` frames, see
+	 * handle_advisory_message()): the daemon relays presence and "go and
+	 * poll" notices between the tabs in a room and carries no rows for them.
+	 *
 	 * Auth: the handshake requires a valid WordPress logged_in cookie, an
 	 * allowed Origin, and a one-time short-lived token minted via the
 	 * `wp-sync/v1/ws-token` REST endpoint whose user must match the cookie
-	 * user. Per-room permission checks identical to the REST server run when
-	 * a socket first references a room.
+	 * user. In access-token mode (WP_WebSocket_Access_Token) the offered credential is
+	 * instead a signed access token, verified here with the shared secret and no
+	 * database read, and the cookie is optional: the same credential a
+	 * host's own relay accepts. Per-room permission checks identical to
+	 * the REST server run when a socket first references a room.
 	 *
 	 * @since 7.4.0
 	 * @access private
@@ -156,6 +167,23 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 		const MESSAGE_RATE_WINDOW_S = 5;
 
 		/**
+		 * Maximum encoded size of one advisory presence state (who is here:
+		 * user info, name, activity — never cursors or content).
+		 *
+		 * @since 0.0.1
+		 * @var int
+		 */
+		const MAX_ADVISORY_PRESENCE_BYTES = 16384;
+
+		/**
+		 * Maximum length of the room name an advisory notice carries.
+		 *
+		 * @since 0.0.1
+		 * @var int
+		 */
+		const MAX_ADVISORY_ROOM_LENGTH = 200;
+
+		/**
 		 * Transport-agnostic sync server core.
 		 *
 		 * @since 7.4.0
@@ -195,8 +223,17 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 		 * - user_id:       int WordPress user authenticated during the handshake.
 		 * - cookie:        string Raw logged_in cookie value captured at the
 		 *                  handshake, re-validated during the periodic sweep.
+		 * - access token:        bool Whether a signed access token authenticated the
+		 *                  handshake (the cookie may then be absent: the
+		 *                  sweep still re-checks the user's capability but
+		 *                  cannot see a logout before the socket closes).
 		 * - ip:            string Peer IP address, used for per-IP caps.
 		 * - rooms:         array<string, array{client_id: int, cursor: int}>
+		 *                  The rooms this socket syncs (the websocket TRANSPORT).
+		 * - advisory:      array<string, array{client_id: int, presence_token: string, presence: ?array, cursor: int}>
+		 *                  The rooms this socket follows as an ADVISORY channel
+		 *                  (see handle_advisory_message()): in memory only,
+		 *                  never written to storage.
 		 * - connected_at:  float Time the socket was accepted (handshake deadline).
 		 * - last_seen:     float Last time bytes arrived from the peer.
 		 * - message_times: float[] Recent sync-message timestamps (rate budget).
@@ -230,6 +267,15 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 		 * @var float
 		 */
 		private float $last_sweep_at = 0;
+
+		/**
+		 * Client ids each room held at the last sweep, so the next one can
+		 * tell that somebody has since gone.
+		 *
+		 * @since 0.0.2
+		 * @var array<string, array<int, int>>
+		 */
+		private array $swept_client_ids = array();
 
 		/**
 		 * Timestamp of the last out-of-band room scan.
@@ -284,6 +330,8 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 			stream_set_blocking( $this->listener, false );
 
 			$this->log( sprintf( 'Listening on ws://%s:%d', $this->host, $this->port ) );
+
+			$this->install_signal_handlers();
 
 			$this->running           = true;
 			$this->last_ping_at      = microtime( true );
@@ -351,6 +399,36 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 		}
 
 		/**
+		 * Asks the loop to finish when the process is interrupted or asked to
+		 * quit, so open connections are closed and the port is released.
+		 *
+		 * Registering a handler also decides whether the signal arrives at
+		 * all when the daemon is PID 1 inside a container: the kernel drops
+		 * signals that still carry their default action. Best effort — the
+		 * pcntl extension is optional and absent from some CLI images, and
+		 * without it Ctrl+C cannot be caught here.
+		 *
+		 * @since 0.0.1
+		 */
+		private function install_signal_handlers(): void {
+			if ( ! function_exists( 'pcntl_signal' ) || ! function_exists( 'pcntl_async_signals' ) ) {
+				return;
+			}
+
+			pcntl_async_signals( true );
+
+			$handler = function () {
+				if ( $this->running ) {
+					$this->log( 'Stopping: closing connections.' );
+				}
+				$this->stop();
+			};
+
+			pcntl_signal( SIGINT, $handler );
+			pcntl_signal( SIGTERM, $handler );
+		}
+
+		/**
 		 * Accepts a pending connection on the listening socket, enforcing
 		 * total and per-IP connection caps.
 		 *
@@ -409,6 +487,7 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 			}
 
 			$this->clients[ (int) $stream ] = array(
+				'advisory'      => array(),
 				'closing'       => false,
 				'conn'          => new WP_WebSocket_Connection( $stream ),
 				'connected_at'  => microtime( true ),
@@ -570,8 +649,9 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 				return;
 			}
 
-			$this->clients[ $key ]['user_id'] = $auth['user_id'];
-			$this->clients[ $key ]['cookie']  = $auth['cookie'];
+			$this->clients[ $key ]['user_id']      = $auth['user_id'];
+			$this->clients[ $key ]['cookie']       = $auth['cookie'];
+			$this->clients[ $key ]['access_token'] = ! empty( $auth['access_token'] );
 			// Echo the base subprotocol the client offered alongside its
 			// token entry (browsers enforce the echo matches an offer).
 			$offered_protocols = (string) ( $headers['sec-websocket-protocol'] ?? '' );
@@ -590,9 +670,11 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 		 * @since 7.4.0
 		 *
 		 * @param array{headers: array<string, string>, query: array<string, mixed>} $request Parsed handshake request.
-		 * @return array{user_id: int, cookie: string}|WP_Error Authenticated user
-		 *         ID and the raw logged_in cookie value (retained for periodic
-		 *         re-validation), or WP_Error on failure.
+		 * @return array{user_id: int, cookie: string, access token: bool}|WP_Error
+		 *         Authenticated user ID, the raw logged_in cookie value
+		 *         (retained for periodic re-validation; '' when an access token
+		 *         stood alone), and whether an access token authenticated it, or
+		 *         WP_Error on failure.
 		 */
 		private function authenticate_handshake( array $request ) {
 			$headers = $request['headers'];
@@ -624,10 +706,50 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 				return new WP_Error( 'websocket_bad_origin', 'Origin not allowed: ' . $origin );
 			}
 
-			// 2. WordPress logged_in auth cookie.
+			/*
+			 * The credential minted via the ws-token REST endpoint rides the
+			 * Sec-WebSocket-Protocol offer list (the one handshake header
+			 * browsers let a page set), NOT the URL — a query-string token
+			 * leaks into server/proxy access logs and referrer-adjacent
+			 * tooling. The offer is `<SUBPROTOCOL>, <TOKEN_PROTOCOL_PREFIX><token>`;
+			 * the server echoes only the base subprotocol.
+			 */
+			$token = '';
+			foreach ( explode( ',', (string) ( $headers['sec-websocket-protocol'] ?? '' ) ) as $offer ) {
+				$offer = trim( $offer );
+				if ( 0 === strpos( $offer, self::TOKEN_PROTOCOL_PREFIX ) ) {
+					$token = substr( $offer, strlen( self::TOKEN_PROTOCOL_PREFIX ) );
+					break;
+				}
+			}
+
 			$cookie_header = $headers['cookie'] ?? '';
 			$cookie_value  = $this->get_cookie_value( $cookie_header, LOGGED_IN_COOKIE );
 
+			/*
+			 * 2a. Access-token mode: a signed access token proves the user by itself,
+			 * the way it does to a relay without WordPress. The cookie is
+			 * kept for the periodic re-validation when the browser sent one
+			 * for the same user (a same-site daemon), and simply absent
+			 * otherwise.
+			 */
+			if ( WP_WebSocket_Access_Token::is_enabled() && WP_WebSocket_Access_Token::looks_like_access_token( $token ) ) {
+				$claims = WP_WebSocket_Access_Token::verify( $token );
+				if ( is_wp_error( $claims ) ) {
+					return $claims;
+				}
+				if ( ! get_userdata( $claims['user_id'] ) ) {
+					return new WP_Error( 'websocket_invalid_access_token', 'Access token for an unknown user.' );
+				}
+				$cookie_user = '' !== $cookie_value ? wp_validate_auth_cookie( $cookie_value, 'logged_in' ) : false;
+				return array(
+					'cookie'       => $cookie_user && (int) $cookie_user === $claims['user_id'] ? $cookie_value : '',
+					'access_token' => true,
+					'user_id'      => $claims['user_id'],
+				);
+			}
+
+			// 2. WordPress logged_in auth cookie.
 			if ( '' === $cookie_value ) {
 				return new WP_Error(
 					'websocket_invalid_cookie',
@@ -643,23 +765,7 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 				return new WP_Error( 'websocket_invalid_cookie', 'Invalid auth cookie.' );
 			}
 
-			/*
-			 * 3. One-time token minted via the ws-token REST endpoint. The
-			 * token rides the Sec-WebSocket-Protocol offer list (the one
-			 * handshake header browsers let a page set), NOT the URL — a
-			 * query-string token leaks into server/proxy access logs and
-			 * referrer-adjacent tooling. The offer is
-			 * `<SUBPROTOCOL>, <TOKEN_PROTOCOL_PREFIX><token>`; the server
-			 * echoes only the base subprotocol.
-			 */
-			$token = '';
-			foreach ( explode( ',', (string) ( $headers['sec-websocket-protocol'] ?? '' ) ) as $offer ) {
-				$offer = trim( $offer );
-				if ( 0 === strpos( $offer, self::TOKEN_PROTOCOL_PREFIX ) ) {
-					$token = substr( $offer, strlen( self::TOKEN_PROTOCOL_PREFIX ) );
-					break;
-				}
-			}
+			// 3. One-time token whose user must match the cookie user.
 			$token_user = WP_WebSocket_Token_Controller::consume_token( $token );
 
 			if ( null === $token_user || $token_user !== (int) $cookie_user ) {
@@ -667,8 +773,9 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 			}
 
 			return array(
-				'cookie'  => $cookie_value,
-				'user_id' => (int) $cookie_user,
+				'cookie'       => $cookie_value,
+				'access_token' => false,
+				'user_id'      => (int) $cookie_user,
 			);
 		}
 
@@ -705,8 +812,13 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 
 			$message = json_decode( $payload, true );
 
+			if ( is_array( $message ) && 'advisory' === ( $message['type'] ?? '' ) ) {
+				$this->handle_advisory_message( $key, $message );
+				return;
+			}
+
 			if ( ! is_array( $message ) || 'sync' !== ( $message['type'] ?? '' ) || ! isset( $message['rooms'] ) || ! is_array( $message['rooms'] ) ) {
-				$this->send_error( $key, new WP_Error( 'websocket_invalid_message', 'Expected a sync message with rooms.' ) );
+				$this->send_error( $key, new WP_Error( 'websocket_invalid_message', 'Expected a sync or advisory message.' ) );
 				return;
 			}
 
@@ -717,6 +829,7 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 
 			$responses     = array();
 			$touched_rooms = array();
+			$landed_rooms  = array();
 
 			foreach ( $rooms as $room_request ) {
 				$validated = $this->validate_room_request( $room_request );
@@ -756,8 +869,11 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 					}
 
 					$this->clients[ $key ]['rooms'][ $room ] = array(
-						'client_id' => $validated['client_id'],
-						'cursor'    => 0,
+						'client_id'      => $validated['client_id'],
+						'cursor'         => 0,
+						// Remembered so a closed socket can leave the room
+						// the way a closing tab's beacon does.
+						'presence_token' => $validated['presence_token'] ?? '',
 					);
 				} elseif ( $this->clients[ $key ]['rooms'][ $room ]['client_id'] !== $validated['client_id'] ) {
 					/*
@@ -808,6 +924,9 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 
 				$responses[]     = $room_response;
 				$touched_rooms[] = $room;
+				if ( count( $validated['updates'] ) > 0 ) {
+					$landed_rooms[] = $room;
+				}
 			}
 
 			if ( ! empty( $responses ) ) {
@@ -825,6 +944,273 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 			foreach ( array_unique( $touched_rooms ) as $room ) {
 				$this->broadcast_room( $room, $key );
 			}
+			// Tell the room's advisory followers (short-polling tabs) to
+			// poll for the rows this socket landed, and note the head so
+			// the scan does not announce the same rows again.
+			foreach ( array_unique( $landed_rooms ) as $room ) {
+				$this->notify_advisory_followers( $room );
+			}
+		}
+
+		/**
+		 * Handles an advisory frame: `{type: 'advisory', room, client_id,
+		 * presence_token?, presence?, announce?}`. The first frame for a room
+		 * subscribes the socket to it (permission-checked like a sync
+		 * subscription, and bound to one client id); `presence` replaces
+		 * this tab's presence in the room's roster; `announce` names a room
+		 * (or `*`) the tab just landed rows in. The daemon answers roster
+		 * changes with the room's full roster to every follower and relays
+		 * notices to the other followers. Nothing here touches storage.
+		 *
+		 * @since 0.0.1
+		 *
+		 * @param int   $key     Client key.
+		 * @param array $message Decoded frame.
+		 */
+		private function handle_advisory_message( int $key, array $message ): void {
+			$validated = $this->validate_advisory_message( $message );
+
+			if ( is_wp_error( $validated ) ) {
+				$this->send_error( $key, $validated );
+				return;
+			}
+
+			$room = $validated['room'];
+			wp_set_current_user( (int) $this->clients[ $key ]['user_id'] );
+
+			$roster_changed = false;
+			if ( ! isset( $this->clients[ $key ]['advisory'][ $room ] ) ) {
+				if ( ! current_user_can( 'edit_posts' ) || ! $this->sync->can_user_sync_room( $room ) ) {
+					$this->send_error(
+						$key,
+						new WP_Error(
+							'rest_cannot_edit',
+							'You do not have permission to sync this room.',
+							array( 'rooms' => array( $room ) )
+						)
+					);
+					return;
+				}
+
+				$this->clients[ $key ]['advisory'][ $room ] = array(
+					'client_id'      => $validated['client_id'],
+					'presence_token' => $validated['presence_token'] ?? '',
+					'presence'       => null,
+					// Rows already in the room are the poll's business; the
+					// scan announces only what lands from here on.
+					'cursor'         => $this->room_head_cursor( $room ),
+				);
+				$roster_changed                             = true;
+			} elseif ( $this->clients[ $key ]['advisory'][ $room ]['client_id'] !== $validated['client_id'] ) {
+				// One client id per socket and room, as for sync (a different
+				// id could impersonate another tab in the roster).
+				$this->log( 'Closing connection: client_id changed for a followed room' );
+				$this->clients[ $key ]['conn']->send_close( 1008, 'client_id mismatch' );
+				$this->disconnect( $key );
+				return;
+			}
+
+			if ( isset( $validated['presence_token'] ) && $validated['presence_token'] !== $this->clients[ $key ]['advisory'][ $room ]['presence_token'] ) {
+				$this->clients[ $key ]['advisory'][ $room ]['presence_token'] = $validated['presence_token'];
+				$roster_changed = true;
+			}
+
+			if ( array_key_exists( 'presence', $validated ) ) {
+				$this->clients[ $key ]['advisory'][ $room ]['presence'] = $validated['presence'];
+				$roster_changed = true;
+			}
+
+			if ( $roster_changed ) {
+				$this->send_advisory_roster( $room );
+			}
+
+			if ( isset( $validated['announce'] ) ) {
+				$this->send_advisory_announce( $room, $validated['announce'], $key );
+				// A websocket-transport tab in the announced room gets the
+				// rows now instead of on the next scan.
+				if ( '*' !== $validated['announce'] && $this->has_sync_subscribers( $validated['announce'] ) ) {
+					$this->broadcast_room( $validated['announce'] );
+				}
+			}
+		}
+
+		/**
+		 * Validates an advisory frame.
+		 *
+		 * @since 0.0.1
+		 *
+		 * @param array $message Decoded frame.
+		 * @return array|WP_Error Normalized fields, or WP_Error if invalid.
+		 */
+		private function validate_advisory_message( array $message ) {
+			$room = $message['room'] ?? null;
+			if ( ! is_string( $room ) || ! preg_match( '#^[^/]+/[^/:]+(?::\S+)?$#', $room ) ) {
+				return new WP_Error( 'websocket_invalid_advisory', 'Invalid room identifier.' );
+			}
+
+			$client_id = $message['client_id'] ?? null;
+			if ( ! is_int( $client_id ) || $client_id < 1 ) {
+				return new WP_Error( 'websocket_invalid_advisory', 'Invalid client_id.', array( 'rooms' => array( $room ) ) );
+			}
+
+			$validated = array(
+				'client_id' => $client_id,
+				'room'      => $room,
+			);
+
+			$presence_token = $message['presence_token'] ?? null;
+			if ( null !== $presence_token ) {
+				if ( ! is_string( $presence_token ) || '' === $presence_token || strlen( $presence_token ) > 64 ) {
+					return new WP_Error( 'websocket_invalid_advisory', 'Invalid presence token.', array( 'rooms' => array( $room ) ) );
+				}
+				$validated['presence_token'] = $presence_token;
+			}
+
+			if ( array_key_exists( 'presence', $message ) ) {
+				$presence = $message['presence'];
+				if ( null !== $presence && ! is_array( $presence ) ) {
+					return new WP_Error( 'websocket_invalid_advisory', 'Invalid presence state.', array( 'rooms' => array( $room ) ) );
+				}
+				if ( null !== $presence && strlen( (string) wp_json_encode( $presence ) ) > self::MAX_ADVISORY_PRESENCE_BYTES ) {
+					return new WP_Error( 'websocket_invalid_advisory', 'Presence state too large.', array( 'rooms' => array( $room ) ) );
+				}
+				$validated['presence'] = $presence;
+			}
+
+			$announce = $message['announce'] ?? null;
+			if ( null !== $announce ) {
+				if ( ! is_string( $announce ) || '' === $announce || strlen( $announce ) > self::MAX_ADVISORY_ROOM_LENGTH ) {
+					return new WP_Error( 'websocket_invalid_advisory', 'Invalid announce.', array( 'rooms' => array( $room ) ) );
+				}
+				$validated['announce'] = $announce;
+			}
+
+			return $validated;
+		}
+
+		/**
+		 * The room's head cursor (its newest row id), read through the
+		 * storage API: a read past every row returns nothing but refreshes
+		 * the storage's cursor cache, the API's only refresh path.
+		 *
+		 * @since 0.0.1
+		 *
+		 * @param string $room Room identifier.
+		 * @return int Head cursor.
+		 */
+		private function room_head_cursor( string $room ): int {
+			$storage = $this->sync->get_storage();
+			$storage->get_updates_after_cursor( $room, PHP_INT_MAX );
+			return (int) $storage->get_cursor( $room );
+		}
+
+		/**
+		 * Whether any open socket syncs the room (the websocket transport).
+		 *
+		 * @since 0.0.1
+		 *
+		 * @param string $room Room identifier.
+		 * @return bool Whether the room has sync subscribers.
+		 */
+		private function has_sync_subscribers( string $room ): bool {
+			foreach ( $this->clients as $client ) {
+				if ( isset( $client['rooms'][ $room ] ) && $client['conn']->is_open() ) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+		/**
+		 * Sends a room's roster — every follower's client id, presence
+		 * token, and latest presence — to each of its followers.
+		 *
+		 * @since 0.0.1
+		 *
+		 * @param string $room Room identifier.
+		 */
+		private function send_advisory_roster( string $room ): void {
+			$peers     = array();
+			$followers = array();
+			foreach ( $this->clients as $key => $client ) {
+				if ( ! isset( $client['advisory'][ $room ] ) || ! $client['conn']->is_open() ) {
+					continue;
+				}
+				$subscription = $client['advisory'][ $room ];
+				$peers[]      = array(
+					'client_id' => (int) $subscription['client_id'],
+					'presence'  => $subscription['presence'],
+					'token'     => (string) $subscription['presence_token'],
+				);
+				$followers[]  = $key;
+			}
+
+			$frame = wp_json_encode(
+				array(
+					'event' => 'roster',
+					'peers' => $peers,
+					'room'  => $room,
+					'type'  => 'advisory',
+				)
+			);
+			foreach ( $followers as $key ) {
+				$this->clients[ $key ]['conn']->send_text( $frame );
+			}
+		}
+
+		/**
+		 * Relays a "rows landed, go and poll" notice to a room's followers.
+		 *
+		 * @since 0.0.1
+		 *
+		 * @param string   $room        The room whose followers are told.
+		 * @param string   $announced   The room the notice names (or `*`).
+		 * @param int|null $exclude_key Client key to skip (the sender), or null.
+		 */
+		private function send_advisory_announce( string $room, string $announced, ?int $exclude_key = null ): void {
+			$frame = wp_json_encode(
+				array(
+					'event' => 'announce',
+					'room'  => $announced,
+					'type'  => 'advisory',
+				)
+			);
+			foreach ( $this->clients as $key => $client ) {
+				if ( $key === $exclude_key || ! isset( $client['advisory'][ $room ] ) || ! $client['conn']->is_open() ) {
+					continue;
+				}
+				$client['conn']->send_text( $frame );
+			}
+		}
+
+		/**
+		 * Rows landed in a room through this daemon or a web request: tell
+		 * the room's followers to poll and move their scan cursors to the
+		 * head, so the scan announces each row once.
+		 *
+		 * @since 0.0.1
+		 *
+		 * @param string   $room Room identifier.
+		 * @param int|null $head The room's head cursor when the caller read
+		 *                       it, else null to read it here.
+		 */
+		private function notify_advisory_followers( string $room, ?int $head = null ): void {
+			$followers = array();
+			foreach ( $this->clients as $key => $client ) {
+				if ( isset( $client['advisory'][ $room ] ) && $client['conn']->is_open() ) {
+					$followers[] = $key;
+				}
+			}
+			if ( empty( $followers ) ) {
+				return;
+			}
+			if ( null === $head ) {
+				$head = $this->room_head_cursor( $room );
+			}
+			foreach ( $followers as $key ) {
+				$this->clients[ $key ]['advisory'][ $room ]['cursor'] = max( (int) $this->clients[ $key ]['advisory'][ $room ]['cursor'], $head );
+			}
+			$this->send_advisory_announce( $room, $room );
 		}
 
 		/**
@@ -878,6 +1264,11 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 				return new WP_Error( 'websocket_invalid_room', 'Invalid engine protocol.', array( 'rooms' => array( $room ) ) );
 			}
 
+			$presence_token = $room_request['presence_token'] ?? null;
+			if ( null !== $presence_token && ( ! is_string( $presence_token ) || '' === $presence_token || strlen( $presence_token ) > 64 ) ) {
+				return new WP_Error( 'websocket_invalid_room', 'Invalid presence token.', array( 'rooms' => array( $room ) ) );
+			}
+
 			$updates = $room_request['updates'] ?? null;
 			if ( ! is_array( $updates ) ) {
 				return new WP_Error( 'websocket_invalid_room', 'Invalid updates list.', array( 'rooms' => array( $room ) ) );
@@ -920,6 +1311,9 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 			if ( null !== $engine_protocol ) {
 				$validated['engine_protocol'] = $engine_protocol;
 			}
+			if ( null !== $presence_token ) {
+				$validated['presence_token'] = $presence_token;
+			}
 
 			return $validated;
 		}
@@ -941,7 +1335,7 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 			// with on the REST transports); the raw entry list crashes the
 			// editor's collaborator UI.
 			$awareness_map = array();
-			foreach ( $this->sync->get_storage()->get_awareness_state( $room ) as $entry ) {
+			foreach ( $this->awareness()->entries( $room, WP_HTTP_Polling_Sync_Server::AWARENESS_TIMEOUT ) as $entry ) {
 				$awareness_map[ $entry['client_id'] ] = $entry['state'];
 			}
 
@@ -955,6 +1349,13 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 
 				$room_response              = $this->sync->get_engine_registry()->get_engine_for_room( $room )->get_updates_since( $room, $client_id, $cursor, array() );
 				$room_response['awareness'] = $awareness_map;
+
+				// The room generation rides pushed frames too, so a socket
+				// client notices a room restart between its own requests.
+				$generation = $this->sync->room_generation( $room, (int) ( $room_response['end_cursor'] ?? 0 ) );
+				if ( null !== $generation ) {
+					$room_response['generation'] = $generation;
+				}
 
 				$this->clients[ $other_key ]['rooms'][ $room ]['cursor'] = $room_response['end_cursor'];
 
@@ -1062,25 +1463,37 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 			if ( $now - $this->last_room_scan_at >= self::ROOM_SCAN_INTERVAL_S ) {
 				$this->last_room_scan_at = $now;
 
-				$room_floors = array();
+				// The lowest cursor per room, for the sockets syncing it and
+				// for the advisory followers separately.
+				$sync_floors     = array();
+				$advisory_floors = array();
 				foreach ( $this->clients as $client ) {
 					if ( ! $client['conn']->is_open() ) {
 						continue;
 					}
 					foreach ( $client['rooms'] as $room => $subscription ) {
 						$cursor = (int) $subscription['cursor'];
-						if ( ! isset( $room_floors[ $room ] ) || $cursor < $room_floors[ $room ] ) {
-							$room_floors[ $room ] = $cursor;
+						if ( ! isset( $sync_floors[ $room ] ) || $cursor < $sync_floors[ $room ] ) {
+							$sync_floors[ $room ] = $cursor;
+						}
+					}
+					foreach ( $client['advisory'] ?? array() as $room => $subscription ) {
+						$cursor = (int) $subscription['cursor'];
+						if ( ! isset( $advisory_floors[ $room ] ) || $cursor < $advisory_floors[ $room ] ) {
+							$advisory_floors[ $room ] = $cursor;
 						}
 					}
 				}
 
-				foreach ( $room_floors as $room => $floor ) {
-					// One storage read per subscribed room; broadcast only
-					// when something actually landed past the floor.
-					$rows = $this->sync->get_storage()->get_updates_after_cursor( (string) $room, $floor );
-					if ( count( $rows ) > 0 ) {
+				foreach ( array_unique( array_merge( array_keys( $sync_floors ), array_keys( $advisory_floors ) ) ) as $room ) {
+					// One aggregate storage read per room (the head, no
+					// rows); deliver only when something landed past a floor.
+					$head = $this->room_head_cursor( (string) $room );
+					if ( isset( $sync_floors[ $room ] ) && $head > $sync_floors[ $room ] ) {
 						$this->broadcast_room( (string) $room );
+					}
+					if ( isset( $advisory_floors[ $room ] ) && $head > $advisory_floors[ $room ] ) {
+						$this->notify_advisory_followers( (string) $room, $head );
 					}
 				}
 			}
@@ -1137,15 +1550,20 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 					continue;
 				}
 
-				$cookie_user = '' !== $client['cookie']
-					? wp_validate_auth_cookie( $client['cookie'], 'logged_in' )
-					: false;
+				// An access token-authenticated socket may carry no cookie at all
+				// (a browser on another origin never sends one): its
+				// session is not re-checked, only the capability below.
+				if ( '' !== $client['cookie'] || empty( $client['access_token'] ) ) {
+					$cookie_user = '' !== $client['cookie']
+						? wp_validate_auth_cookie( $client['cookie'], 'logged_in' )
+						: false;
 
-				if ( ! $cookie_user || (int) $cookie_user !== (int) $client['user_id'] ) {
-					$this->log( 'Closing connection: session no longer valid' );
-					$client['conn']->send_close( 1008, 'Session expired' );
-					$this->disconnect( $key );
-					continue;
+					if ( ! $cookie_user || (int) $cookie_user !== (int) $client['user_id'] ) {
+						$this->log( 'Closing connection: session no longer valid' );
+						$client['conn']->send_close( 1008, 'Session expired' );
+						$this->disconnect( $key );
+						continue;
+					}
 				}
 
 				wp_set_current_user( (int) $client['user_id'] );
@@ -1156,6 +1574,17 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 					$this->disconnect( $key );
 				}
 			}
+		}
+
+		/**
+		 * Who is in a room, over whichever store is serving this process.
+		 *
+		 * @since 0.0.2
+		 *
+		 * @return WP_Sync_Awareness The awareness reader and writer.
+		 */
+		private function awareness(): WP_Sync_Awareness {
+			return new WP_Sync_Awareness( $this->sync->get_storage() );
 		}
 
 		/**
@@ -1182,43 +1611,37 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 				}
 			}
 
+			$awareness = $this->awareness();
+			$timeout   = WP_HTTP_Polling_Sync_Server::AWARENESS_TIMEOUT;
+
 			foreach ( $connected_clients_by_room as $room => $connected_client_ids ) {
-				$entries      = $this->sync->get_storage()->get_awareness_state( $room );
-				$current_time = time();
-				$kept         = array();
-				$changed      = false;
-				$removed_any  = false;
+				$entries = $awareness->entries( $room, $timeout );
 
 				foreach ( $entries as $entry ) {
-					$is_connected = isset( $connected_client_ids[ $entry['client_id'] ] );
-					$is_expired   = $current_time - $entry['updated_at'] >= WP_HTTP_Polling_Sync_Server::AWARENESS_TIMEOUT;
-
-					if ( $is_connected ) {
-						// Refresh the timestamp so a quiet-but-connected
-						// client is not expired.
-						$entry['updated_at'] = $current_time;
-						$changed             = true;
-						$kept[]              = $entry;
+					if ( ! isset( $connected_client_ids[ $entry['client_id'] ] ) ) {
 						continue;
 					}
 
-					if ( $is_expired ) {
-						$changed     = true;
-						$removed_any = true;
-						continue;
-					}
-
-					$kept[] = $entry;
+					// Re-record the state so a quiet but connected socket is
+					// not expired; the store skips the write if it can.
+					$entries = $awareness->put( $room, $entry['client_id'], $entry['state'], $entry['wp_user_id'], $timeout );
 				}
 
-				if ( $changed ) {
-					$this->sync->get_storage()->set_awareness_state( $room, $kept );
-				}
+				// The store expires entries, so a departure shows up only as
+				// a client id the last sweep had and this one does not.
+				$present = array_column( $entries, 'client_id' );
+				sort( $present );
 
-				if ( $removed_any ) {
+				$gone                            = array_diff( $this->swept_client_ids[ $room ] ?? array(), $present );
+				$this->swept_client_ids[ $room ] = $present;
+
+				if ( ! empty( $gone ) ) {
 					$this->broadcast_room( $room );
 				}
 			}
+
+			// Rooms nobody is connected to no longer need a memo.
+			$this->swept_client_ids = array_intersect_key( $this->swept_client_ids, $connected_clients_by_room );
 		}
 
 		/**
@@ -1234,11 +1657,21 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 				return;
 			}
 
-			$client = $this->clients[ $key ];
-			$rooms  = array_keys( $client['rooms'] );
+			$client         = $this->clients[ $key ];
+			$rooms          = array_keys( $client['rooms'] );
+			$advisory_rooms = array_keys( $client['advisory'] ?? array() );
 
 			$client['conn']->close();
 			unset( $this->clients[ $key ] );
+
+			// An advisory follower leaves its rooms' rosters and nothing
+			// else: its presence lives in memory here, and its tab's
+			// server-side presence (awareness, the leave beacon) is the
+			// polling transport's business — a dropped socket is not a
+			// closed tab.
+			foreach ( $advisory_rooms as $room ) {
+				$this->send_advisory_roster( $room );
+			}
 
 			foreach ( $rooms as $room ) {
 				// Removing the client's awareness entry immediately mirrors
@@ -1247,6 +1680,13 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 					wp_set_current_user( (int) $client['user_id'] );
 				}
 				$this->sync->update_awareness( $room, $client['rooms'][ $room ]['client_id'], null );
+				// A socket close is the tab leaving: the presence lane may
+				// reset a room nobody else is in.
+				$presence = $this->sync->get_presence();
+				$token    = $client['rooms'][ $room ]['presence_token'] ?? '';
+				if ( null !== $presence && '' !== $token ) {
+					$presence->leave( $room, $token, (int) $client['rooms'][ $room ]['client_id'] );
+				}
 				$this->broadcast_room( $room );
 			}
 		}

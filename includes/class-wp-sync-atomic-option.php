@@ -155,6 +155,32 @@ if ( ! class_exists( 'WP_Sync_Atomic_Option' ) ) {
 		}
 
 		/**
+		 * Deletes a row. A substitute backend without a delete of its own
+		 * has the row reset to the empty string instead.
+		 *
+		 * @since 0.0.1
+		 *
+		 * @param string $name Option name.
+		 * @return void
+		 */
+		public static function delete( string $name ): void {
+			global $wpdb;
+
+			$backend = self::backend();
+			if ( null !== $backend ) {
+				if ( method_exists( $backend, 'delete' ) ) {
+					$backend->delete( $name );
+				} else {
+					$backend->reset( $name, '' );
+				}
+				return;
+			}
+
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Deliberately bypasses the options cache, like the rest of this class.
+			$wpdb->delete( $wpdb->options, array( 'option_name' => $name ) );
+		}
+
+		/**
 		 * Reads the current raw value, uncached.
 		 *
 		 * @global wpdb $wpdb WordPress database abstraction object.

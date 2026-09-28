@@ -14,7 +14,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Session_Capture' ) ) {
 	 * request body, response body. Frames export as the community RTC
 	 * performance harness's capture fixture format
 	 * (WordPress/distributed-rtc-performance-testing `capture-export`), so
-	 * its replay tooling and this repo's `tests/benchmarks/replay/` tools
+	 * its replay tooling and this repo's `tests/debugging/replay/` tools
 	 * both consume them:
 	 *
 	 *     {
@@ -37,7 +37,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Session_Capture' ) ) {
 	 *
 	 * Raw frames contain document content and user awareness (names,
 	 * colors). Sanitize before sharing a fixture —
-	 * `tests/benchmarks/replay/sanitize.mjs` mirrors the community
+	 * `tests/debugging/replay/sanitize.mjs` mirrors the community
 	 * harness's sanitizer.
 	 *
 	 * Driven by `wp collaboration capture` (see
@@ -462,7 +462,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Session_Capture' ) ) {
 				'session_id'   => $session_id,
 				'frame_count'  => count( $frames ),
 				// Additive keys — the community sanitizer drops them; ours
-				// (tests/benchmarks/replay/sanitize.mjs) preserves them.
+				// (tests/debugging/replay/sanitize.mjs) preserves them.
 				'engine'       => (string) ( $session_meta['engine'] ?? '' ),
 				'transport'    => (string) ( $session_meta['transport'] ?? '' ),
 				'base_title'   => (string) ( $session_meta['base_title'] ?? '' ),

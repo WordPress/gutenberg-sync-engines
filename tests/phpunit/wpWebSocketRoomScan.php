@@ -67,7 +67,7 @@ class Tests_Collaboration_WpWebSocketRoomScan extends WP_UnitTestCase {
 
 		update_option( 'wp_sync_engine', WP_De_RTC_Engine::SLUG );
 		try {
-			$storage = new WP_Sync_Post_Meta_Storage();
+			$storage = new WP_Sync_Table_Storage();
 			$sync    = new WP_HTTP_Polling_Sync_Server( $storage );
 			$server  = new WP_WebSocket_Sync_Server( $sync, '127.0.0.1', 8799 );
 
@@ -113,7 +113,7 @@ class Tests_Collaboration_WpWebSocketRoomScan extends WP_UnitTestCase {
 			// An OUT-OF-BAND write: a de-rtc commit accepted through the
 			// web process (the autosave endpoint drives this same engine
 			// seam) — no socket message touches the daemon.
-			$engine = new WP_De_RTC_Engine( new WP_Sync_Post_Meta_Storage() );
+			$engine = new WP_De_RTC_Engine( new WP_Sync_Table_Storage() );
 			$edited = str_replace( 'original', 'edited', self::GENESIS_CONTENT );
 			$result = $engine->handle_updates(
 				$room,

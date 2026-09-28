@@ -445,4 +445,59 @@ describe( 'de-rtc announce model', () => {
 			)
 		).toContain( 'Gamma' );
 	} );
+
+	describe( 'room restart', () => {
+		it( 're-proposes the local content against the new genesis instead of being overwritten by it', () => {
+			const { entity, session, sent } = makeSession();
+			session.receiveUpdate( snapshotRow( 'v3', contentOf( BLOCK_A ) ) );
+			entity.applyLocalChanges(
+				{ blocks: [ BLOCK_A, BLOCK_B ] } as any,
+				'editor',
+				{}
+			);
+			expect( sent ).toHaveLength( 1 ); // in flight against v3
+
+			expect( ( session as any ).onRoomRestart( [] ) ).toBe(
+				'rebootstrap'
+			);
+			// The new room's genesis is v1 (the saved post, lower than the
+			// version we held): it must not be ignored by the version gate,
+			// and it must not clobber the local blocks.
+			session.receiveUpdate( snapshotRow( 'v1', contentOf( BLOCK_A ) ) );
+			const proposals = sent.filter(
+				( update ) => DE_RTC_PROPOSAL_TYPE === update.type
+			);
+			expect( proposals ).toHaveLength( 2 );
+			const reproposal = JSON.parse( proposals[ 1 ].data );
+			expect( reproposal.baseVersion ).toBe( 'v1' );
+			expect( JSON.parse( reproposal.proposedContent ) ).toEqual( [
+				BLOCK_A,
+				BLOCK_B,
+			] );
+			const changes = entity.getEditorChanges( {
+				blocks: [],
+			} as any ) as any;
+			expect( changes.blocks ).toEqual( [ BLOCK_A, BLOCK_B ] );
+		} );
+
+		it( 'adopts the new genesis outright when the local content already matches it', () => {
+			const { entity, session, sent } = makeSession();
+			session.receiveUpdate( snapshotRow( 'v3', contentOf( BLOCK_A ) ) );
+			( session as any ).onRoomRestart( [] );
+			session.receiveUpdate( snapshotRow( 'v1', contentOf( BLOCK_A ) ) );
+			expect(
+				sent.filter(
+					( update ) => DE_RTC_PROPOSAL_TYPE === update.type
+				)
+			).toHaveLength( 0 );
+			// Later proposals base on the adopted lineage.
+			entity.applyLocalChanges(
+				{ blocks: [ BLOCK_A, BLOCK_C ] } as any,
+				'editor',
+				{}
+			);
+			const proposal = JSON.parse( sent[ sent.length - 1 ].data );
+			expect( proposal.baseVersion ).toBe( 'v1' );
+		} );
+	} );
 } );

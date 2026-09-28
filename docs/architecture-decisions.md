@@ -18,9 +18,11 @@ we would scope.
    that wants its own REST routes — or no live transport at all —
    should be able to say so. Feeds the deeper Save/Sync inversion (a
    post-v1 direction; see [plan/wontfix.md](plan/wontfix.md)).
-2. **Canonical state lives in plugin storage posts for every engine.**
-   Room meta was chosen for plugin containment. For the log-is-truth
-   engines it is a reasonable substrate. For de-rtc it inverted the
+2. **Canonical state lives in plugin room storage for every engine.**
+   Room meta was chosen for plugin containment (it now rides the
+   plugin's own `sync_room_meta` table rather than post meta on a hidden
+   storage post, which changes the cost, not the shape). For the
+   log-is-truth engines it is a reasonable substrate. For de-rtc it inverted the
    vision: the canonical document is supposed to BE the post, with
    sync-meta riding `post_content` and revisions as the backup
    mechanism. De-rtc's co-location (write-through) and self-healing

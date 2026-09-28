@@ -98,19 +98,24 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Transport' ) ) {
 		}
 
 		/**
-		 * The socket URL the client should connect to. Defaults to a
-		 * `ws://` URL on the configured host/port; filter
-		 * `wp_sync_websocket_url` to point at a `wss://` termination in
-		 * production.
+		 * The socket URL the client should connect to: the "WebSocket URL"
+		 * setting (Settings → Collaboration) when one is entered, else a
+		 * `ws://` URL on the configured host/port. The
+		 * `wp_sync_websocket_url` filter applies last, for hosts that set
+		 * it in code.
 		 *
 		 * @since 7.2.0
+		 * @since 0.0.1 Reads the WebSocket URL setting first.
 		 *
 		 * @return string WebSocket URL.
 		 */
 		public static function get_socket_url(): string {
-			$host = defined( 'WP_SYNC_WEBSOCKET_HOST' ) ? (string) WP_SYNC_WEBSOCKET_HOST : '127.0.0.1';
-			$port = defined( 'WP_SYNC_WEBSOCKET_PORT' ) ? (int) WP_SYNC_WEBSOCKET_PORT : 8787;
-			$url  = sprintf( 'ws://%s:%d', $host, $port );
+			$url = class_exists( 'Gutenberg_Sync_Engines_Settings' ) ? Gutenberg_Sync_Engines_Settings::websocket_url() : '';
+			if ( '' === $url ) {
+				$host = defined( 'WP_SYNC_WEBSOCKET_HOST' ) ? (string) WP_SYNC_WEBSOCKET_HOST : '127.0.0.1';
+				$port = defined( 'WP_SYNC_WEBSOCKET_PORT' ) ? (int) WP_SYNC_WEBSOCKET_PORT : 8787;
+				$url  = sprintf( 'ws://%s:%d', $host, $port );
+			}
 
 			/**
 			 * Filters the WebSocket URL announced to clients. Production

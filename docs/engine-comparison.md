@@ -16,10 +16,11 @@ concrete situations through all three engines;
 choice.
 
 This guide carries no measured numbers, because they go stale and
-mislead. To produce them on your own hardware, run `npm run bench`
+mislead. To produce them on your own hardware, run
+`npm run bench -- --suite=engines`
 against a running tests env. It prints the whole decision matrix — a
 comparison table per scenario, plus hosting cost cards — and fails loudly
-if any engine loses work. `npm run bench -- certify=10` re-checks the
+if any engine loses work. `npm run bench -- --certify=10` re-checks the
 never-lose-work guarantee across ten seeds per engine.
 
 ## The engines
@@ -81,17 +82,26 @@ shows up.
 | P4 machine writers | **Met for read-modify-write.** A script that declares the version it read gets a real merge; one that declares nothing still bypasses the room ([note](#p4-how-scripts-and-plugins-join-in)) | **Accepted limitation.** Ingest speaks binary CRDT updates; a diff-to-CRDT lane would be semantically worse, not just costly | **Met.** Cooperating scripts merge through the room, and unaware ones are healed afterwards ([note](#p4-how-scripts-and-plugins-join-in)) |
 | P5 cheap hosting | **Meets.** Cheapest per-ingest CPU; Core-style options-row lock, topology-safe | **Partly.** No lock (good); heaviest per-ingest CPU, and it grows with document size | **Partly.** Cheap CPU; lock-free optimistic claims, topology-safe; upload bytes still grow with document size |
 | P6 measured economics | **Meets.** Real wire format in its benchmark profile | **Meets.** Real wire format; convergence oracle | **Meets.** Real wire format; disposition/lineage oracle |
-| P7 intent & identity | **Meets.** Typed intents end-to-end; syncIds persist in saved `post_content` and round-trip genesis | **Fails.** Snapshot-diff binding inherited from the relay; no semantic operations, no stable identity in the merge | **Designed for it, and wired up.** Block identity and rich-text operations live in the merge core, and each commit carries tamper evidence ([note](#p7-what-de-rtc-sends-with-each-commit)) |
+| P7 intent & identity | **Meets.** Typed intents end-to-end; syncIds persist in saved `post_content` and round-trip genesis | **Fails.** Snapshot-diff binding inherited from the relay; no semantic operations, no stable identity in the merge | **Meets.** Every block carries a durable syncId (the same scheme as intent-log, persisted in `post_content`), the server merges block-for-block at every depth by that identity, and each commit carries tamper evidence ([note](#p7-what-de-rtc-sends-with-each-commit)) |
 
 ### Notes on the longer verdicts
 
 #### P3: how de-rtc holds back only what clashes
 
 When two people's edits clash, de-rtc holds back just the blocks that
-actually clash. Everything else in the edit lands normally. It holds the
-whole edit back only when both sides changed the document's *structure* —
-added or removed blocks — because at that point the blocks can no longer
-be matched up one to one.
+actually clash. Everything else in the edit lands normally. Blocks are
+matched up by their durable identity (the syncId every block carries),
+at any depth: two people editing different paragraphs inside the same
+Group both land, a block added inside a container lands next to the
+block it followed, a block moved somewhere else keeps the edit a peer
+made to it meanwhile, and a deletion wins over a concurrent edit with
+that edit held for review rather than lost. Only when the two sides
+disagree about the *order* of the same blocks inside one container is
+that container held back; a disagreement about the order of top-level
+blocks falls back to the positional rule, which holds the whole edit
+back. Content whose blocks carry no identity (classic content between
+blocks, a document that never went through the editor) merges
+positionally, exactly as before.
 
 Each client also records which version every block it kept was really
 written against, and sends that with its next commit (the
@@ -157,9 +167,9 @@ without it. It is an integrity check, which makes it really a P1 concern.
 
 | Area | intent-log | yjs-server | de-rtc |
 | --- | --- | --- | --- |
-| Conflict handling | Transform on the server; genuine conflicts park in the editor's review panel (escalation notice, marker chip, durable resolutions — e2e-verified) | Silent CRDT auto-merge, but ON THE SERVER — outcomes observable, still no review lane (conflict DETECTION is the undesigned prerequisite) | Three-way merge on the server; genuine conflicts PARK as durable `proposal-parked` rows and present in the same review panel (restore re-proposes under the reviewer; dismiss resolves; retention survives compaction — e2e-verified) |
+| Conflict handling | Transform on the server; genuine conflicts park in the editor's review panel (escalation notice, marker chip, durable resolutions — e2e-verified) | Silent CRDT auto-merge, but ON THE SERVER — outcomes observable, still no review lane (conflict DETECTION is the undesigned prerequisite) | Three-way merge on the server; genuine conflicts PARK as durable `parked` rows and present in the same review panel (restore re-proposes under the reviewer; dismiss resolves; retention survives compaction — e2e-verified) |
 | Collaborative undo | Inverse intents over the accepted log (`src/engines/intent-log-undo.ts`): per-user undo/redo, transformed over peers' rows, conflicts park for review. Armed immediately: a still-pending unit CANCELS (outbox + a wire-chasing `cancel` row; a lost race resurrects the unit as a settled candidate), a settled unit inverts | Per-peer undo manager (`src/engines/yjs/undo.ts`, inherited from the retired relay) | Revert-edit undo (the vision's model): undo derives a revert from the client's own accepted canonical rows (per-block, untouched-since guard) and proposes it as an ordinary new change; redo re-applies the reverted delta |
-| Refresh/offline recovery | Server materializes the document; queued intents are memory-only. Solo edits flush every poll (`syncWhileSolo`), and discarded unsent work surfaces an editor notice | Server holds the canonical doc; a rejoining client re-bootstraps from the retained snapshot + tail and uploads its own state idempotently. Solo edits flush every poll (`syncWhileSolo`) — REQUIRED here, not an optimization: a page reload holds no local state to upload, so a room that never saw the solo session's updates would bootstrap the editor back to its stale snapshot, wiping the freshly loaded record (e2e-covered: the solo save-and-reload spec) | Server holds canonical content + version snapshots; a rejoining client re-bootstraps from the retained snapshot + content rows. Un-acked local edits re-propose (the server merges); the save-centric model keeps the room tracking saves, so a solo save-and-reload survives without `syncWhileSolo` (verified) |
+| Refresh/offline recovery | Server materializes the document; queued intents are memory-only. Solo edits go out one request after the first queued update (the transport never holds a lone editor's queue), and discarded unsent work surfaces an editor notice | Server holds the canonical doc; a rejoining client re-bootstraps from the retained snapshot + tail and uploads its own state idempotently. Solo edits go out one request after the first queued update — REQUIRED here, not an optimization: a page reload holds no local state to upload, so a room that never saw the solo session's updates would bootstrap the editor back to its stale snapshot, wiping the freshly loaded record (e2e-covered: the solo save-and-reload spec) | Server holds canonical content + version snapshots; a rejoining client re-bootstraps from the retained snapshot and fetches one canonical snapshot when the announced version is ahead of it. Un-acked local edits re-propose (the server merges); the save-centric model keeps the room tracking saves, so a solo save-and-reload survives regardless (verified) |
 | Error recovery | Exact re-send; ingest is idempotent by intentId | Full-state recovery update, IDEMPOTENT server-side (the server diffs out what it already has — redelivery settles as a benign `already-merged` void); the server explicitly requests it with a `resync-required` void when an update's dependencies are missing from the room | Recovery re-proposes the doc's current state; if the lost send landed, the re-proposal merges as a no-op |
 | History compaction | Server checkpoints every 500 intent rows and trims (live-authoring-sized: coarse captures cost ~3 rows per keystroke, and a trim crossing mid-burst voided the burst's tail — V1 A15) | Server checkpoints every 100 rows and trims — abandoned rooms stay bounded | Server checkpoints every 100 rows and trims (same retention invariant) |
 | Genesis | Server, from post content | Server, from post content — deterministic build, so racing initializers merge idempotently | Server, from post content — deterministic, and ADOPTS an upstream DE-RTC sync-meta block if one is embedded (version lineage continues) |
@@ -198,7 +208,8 @@ each pay for it differently:
 ### Why this guide has no numbers
 
 Numbers vary by machine, PHP build, and code revision, and stale numbers
-mislead harder than no numbers at all. Run `npm run bench` for figures
+mislead harder than no numbers at all. Run `npm run bench -- --suite=engines`
+for figures
 from your own hardware. What follows are the stable shapes those figures
 make concrete.
 
@@ -320,7 +331,7 @@ their own (open work lives in GitHub Issues), grouped by engine.
 
 - **Under heavy write concurrency the server can ask a client to
   resync** ([scenario G](scenarios.md)). Measured with
-  `npm run bench -- concurrency=8`: most runs settle fully applied with
+  `npm run bench -- --concurrency=8`: most runs settle fully applied with
   zero voids, the occasional run a handful of benign `resync-required`
   voids that heal by full-state upload. intent-log showed zero voids
   under the same load, paying with measured lock queueing instead.
@@ -357,6 +368,21 @@ their own (open work lives in GitHub Issues), grouped by engine.
 
 ### de-rtc
 
+- **Identity, not position, is how blocks line up.** Every block of a
+  de-rtc room carries `metadata.syncId`: the saved post's blocks get a
+  deterministic id from the post id and block path (the same function
+  the intent-log engine and the editor-side stamper use, so every
+  party derives it alone), blocks born in the editor get a random id
+  there, and blocks from scripts adopt the base's id at their path or
+  get a fresh one as they become canonical. The server merges by that
+  identity at every depth and parks only the blocks that truly clash;
+  the client incorporates, contests, restores and anchors review cards
+  by it too. The kses lane for authors without `unfiltered_html`
+  reverts or drops only the risky block itself, wherever it sits, and
+  the safe rest of the same container lands. Authorship credits the
+  block that actually changed, at any depth, and revert-undo reverts a
+  block's own form in place, removes a block the row inserted, and
+  brings back one it deleted, next to the sibling it followed.
 - **Document-size costs live on the commit path, not in storage.**
   Stored rows are fixed-size advisories now, and a later joiner
   downloads one synthesized snapshot. The old tail that grew with the

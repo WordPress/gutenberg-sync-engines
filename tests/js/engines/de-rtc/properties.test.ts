@@ -7,12 +7,13 @@ import * as Y from 'yjs';
 /**
  * Internal dependencies
  */
+import { hashDeRtcContent } from '../../../../src/engines/de-rtc/descriptor';
 import { createDeRtcEngine } from '../../../../src/engines/de-rtc/engine';
 import {
-	DE_RTC_CONTENT_TYPE,
+	DE_RTC_ANNOUNCE_TYPE,
 	DE_RTC_PROPOSAL_TYPE,
 	DE_RTC_SNAPSHOT_TYPE,
-	DE_RTC_PROPOSAL_PARKED_TYPE,
+	DE_RTC_PARKED_TYPE,
 } from '../../../../src/engines/de-rtc/session';
 import {
 	propertyValuesEqual,
@@ -123,22 +124,19 @@ describe( 'de-rtc property sync (client)', () => {
 		expect( payload.proposedProperties.blocks ).toBeUndefined();
 	} );
 
-	it( 'canonical rows apply properties into the doc and reach the editor', () => {
+	it( 'canonical snapshots apply properties into the doc and reach the editor', () => {
 		const { entity, session } = makeEntity();
 		session.receiveUpdate(
 			snapshotRow( 'v1', contentOf( BLOCK_A ), { title: 'Seeded' } )
 		);
 
-		session.receiveUpdate( {
-			type: DE_RTC_CONTENT_TYPE,
-			data: JSON.stringify( {
-				version: 'v2',
-				content: contentOf( BLOCK_A ),
-				properties: { title: 'Peer title', 'meta.note': 'peer' },
-				authorClientId: 999,
-				proposalId: 'p-peer',
-			} ),
-		} );
+		// A peer's accepted version, delivered as the fetch answer.
+		session.receiveUpdate(
+			snapshotRow( 'v2', contentOf( BLOCK_A ), {
+				title: 'Peer title',
+				'meta.note': 'peer',
+			} )
+		);
 
 		const changes = entity.getEditorChanges( {} as any ) as any;
 		expect( changes.title ).toBe( 'Peer title' );
@@ -158,12 +156,13 @@ describe( 'de-rtc property sync (client)', () => {
 		entity.applyLocalChanges( { title: 'Mine plus' } as any, 'editor', {} );
 
 		// The server accepted our proposal (content unchanged) and echoed
-		// our proposed title back in the row.
+		// our proposed title back in the announce.
 		session.receiveUpdate( {
-			type: DE_RTC_CONTENT_TYPE,
+			type: DE_RTC_ANNOUNCE_TYPE,
 			data: JSON.stringify( {
 				version: 'v2',
-				content: payload.proposedContent,
+				baseVersion: 'v1',
+				contentHash: hashDeRtcContent( payload.proposedContent ),
 				properties: { title: 'Mine' },
 				authorClientId: session.clientId,
 				proposalId: payload.proposalId,
@@ -176,7 +175,7 @@ describe( 'de-rtc property sync (client)', () => {
 		expect( changes.title ).toBe( 'Mine plus' );
 	} );
 
-	it( 'a peer property change merged into our own accepted row is adopted when locally untouched', () => {
+	it( 'a peer property change merged into our own accepted version is adopted when locally untouched', () => {
 		const { entity, session, sent } = makeEntity();
 		session.receiveUpdate(
 			snapshotRow( 'v1', contentOf( BLOCK_A ), {
@@ -188,12 +187,14 @@ describe( 'de-rtc property sync (client)', () => {
 		entity.applyLocalChanges( { title: 'Mine' } as any, 'editor', {} );
 		const payload = JSON.parse( sent[ 0 ].data );
 
-		// The server merged a PEER's meta change into our accepted row.
+		// The server merged a PEER's meta change into our accepted
+		// version; the merged properties ride the announce.
 		session.receiveUpdate( {
-			type: DE_RTC_CONTENT_TYPE,
+			type: DE_RTC_ANNOUNCE_TYPE,
 			data: JSON.stringify( {
 				version: 'v2',
-				content: payload.proposedContent,
+				baseVersion: 'v1',
+				contentHash: hashDeRtcContent( payload.proposedContent ),
 				properties: { title: 'Mine', 'meta.note': 'peer-updated' },
 				authorClientId: session.clientId,
 				proposalId: payload.proposalId,
@@ -212,7 +213,7 @@ describe( 'de-rtc property sync (client)', () => {
 		);
 
 		session.receiveUpdate( {
-			type: DE_RTC_PROPOSAL_PARKED_TYPE,
+			type: DE_RTC_PARKED_TYPE,
 			data: JSON.stringify( {
 				proposalId: 'p-9-1:title',
 				reason: 'property-conflict',

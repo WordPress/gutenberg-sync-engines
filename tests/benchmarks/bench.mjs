@@ -1,10 +1,38 @@
 /**
- * One-command benchmark runner: the whole engine-decision matrix, or an
+ * One-command benchmark runner — the single front door to every
+ * benchmark in this repo, selected with `--suite=`:
+ *
+ *   npm run bench                        # DEFAULT: the host cost report —
+ *                                        # what the plugin adds to a server,
+ *                                        # measured against the same site
+ *                                        # with the plugin deactivated
+ *                                        # (tests/benchmarks/host/)
+ *   npm run bench -- --engine=de-rtc --windows=3     # host report, targeted
+ *   npm run bench -- --suite=engines     # engine-decision matrix (below)
+ *   npm run bench -- --suite=transport --transport=http-polling --trials=30
+ *
+ * Those are the BENCHMARKS: the host report (default), the engine
+ * matrix, and the transport experience. The soak and replay lanes are
+ * debugging/analysis tools, run directly (no --suite=) from
+ * tests/debugging/:
+ *
+ *   node tests/debugging/soak-transport.mjs …
+ *   node tests/debugging/replay/replay.mjs …
+ *
+ * Every suite other than `engines` forwards the remaining arguments to
+ * its own script (see each script's header for its argument list).
+ * `--scenarios=`, `--certify=`, and `--concurrency=` belong only to the
+ * engines suite, so passing one selects it without `--suite=engines`
+ * (CI's certify job invokes it that way). The host report takes
+ * `--engine=` — singular, one per run — and refuses arguments it does
+ * not know.
+ *
+ * The engines suite: the whole engine-decision matrix, or an
  * invariant-certification sweep, from a single invocation.
  *
- *   npm run bench                        # every engine x the decision matrix
- *   npm run bench -- engines=de-rtc scenarios=editorial-session
- *   npm run bench -- certify=10          # invariant sweep across 10 seeds
+ *   npm run bench -- --suite=engines     # every engine x the decision matrix
+ *   npm run bench -- --engines=de-rtc --scenarios=editorial-session
+ *   npm run bench -- --certify=10        # invariant sweep across 10 seeds
  *
  * The matrix runs each engine over six complementary scenarios
  * (mixed-newsroom for steady concurrent editing, laggy-newsroom for
@@ -32,13 +60,161 @@
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { parseArgs } from 'node:util';
 
-const args = Object.fromEntries(
-	process.argv
-		.slice( 2 )
-		.filter( ( a ) => a.includes( '=' ) )
-		.map( ( a ) => a.split( /=(.*)/s ).slice( 0, 2 ) )
-);
+// Arguments are --key=value flags. Each suite has its own argument list,
+// so parsing is non-strict: whatever this script does not consume is
+// forwarded. The engines suite runs its harness through `wp eval-file`,
+// and wp-cli claims --flags as its own, so that lane re-emits what it
+// consumed as bare key=value tokens (see runBenchmark); the host and transport
+// scripts take bare key=value tokens too, so forwarding strips the
+// dashes.
+const { values: args, positionals } = parseArgs( {
+	strict: false,
+	allowPositionals: true,
+} );
+
+const HELP = `npm run bench -- [--suite=<name>] [--key=value …]
+
+Suites (--suite=; default: host):
+  host       The host cost report: what the plugin adds to a server —
+             baseline/sync/delta/delta-% tables plus summary stats, ONE
+             engine per run. The baseline is the same people producing the
+             same document by editing IN SERIES (save-and-hand-off, plugin
+             deactivated) — so the delta isolates what real-time
+             collaboration itself costs. Arguments:
+               --engine=     the one engine to measure (intent-log |
+                             yjs-server | de-rtc | current; default: the
+                             site's current engine — comparing engines
+                             is what --suite=engines is for)
+               --transport=  http-polling | sse | websocket
+                             (default: the site's current transport)
+               --cache=      none | redis | current: the persistent object
+                             cache for the run (redis = the Redis Object
+                             Cache drop-in on the env's Redis; wp-env
+                             sites only; restored after)
+               --wake=       auto | redis | cache | table: what an SSE
+                             stream sleeps on (cache needs --cache=redis,
+                             table needs --cache=none)
+               --windows=    collaborator windows per engine phase
+                             (default 2)
+               --edit-seconds=      editing seconds per person (default
+                                    120, min 30)
+               --idle-seconds=      idle seconds per phase (default 120;
+                                    0 skips)
+               --polling-interval=  override the HTTP short-polling
+                                    interval for the run, in seconds 0-25
+                                    (0 = the plugin's defaults; default:
+                                    leave the site's setting alone)
+               --metrics=    comma list of table rows to print:
+                             requests,traffic,cpu,workers,memory,cache,queries,diskio (default all)
+               --json=       write full results as JSON to this path
+               --headed      visible browser (debugging)
+  engines    The engine-decision matrix and invariant sweeps (in-process,
+             wp-env cli). Arguments: --engines=, --scenarios=, --seed=,
+             --out=, --certify=N (invariant sweep across N seeds),
+             --concurrency=N (multi-process latency probe; --requests=,
+             --paragraphs=).
+             --scenarios=/--certify=/--concurrency= imply --suite=engines.
+  transport  Two-browser edit-to-visible latency + wire traffic for one
+             transport (tests/benchmarks/transport/README.md).
+
+Debugging and analysis tools (not benchmarks, so not suites here — run
+them directly from tests/debugging/; each has comprehensive docs, see
+tests/debugging/README.md):
+  node tests/debugging/soak-transport.mjs   N-window hour-scale soak
+  node tests/debugging/replay/replay.mjs    replay a captured session
+                                            as HTTP load
+
+Arguments are --key=value flags. Arguments other than --suite= are
+forwarded to the suite's script; each script's header documents its full
+list. Environment: WP_BASE_URL (default http://localhost:8889),
+WP_USERNAME/WP_PASSWORD.
+
+Examples:
+  npm run bench
+  npm run bench -- --engine=de-rtc --windows=3 --polling-interval=2
+  npm run bench -- --suite=engines --scenarios=editorial-session
+  npm run bench -- --certify=10
+`;
+
+if ( args.help || args.h || positionals.includes( 'help' ) ) {
+	process.stdout.write( HELP );
+	process.exit( 0 );
+}
+if ( positionals.length ) {
+	// A bare token is almost always the old key=value form (or a
+	// space-separated `--key value`); refuse it rather than silently run
+	// the default suite with the argument ignored.
+	console.error(
+		`arguments are --key=value flags (got "${ positionals[ 0 ] }"${
+			positionals[ 0 ].includes( '=' )
+				? `; use --${ positionals[ 0 ] }`
+				: ''
+		}) — npm run bench -- --help lists them`
+	);
+	process.exit( 1 );
+}
+
+// ---------------------------------------------------------------------
+// Suite dispatch: this file is the single benchmark entry point. The
+// default suite is the host cost report; the engine matrix and the
+// transport benchmark are selected with --suite= — or implicitly by the
+// engines-suite-only arguments (--scenarios=/--certify=/--concurrency=).
+// ---------------------------------------------------------------------
+const SUITE_SCRIPTS = {
+	host: 'tests/benchmarks/host/host-benchmark.mjs',
+	transport: 'tests/benchmarks/transport/benchmark-transport.mjs',
+};
+// The soak and replay lanes are debugging/analysis tools, not
+// benchmarks — deliberately NOT offered here. Point at their direct
+// invocations instead of silently running them.
+const TOOL_COMMANDS = {
+	soak: 'node tests/debugging/soak-transport.mjs (see tests/debugging/README.md)',
+	replay: 'node tests/debugging/replay/replay.mjs (see tests/debugging/replay/README.md)',
+};
+// --scenarios=/--certify=/--concurrency= exist only in the engines suite,
+// so any of them selects it; everything else defaults to the host report,
+// which refuses arguments it does not know (--engines= included).
+const impliesEngines = args.certify || args.concurrency || args.scenarios;
+const SUITE = String( args.suite ?? ( impliesEngines ? 'engines' : 'host' ) );
+// Say which suite is running and why, so a surprising suite selection is
+// visible in the first line rather than minutes into the wrong run.
+const suiteReason = args.suite
+	? `--suite=${ SUITE }`
+	: `${
+			impliesEngines
+				? 'implied by --scenarios=/--certify=/--concurrency='
+				: 'default'
+	  } — npm run bench -- --help for arguments`;
+console.log( `suite: ${ SUITE } (${ suiteReason })` );
+if ( 'engines' !== SUITE ) {
+	const script = SUITE_SCRIPTS[ SUITE ];
+	if ( ! script ) {
+		if ( TOOL_COMMANDS[ SUITE ] ) {
+			console.error(
+				`"${ SUITE }" is a debugging/analysis tool, not a benchmark — run it directly:\n  ${ TOOL_COMMANDS[ SUITE ] }`
+			);
+		} else {
+			console.error(
+				`unknown suite "${ SUITE }" — known: host (default), engines, transport`
+			);
+		}
+		process.exit( 1 );
+	}
+	// Forward everything but --suite= as the bare key=value tokens the
+	// suite scripts take (a value-less flag such as --headed becomes
+	// key=1, their spelling of a switch).
+	const forwarded = Object.entries( args )
+		.filter( ( [ key ] ) => 'suite' !== key )
+		.map(
+			( [ key, value ] ) => `${ key }=${ true === value ? '1' : value }`
+		);
+	const child = spawnSync( 'node', [ script, ...forwarded ], {
+		stdio: 'inherit',
+	} );
+	process.exit( child.status ?? 1 );
+}
 
 const ENV_CONFIG = process.env.BENCH_WPENV_CONFIG ?? '.wp-env.tests.json';
 const ENV_CWD = `wp-content/plugins/${ path.basename( process.cwd() ) }`;
@@ -197,6 +373,16 @@ function wp( ...wpArgs ) {
 	return result.stdout;
 }
 
+// Best-effort variant: null on failure instead of throwing (for cleanup
+// commands whose target may legitimately be absent or already inactive).
+function wpTry( ...wpArgs ) {
+	try {
+		return wp( ...wpArgs );
+	} catch {
+		return null;
+	}
+}
+
 // Returns the parsed report, or null when the run CRASHED — a fatal
 // engine error is itself a certification result (recorded as a
 // violation), and one crash must not abort the rest of the sweep.
@@ -245,7 +431,32 @@ function checkInvariants( report, label, violations ) {
 
 fs.mkdirSync( OUT_DIR, { recursive: true } );
 console.log( `env: ${ ENV_CONFIG } (${ ENV_CWD }); activating plugins…` );
-wp( 'wp', 'plugin', 'activate', 'gutenberg', 'gutenberg-sync-engines' );
+/*
+ * The framework is BUNDLED: the plugin loads the vendored Gutenberg subtree
+ * itself, so only the plugin needs activating — and only its DIRECTORY-NAME
+ * copy. wp-env mounts the plugin twice (the directory name via `plugins`,
+ * plus the fixed `gutenberg-sync-engines` mapping); in a worktree those are
+ * two distinct plugin entries and activating both is a fatal redeclaration,
+ * so activate the directory-name copy (the arrangement `wp-env start`
+ * re-creates) and make sure the mapped copy is off. A stale `gutenberg`
+ * stub activation (the precedence e2e fixture, left behind by an aborted
+ * run) blocks the bundled framework, so switch it off too.
+ */
+const PLUGIN_DIR = path.basename( process.cwd() );
+wp( 'wp', 'plugin', 'activate', PLUGIN_DIR );
+if ( 'gutenberg-sync-engines' !== PLUGIN_DIR ) {
+	wpTry( 'wp', 'plugin', 'deactivate', 'gutenberg-sync-engines' );
+}
+const gutenbergVersion = wpTry(
+	'wp',
+	'plugin',
+	'get',
+	'gutenberg',
+	'--field=version'
+);
+if ( gutenbergVersion && gutenbergVersion.includes( 'stub' ) ) {
+	wpTry( 'wp', 'plugin', 'deactivate', 'gutenberg' );
+}
 
 const violations = [];
 const started = Date.now();
@@ -255,7 +466,7 @@ function percentile( sorted, fraction ) {
 }
 
 // Multi-process concurrency measurement (opt-in, concurrency=N): N worker
-// processes hammer the SAME room through the real postmeta storage
+// processes hammer the SAME room through the real table storage
 // simultaneously, so latency includes genuine lock waits, 503 timeouts,
 // and MySQL under concurrent writers — everything the single-process
 // harness structurally cannot see. A 1-worker pass on a fresh room is the
@@ -349,7 +560,7 @@ async function runConcurrencyMode() {
 	const requests = Number( args.requests ?? 40 );
 	const paragraphs = Number( args.paragraphs ?? 4 );
 	console.log(
-		`\nmulti-process concurrency: ${ workers } workers x ${ requests } requests, same room, REAL postmeta storage` +
+		`\nmulti-process concurrency: ${ workers } workers x ${ requests } requests, same room, REAL table storage` +
 			`\n(latency includes genuine lock waits and DB I/O — not comparable with the in-memory single-process numbers)`
 	);
 
@@ -428,23 +639,54 @@ if ( args.concurrency ) {
 	// Invariant sweep: many seeds, every engine, the adversarial
 	// scenarios — cheap per run, additive as evidence.
 	const seeds = Math.max( 1, Number( args.certify ) );
-	const certifyScenarios = [
-		'mixed-newsroom',
-		'structural-churn',
-		'remove-contention',
-		'field-sync',
-	];
-	const config = {
+	const shortConfig = {
 		rounds: 40,
 		clients: 3,
 		paragraphs: 4,
 		reps: 1,
 		warmup: 0,
 	};
+	/*
+	 * The short config keeps the adversarial scenarios cheap per seed. The
+	 * two SAVE-lane scenarios need their matrix depth to mean anything:
+	 * editorial-session's first mid-session autosave fires at round 60 and
+	 * the pre-#70 room wipe needed enough versions before it for genesis to
+	 * age out of the snapshot window (green at 120 rounds even before the
+	 * fix), and save-sync-session's pre-#70 rollback needed a compaction
+	 * checkpoint (~100 stored rows, so ~120 rounds). Both configs below
+	 * reproduce those failures on the pre-fix engine at seed 42 — do not
+	 * shrink them without re-verifying that.
+	 */
+	const certifyScenarios = [
+		{ scenario: 'mixed-newsroom', config: shortConfig },
+		{ scenario: 'structural-churn', config: shortConfig },
+		{ scenario: 'remove-contention', config: shortConfig },
+		{ scenario: 'field-sync', config: shortConfig },
+		{
+			scenario: 'save-sync-session',
+			config: {
+				rounds: 120,
+				clients: 3,
+				paragraphs: 6,
+				reps: 1,
+				warmup: 0,
+			},
+		},
+		{
+			scenario: 'editorial-session',
+			config: {
+				rounds: 600,
+				clients: 3,
+				paragraphs: 6,
+				reps: 1,
+				warmup: 0,
+			},
+		},
+	];
 	let edits = 0;
 	const dispositions = { applied: 0, escalated: 0, voided: 0 };
 
-	for ( const scenario of certifyScenarios ) {
+	for ( const { scenario, config } of certifyScenarios ) {
 		for ( const engine of ENGINES ) {
 			for ( let i = 0; i < seeds; i++ ) {
 				const seed = SEED + i;

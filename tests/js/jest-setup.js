@@ -28,9 +28,3 @@ if ( typeof global.crypto === 'undefined' ) {
 		configurable: true,
 	} );
 }
-
-// jsdom lacks structuredClone; the intent-log document model clones plain,
-// JSON-serializable trees, so a JSON round-trip is a faithful stand-in.
-if ( typeof global.structuredClone === 'undefined' ) {
-	global.structuredClone = ( value ) => JSON.parse( JSON.stringify( value ) );
-}

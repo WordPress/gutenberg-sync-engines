@@ -19,8 +19,8 @@ import {
 	mulberry32,
 	runSimulation,
 	syncClient,
-} from '../../../../src/engines/intent-log/simulator.js';
-import { genesisSyncId } from '../../../../src/engines/intent-log/sync-id.js';
+} from './simulator.js';
+import { genesisSyncId } from './genesis-sync-id.js';
 
 const REVISION = { postId: 10, revisionId: 100 };
 

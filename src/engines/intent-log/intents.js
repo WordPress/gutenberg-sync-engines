@@ -7,6 +7,25 @@
  * carry removed content so they are invertible; atomic groups via txnId.
  */
 
+/** @typedef {import('./engine-types').IntentEnvelope} IntentEnvelope */
+
+/**
+ * A payload-field validator. Payloads arrive as untrusted, unvalidated
+ * input, so predicates inspect `unknown` values.
+ *
+ * @typedef {(value: unknown) => boolean} PayloadPredicate
+ */
+
+/**
+ * Envelope fields supplied by the author; intentId and txnId are optional.
+ *
+ * @typedef {Object} IntentEnvelopeFields
+ * @property {string} actorId    Authoring actor.
+ * @property {number} baseSeq    Log position observed when authoring.
+ * @property {string} [txnId]    Atomic group id.
+ * @property {string} [intentId] Idempotency key; minted if omitted.
+ */
+
 export const IntentTypes = {
 	// Map family (the sync-map layer riding the same log).
 	SET_ATTR: 'set_attr',
@@ -30,13 +49,27 @@ export const IntentTypes = {
 	REPLACE_ATTR_CONTENT: 'replace_attr_content',
 };
 
+/** @type {PayloadPredicate} */
 const isString = ( v ) => typeof v === 'string' && v.length > 0;
+/** @type {PayloadPredicate} */
 const isStringOrNull = ( v ) => v === null || isString( v );
-const isNonNegativeInt = ( v ) => Number.isInteger( v ) && v >= 0;
+/** @type {PayloadPredicate} */
+const isNonNegativeInt = ( v ) =>
+	Number.isInteger( v ) && /** @type {number} */ ( v ) >= 0;
+/** @type {PayloadPredicate} */
 const isBoolean = ( v ) => typeof v === 'boolean';
+/** @type {PayloadPredicate} */
 const isText = ( v ) => typeof v === 'string';
+/** @type {PayloadPredicate} */
 const isAny = () => true;
 
+/**
+ * Validates a nested block payload (INSERT_BLOCK's `block`), recursively.
+ *
+ * @param {any} block Candidate block payload — arbitrary, unvalidated
+ *                    input walked structurally.
+ * @return {boolean} Whether the candidate is a well-formed block payload.
+ */
 function isBlockPayload( block ) {
 	if ( ! block || typeof block !== 'object' ) {
 		return false;
@@ -50,6 +83,7 @@ function isBlockPayload( block ) {
 	return true;
 }
 
+/** @type {Record<string, Record<string, PayloadPredicate>>} */
 const PAYLOAD_SCHEMAS = {
 	[ IntentTypes.SET_ATTR ]: {
 		syncId: isString,
@@ -149,18 +183,15 @@ export const TEXT_INTENT_TYPES = new Set( [
 /**
  * Creates a validated, frozen intent.
  *
- * @param {string} type                One of IntentTypes.
- * @param {Object} payload             Type-specific payload (see
- *                                     PAYLOAD_SCHEMAS).
- * @param {Object} envelope            Envelope fields.
- * @param {string} envelope.actorId    Authoring actor. In production this is
- *                                     stamped server-side from the
- *                                     authenticated request, never trusted
- *                                     from the client.
- * @param {number} envelope.baseSeq    Log position observed when authoring.
- * @param {string} [envelope.txnId]    Atomic group id.
- * @param {string} [envelope.intentId] Idempotency key; minted if omitted.
- * @return {Object} Frozen intent.
+ * @param {string}                  type     One of IntentTypes.
+ * @param {Record<string, unknown>} payload  Type-specific payload (see
+ *                                           PAYLOAD_SCHEMAS).
+ * @param {IntentEnvelopeFields}    envelope Envelope fields. `actorId` is,
+ *                                           in production, stamped
+ *                                           server-side from the
+ *                                           authenticated request, never
+ *                                           trusted from the client.
+ * @return {IntentEnvelope} Frozen intent.
  */
 export function createIntent( type, payload, envelope ) {
 	const schema = PAYLOAD_SCHEMAS[ type ];
@@ -189,7 +220,11 @@ export function createIntent( type, payload, envelope ) {
 			) }`
 		);
 	}
-	if ( RANGE_TYPES.has( type ) && payload.end < payload.start ) {
+	if (
+		RANGE_TYPES.has( type ) &&
+		/** @type {number} */ ( payload.end ) <
+			/** @type {number} */ ( payload.start )
+	) {
 		throw new TypeError( `Range end before start for "${ type }"` );
 	}
 	if (
@@ -219,9 +254,9 @@ export function createIntent( type, payload, envelope ) {
  * Returns a copy of an intent with a transformed payload (used by rebase).
  * Envelope fields are preserved verbatim — attribution survives transforms.
  *
- * @param {Object} intent         Source intent.
- * @param {Object} payloadChanges Payload fields to override.
- * @return {Object} Frozen transformed intent.
+ * @param {IntentEnvelope}          intent         Source intent.
+ * @param {Record<string, unknown>} payloadChanges Payload fields to override.
+ * @return {IntentEnvelope} Frozen transformed intent.
  */
 export function withPayload( intent, payloadChanges ) {
 	return Object.freeze( {

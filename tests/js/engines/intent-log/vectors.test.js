@@ -19,7 +19,7 @@ import {
 	serverDocAt,
 	serverIngestBatch,
 } from '../../../../src/engines/intent-log/rebase.js';
-import { makeGenesisDoc } from '../../../../src/engines/intent-log/simulator.js';
+import { makeGenesisDoc } from './simulator.js';
 
 const vectors = JSON.parse(
 	readFileSync(

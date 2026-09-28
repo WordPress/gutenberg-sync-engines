@@ -55,7 +55,11 @@ Invariants:
 
 `tests/js/engines/intent-log/test-vectors/sync-id.json` (mirrored at
 `tests/phpunit/test-vectors/`) is the frozen cross-language contract: the
-PHP implementation must reproduce these bytes exactly.
+PHP implementation must reproduce these bytes exactly. The JS reference
+implementation lives beside the vectors
+(`tests/js/engines/intent-log/genesis-sync-id.js`); the editor never mints
+genesis ids itself — the server does, and the build-free stamper script
+(`includes/engines/intent-log/sync-id.js`) mirrors it with WebCrypto.
 
 Lifecycle: duplication remints; 1:1 transforms carry the ID; split keeps the
 ID on the first half and mints fresh for the second (stamping `syncParent`);
@@ -307,7 +311,7 @@ Checked by the deterministic simulator after every seeded schedule
   in proposal lane), or voided (recorded reason). No disposition = failure.
 - **Effect verification**: for every applied log entry, the documented
   effect of its (transformed) payload is visible in the document at its log
-  position (`verifyEffect` in `src/simulator.js`) — "applied" means
+  position (`verifyEffect` in `tests/js/engines/intent-log/simulator.js`) — "applied" means
   verifiably applied.
 - **Escalation soundness**: every proposal's reason is in the documented
   rule set and every proposal is attributed to its author.

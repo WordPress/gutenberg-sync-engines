@@ -22,9 +22,17 @@
  * Arguments are bare `key=value` tokens (same convention as the engine
  * benchmark):
  *
- *   transport=  http-polling | http-long-polling | websocket | current
+ *   transport=  http-polling | sse | websocket | current
  *               Switched via the Settings → Collaboration screen and
  *               restored afterwards. Default: current (no switch).
+ *   cache=      none | redis | current: the persistent object cache the
+ *               site runs for the run (redis = the Redis Object Cache
+ *               drop-in on the env's Redis; this checkout's wp-env sites
+ *               only; restored afterwards). Default: current.
+ *   wake=       auto | redis | cache | table: what an SSE stream sleeps
+ *               on (auto = whatever the site has, Redis when detectable;
+ *               cache needs cache=redis, table needs cache=none). The
+ *               report records the wait the streams actually got.
  *   engine=     intent-log | yjs-server | current (default: current)
  *   trials=     measured token round-trips (default 30)
  *   warmup=     unmeasured leading trials (default 3)
@@ -68,6 +76,7 @@ import {
 	attachCounters,
 	canvasOf,
 	collectServerSide,
+	configureHostCache,
 	configureSettings,
 	diffCounters,
 	dismissWelcomeGuide,
@@ -77,9 +86,11 @@ import {
 	kb,
 	login,
 	makeRestClient,
+	observeSseWait,
 	observeTransport,
 	parseCliOptions,
 	percentile,
+	restoreHostCache,
 	restoreSettings,
 	runBaseline,
 	waitForSyncTraffic,
@@ -89,6 +100,8 @@ const opts = parseCliOptions();
 
 const TRANSPORT = String( opts.transport ?? 'current' );
 const ENGINE = String( opts.engine ?? 'current' );
+const CACHE = String( opts.cache ?? 'current' );
+const WAKE = String( opts.wake ?? 'auto' );
 const TRIALS = Number( opts.trials ?? 30 );
 const WARMUP = Number( opts.warmup ?? 3 );
 const IDLE_SECONDS = Number( opts.idle ?? 30 );
@@ -100,6 +113,8 @@ async function main() {
 	if ( ! Number.isFinite( TRIALS ) || TRIALS < 1 ) {
 		throw new Error( 'trials must be a positive number' );
 	}
+	// Site-wide, so before any window opens.
+	const hostCache = configureHostCache( { cache: CACHE, wake: WAKE } );
 	const browser = await chromium.launch( { headless: ! HEADED } );
 	let settings = null;
 	let pageA = null;
@@ -127,6 +142,7 @@ async function main() {
 		const contextB = contextA;
 
 		const countersA = attachCounters( pageA );
+		await countersA.ready;
 
 		// Window A creates a fresh post.
 		await pageA.goto( `${ BASE }/wp-admin/post-new.php` );
@@ -144,7 +160,60 @@ async function main() {
 		// Typing only once both sessions are live avoids that race.
 		const pageB = await contextB.newPage();
 		pageBRef = pageB;
+		if ( opts.recovery ) {
+			await pageB.addInitScript( () => {
+				const nativeFetch = window.fetch.bind( window );
+				const active = new Set();
+				let offline = false;
+				window.__benchSetSyncOffline = ( value ) => {
+					offline = value;
+					if ( value ) {
+						for ( const controller of active ) {
+							controller.abort();
+						}
+						active.clear();
+					}
+				};
+				window.fetch = ( input, init = {} ) => {
+					const url =
+						typeof input === 'string'
+							? input
+							: input.url ?? String( input );
+					if (
+						! decodeURIComponent( url ).includes( '/wp-sync/v1/' )
+					) {
+						return nativeFetch( input, init );
+					}
+					if ( offline ) {
+						return Promise.reject(
+							new TypeError(
+								'Benchmark: sync connection interrupted'
+							)
+						);
+					}
+					const controller = new AbortController();
+					const abort = () => {
+						controller.abort();
+						active.delete( controller );
+					};
+					if ( init.signal?.aborted ) {
+						abort();
+					} else {
+						init.signal?.addEventListener( 'abort', abort, {
+							once: true,
+						} );
+					}
+					active.add( controller );
+					return nativeFetch( input, {
+						...init,
+						signal: controller.signal,
+					} );
+				};
+			} );
+		}
+
 		const countersB = attachCounters( pageB );
+		await countersB.ready;
 		for ( const [ key, page ] of [
 			[ 'a', pageA ],
 			[ 'b', pageB ],
@@ -390,6 +459,82 @@ async function main() {
 			b: diffCounters( startB, countersB.snapshot(), trialMs ),
 		};
 
+		// Optional interruption gate: the receiver misses an accepted edit,
+		// then must recover it through the existing session without a reload.
+		let recovery = null;
+		if ( opts.recovery ) {
+			phase.value = 'recovery';
+
+			await pageB.evaluate( () => {
+				window.__benchTokens = [ 'benchrecoveryx' ];
+			} );
+			try {
+				await pageB.evaluate( () =>
+					window.__benchSetSyncOffline( true )
+				);
+				await pageA.waitForTimeout( 1000 );
+				const accepted = pageA.waitForResponse(
+					( response ) => {
+						if (
+							response.status() !== 200 ||
+							response.request().method() !== 'POST'
+						) {
+							return false;
+						}
+						const url = decodeURIComponent( response.url() );
+						if ( settings.active.engine === 'de-rtc' ) {
+							return (
+								url.includes( '/autosaves' ) &&
+								response
+									.request()
+									.postData()
+									?.includes( 'benchrecoveryx' )
+							);
+						}
+						if ( ! url.includes( '/wp-sync/v1/updates' ) ) {
+							return false;
+						}
+						const body = response.request().postDataJSON();
+						return body?.rooms?.some(
+							( room ) => room.updates?.length > 0
+						);
+					},
+					{ timeout: 30000 }
+				);
+				await anchorParagraph.click();
+				await pageA.keyboard.press( 'End' );
+				await pageA.keyboard.insertText( ' benchrecoveryx' );
+				await accepted;
+				await pageA.waitForTimeout( 500 );
+				if (
+					await pageB.evaluate(
+						() => !! window.__benchSeen.benchrecoveryx
+					)
+				) {
+					throw new Error(
+						'The interruption did not block delivery; recovery was not tested.'
+					);
+				}
+				const resumed = Date.now();
+				await pageB.evaluate( () =>
+					window.__benchSetSyncOffline( false )
+				);
+				await pageB.waitForFunction(
+					() => !! window.__benchSeen.benchrecoveryx,
+					undefined,
+					{ timeout: 30000 }
+				);
+				recovery = { verified: true, catchUpMs: Date.now() - resumed };
+				console.log(
+					`recovery: disconnected receiver caught up in ${ recovery.catchUpMs } ms`
+				);
+			} finally {
+				await pageB.evaluate( () =>
+					window.__benchSetSyncOffline( false )
+				);
+			}
+		}
+
 		// Idle phase: both windows open and visible, nobody typing. This is
 		// the steady-state carrying cost per collaborator.
 		let idle = null;
@@ -429,6 +574,9 @@ async function main() {
 				engine: settings.active.engine,
 				transportRequested: settings.active.transport,
 				transportObserved: observedTransport,
+				cache: CACHE,
+				wake: WAKE,
+				sseWaitObserved: observeSseWait( countersA ),
 				trials: TRIALS,
 				warmup: WARMUP,
 				idleSeconds: IDLE_SECONDS,
@@ -446,6 +594,7 @@ async function main() {
 			idlePhase: idle,
 			serverSide,
 			trials,
+			recovery,
 		};
 
 		console.log( '' );
@@ -524,6 +673,11 @@ async function main() {
 			'\n  screenshots: bench-fail-a.png / bench-fail-b.png';
 		throw error;
 	} finally {
+		try {
+			restoreHostCache( hostCache );
+		} catch ( error ) {
+			console.warn( `WARNING: failed to restore the object cache: ${ error }` );
+		}
 		const changedSettings =
 			settings &&
 			( settings.previous.engine !== settings.active.engine ||

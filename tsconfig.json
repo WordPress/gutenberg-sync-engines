@@ -5,9 +5,7 @@
     "moduleResolution": "node",
     "baseUrl": ".",
     "paths": {
-      "@wordpress/sync": [
-        "./gutenberg/packages/sync/src"
-      ],
+      "@wordpress/sync": [ "./gutenberg/packages/sync/src" ],
       "@wordpress/blocks": [
         "./gutenberg/node_modules/@wordpress/blocks/build-types"
       ],
@@ -26,15 +24,12 @@
       "@wordpress/block-serialization-default-parser": [
         "./gutenberg/node_modules/@wordpress/block-serialization-default-parser"
       ],
-      "yjs": [
-        "./gutenberg/node_modules/yjs"
+      "@wordpress/data": [
+        "./gutenberg/node_modules/@wordpress/data/build-types"
       ],
-      "y-protocols/*": [
-        "./gutenberg/node_modules/y-protocols/*"
-      ],
-      "lib0/*": [
-        "./gutenberg/node_modules/lib0/*"
-      ]
+      "yjs": [ "./gutenberg/node_modules/yjs" ],
+      "y-protocols/*": [ "./gutenberg/node_modules/y-protocols/*" ],
+      "lib0/*": [ "./gutenberg/node_modules/lib0/*" ]
     },
     "jsx": "react-jsx",
     "strict": true,
@@ -43,18 +38,18 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "allowJs": true,
-    "checkJs": false,
-    "types": [
-      "@wordpress/element"
-    ]
+    "checkJs": true,
+    "types": [ "@wordpress/element" ]
   },
-  "include": [
-    "src/**/*",
-    "tests/js/**/*"
-  ],
+  "include": [ "src/**/*", "tests/js/**/*" ],
   "exclude": [
     "node_modules",
     "build",
-    "src/engines/intent-log/*.js"
+    // The Jest specs drive the intent-log core with loose fixtures on
+    // purpose. The core itself (src/engines/intent-log/*.js) and the
+    // Node-only harness modules beside the specs (simulator,
+    // genesis-sync-id) ARE checked, via checkJs and their JSDoc.
+    "tests/js/**/*.test.js",
+    "tests/js/jest-setup*.js"
   ]
 }

@@ -37,7 +37,7 @@ class Tests_Collaboration_WpIntentLogEngineInternals extends WP_UnitTestCase {
 	 * @return WP_Intent_Log_Engine Engine instance.
 	 */
 	private static function engine(): WP_Intent_Log_Engine {
-		return new WP_Intent_Log_Engine( new WP_Sync_Post_Meta_Storage() );
+		return new WP_Intent_Log_Engine( new WP_Sync_Table_Storage() );
 	}
 
 	/**
@@ -298,7 +298,7 @@ class Tests_Collaboration_WpIntentLogEngineInternals extends WP_UnitTestCase {
 		self::snapshot_doc( self::engine(), $room );
 		// …then a concurrent initializer loses the race and appends a bogus
 		// duplicate (empty document).
-		$storage = new WP_Sync_Post_Meta_Storage();
+		$storage = new WP_Sync_Table_Storage();
 		$storage->add_update(
 			$room,
 			array(
@@ -352,7 +352,7 @@ class Tests_Collaboration_WpIntentLogEngineInternals extends WP_UnitTestCase {
 		 * the transformed intent lives in the log AND a voided marker
 		 * records its true disposition.
 		 */
-		$storage = new WP_Sync_Post_Meta_Storage();
+		$storage = new WP_Sync_Table_Storage();
 		$intent  = array(
 			'intentId' => 'av-1',
 			'actorId'  => 'u9c9',

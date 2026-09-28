@@ -25,13 +25,15 @@ to ask about it.
 ## How to run it
 
 ```
-/shape-issues        # turn filed reports into issues anyone could pick up
-/loop /issue-cycle   # work through everything labelled agent:ready
+/loop /shape-issue   # turn filed reports into issues anyone could pick up
+/loop /solve-issue   # work through everything labelled agent:ready
 ```
 
-One issue per branch, named `loop/<issue number>`. One bounded piece of
-work per cycle. The full protocol is in
-`.claude/commands/issue-cycle.md`; the writing rules are in
+Either command also takes a single issue number directly (e.g.
+`/solve-issue 56`) when you want to work one issue without starting a
+loop. One issue per branch, named `loop/<issue number>`. One bounded
+piece of work per cycle. The full protocol is in
+`.claude/commands/solve-issue.md`; the writing rules are in
 `docs/plan/README.md`; the standing repo rules are in `AGENTS.md`.
 
 ## Working alongside other people and agents
@@ -88,3 +90,10 @@ anything that stops being about *process* into `docs/plan/history.md` or
   bundle produces evidence for code you did not write.
 - Do not switch branches while a background build for that branch is
   running. The build reads whatever is on disk when it gets there.
+- A Playwright wait timing out while the element sits in the DOM means
+  the page's main thread is stalled, not that the test tooling broke:
+  the locator machinery rides the page's own event loop. Before
+  blaming the test, measure stalls — the collaboration fixtures'
+  `RTC_E2E_CPU_THROTTLE` / `RTC_E2E_CPU_PROFILE` knobs reproduce
+  busy-machine flakes on an idle machine and attach the long-task
+  timeline and a CPU profile to every failure (built for issue #37).

@@ -60,7 +60,7 @@ class Tests_Collaboration_WpDeRtcAutosaveCommits extends WP_UnitTestCase {
 	}
 
 	private function engine(): WP_De_RTC_Engine {
-		return new WP_De_RTC_Engine( new WP_Sync_Post_Meta_Storage() );
+		return new WP_De_RTC_Engine( new WP_Sync_Table_Storage() );
 	}
 
 	/**
@@ -79,9 +79,9 @@ class Tests_Collaboration_WpDeRtcAutosaveCommits extends WP_UnitTestCase {
 	public function test_commit_merges_through_the_room_and_returns_rows() {
 		// Initialize the room (the session bootstraps via the transport in
 		// production; the engine read does it here).
-		$this->assertSame( self::GENESIS_CONTENT, $this->engine()->materialize( $this->room() ) );
+		$this->assertSame( $this->genesis(), $this->engine()->materialize( $this->room() ) );
 
-		$proposed = str_replace( 'Alpha block original text.', 'Alpha via autosave commit.', self::GENESIS_CONTENT );
+		$proposed = str_replace( 'Alpha block original text.', 'Alpha via autosave commit.', $this->genesis() );
 		$response = $this->commit_request(
 			array(
 				'proposal_id'      => 'p-777-1',
@@ -125,7 +125,7 @@ class Tests_Collaboration_WpDeRtcAutosaveCommits extends WP_UnitTestCase {
 			array(
 				'proposal_id'      => 'p-778-1',
 				'base_version'     => 'v1',
-				'proposed_content' => self::GENESIS_CONTENT,
+				'proposed_content' => $this->genesis(),
 				'client_id'        => 778,
 			)
 		);
@@ -146,7 +146,7 @@ class Tests_Collaboration_WpDeRtcAutosaveCommits extends WP_UnitTestCase {
 				array(
 					'proposal_id'      => 'p-779-1',
 					'base_version'     => 'v1',
-					'proposed_content' => self::GENESIS_CONTENT,
+					'proposed_content' => $this->genesis(),
 					'client_id'        => 779,
 				)
 			)
@@ -171,12 +171,22 @@ class Tests_Collaboration_WpDeRtcAutosaveCommits extends WP_UnitTestCase {
 		$request->set_body(
 			wp_json_encode(
 				array(
-					'content' => str_replace( 'Beta block original text.', 'Beta native autosave.', self::GENESIS_CONTENT ),
+					'content' => str_replace( 'Beta block original text.', 'Beta native autosave.', $this->genesis() ),
 				)
 			)
 		);
 		$this->assertNull( WP_De_RTC_Autosave_Commits::maybe_commit( null, rest_get_server(), $request ) );
 		// And the ROOM did not advance (native autosaves are not commits).
 		$this->assertStringNotContainsString( 'Beta native autosave.', (string) $this->engine()->materialize( $this->room() ) );
+	}
+
+	/**
+	 * The room's genesis content: the saved post with every block stamped
+	 * with its deterministic identity (what the room actually serves).
+	 *
+	 * @return string Stamped genesis content.
+	 */
+	private function genesis(): string {
+		return WP_De_RTC_Block_Identity::stamp_genesis( self::GENESIS_CONTENT, self::$post_id );
 	}
 }

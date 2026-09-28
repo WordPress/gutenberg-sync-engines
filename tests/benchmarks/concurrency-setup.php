@@ -4,7 +4,8 @@
  * post from the workload generator's genesis content and primes the
  * room's genesis snapshot BEFORE workers race, then prints the post id as
  * `BENCH_POST <id>`. Pass teardown=<id> instead to delete a seeded post
- * (its room rows live in its postmeta, so deletion cleans everything).
+ * and its room (the room's rows live in the plugin's storage tables, so
+ * the room is reset explicitly before the post goes).
  *
  * @package gutenberg
  */
@@ -24,7 +25,12 @@ foreach ( ( isset( $args ) && is_array( $args ) ? $args : array() ) as $wp_sync_
 }
 
 if ( ! empty( $wp_sync_bench_opts['teardown'] ) ) {
-	wp_delete_post( (int) $wp_sync_bench_opts['teardown'], true );
+	$wp_sync_bench_teardown_id   = (int) $wp_sync_bench_opts['teardown'];
+	$wp_sync_bench_teardown_post = get_post( $wp_sync_bench_teardown_id );
+	if ( $wp_sync_bench_teardown_post ) {
+		( new WP_Sync_Table_Storage() )->reset_room( 'postType/' . $wp_sync_bench_teardown_post->post_type . ':' . $wp_sync_bench_teardown_id );
+	}
+	wp_delete_post( $wp_sync_bench_teardown_id, true );
 	echo "BENCH_TEARDOWN_OK\n";
 	return;
 }
@@ -48,7 +54,7 @@ $post_id = wp_insert_post(
 	)
 );
 
-$engine = ( new WP_Sync_Engine_Registry( new WP_Sync_Post_Meta_Storage() ) )->get_engine( $engine_slug );
+$engine = ( new WP_Sync_Engine_Registry( new WP_Sync_Table_Storage() ) )->get_engine( $engine_slug );
 $engine->get_updates_since( 'postType/post:' . $post_id, 999, 0, array() );
 
 echo 'BENCH_POST ' . (int) $post_id . "\n";

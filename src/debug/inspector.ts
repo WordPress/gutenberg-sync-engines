@@ -25,6 +25,11 @@
  * (Yjs binary) fall back to type + size.
  */
 
+/**
+ * Internal dependencies
+ */
+import { getAdvisoryDebugState } from '../providers/advisory/channel';
+
 const STORAGE_KEY = 'wp_sync_debug';
 const BUFFER_LIMIT = 500;
 
@@ -188,11 +193,18 @@ function decodeUpdate(
 			0,
 			12
 		) } @${ decoded.baseSeq })`;
-	} else if ( 'proposal' === update.type ) {
+	} else if ( 'parked' === update.type ) {
+		// Both review-lane engines park with this row type. intent-log parks
+		// one intent (`intent`, `actorId`); de-rtc parks a proposal
+		// (`proposalId`, `authorClientId`, `excerpt`).
 		const intent = decoded.intent as
 			| { type?: string; intentId?: string }
 			| undefined;
-		summary = `proposal ${ intent?.type } ${ intent?.intentId } (${ decoded.reason }, by ${ decoded.actorId })`;
+		summary = intent
+			? `parked ${ intent.type } ${ intent.intentId } (${ decoded.reason }, by ${ decoded.actorId })`
+			: `parked ${ decoded.proposalId } (${ decoded.reason }, by client ${
+					decoded.authorClientId
+			  })${ decoded.excerpt ? ` "${ decoded.excerpt }"` : '' }`;
 	} else if ( 'resolved' === update.type ) {
 		summary = `resolved ${ decoded.proposalId } ${ decoded.resolution }${
 			decoded.resolvedBy ? ` by ${ decoded.resolvedBy }` : ''
@@ -447,6 +459,9 @@ export const syncDebugApi = {
 	cursor( room?: string ): number | undefined {
 		return pickSession( room )?.getSeq?.();
 	},
+	advisory(): Record< string, unknown > {
+		return getAdvisoryDebugState();
+	},
 	export(): string {
 		return JSON.stringify(
 			{ exportedAt: new Date().toISOString(), polls: buffer },
@@ -464,6 +479,7 @@ export const syncDebugApi = {
 			'wpSync.table()              flat console.table of rows',
 			"wpSync.intents('p1')        history touching one syncId",
 			'wpSync.doc() / proposals() / cursor()   session state',
+			'wpSync.advisory()                        advisory channel peers',
 			'wpSync.export() / clear()   dump or reset the buffer',
 			'wpSync.disable()            turn the inspector off',
 		].join( '\n' );

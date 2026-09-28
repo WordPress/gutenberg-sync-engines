@@ -27,6 +27,27 @@
  * See SPEC.md ("Rich-text codec").
  */
 
+/** @typedef {import('./engine-types').EngineField} EngineField */
+/** @typedef {import('./engine-types').FormatSpan} FormatSpan */
+
+/**
+ * A formatting element's decoded identity: lowercase tag plus its
+ * entity-decoded attributes.
+ *
+ * @typedef {Object} DecodedFormat
+ * @property {string}                 tag   Lowercase tag name.
+ * @property {Record<string, string>} attrs Attribute map.
+ */
+
+/**
+ * A formatting element still open while parsing.
+ *
+ * @typedef {Object} OpenTag
+ * @property {string}                 tag   Lowercase tag name.
+ * @property {Record<string, string>} attrs Attribute map.
+ * @property {number}                 start Text offset where it opened.
+ */
+
 const OBJECT_CHAR = '\ufffc';
 
 /**
@@ -78,6 +99,7 @@ const VOID_TAGS = new Set( [
 	'wbr',
 ] );
 
+/** @type {Record<string, string>} */
 const NAMED_ENTITIES = {
 	amp: '&',
 	lt: '<',
@@ -156,8 +178,8 @@ function encodeAttribute( value ) {
 /**
  * The canonical span format id for a tag + attributes.
  *
- * @param {string} tag   Lowercase tag name.
- * @param {Object} attrs Attribute map.
+ * @param {string}                 tag   Lowercase tag name.
+ * @param {Record<string, string>} attrs Attribute map.
  * @return {string} Format id.
  */
 export function encodeFormat( tag, attrs ) {
@@ -165,6 +187,7 @@ export function encodeFormat( tag, attrs ) {
 	if ( 0 === keys.length ) {
 		return tag;
 	}
+	/** @type {Record<string, string>} */
 	const sorted = {};
 	for ( const key of keys ) {
 		sorted[ key ] = attrs[ key ];
@@ -177,7 +200,7 @@ export function encodeFormat( tag, attrs ) {
  * object format (raw HTML pass-through).
  *
  * @param {string} format Format id.
- * @return {Object|null} { tag, attrs }, or null for object formats.
+ * @return {DecodedFormat|null} { tag, attrs }, or null for object formats.
  */
 export function decodeFormat( format ) {
 	const pipe = format.indexOf( '|' );
@@ -200,9 +223,10 @@ const ATTR_RE =
  * Parses a tag's attribute string.
  *
  * @param {string} raw Raw attribute source.
- * @return {Object} Attribute map (values entity-decoded).
+ * @return {Record<string, string>} Attribute map (values entity-decoded).
  */
 function parseAttributes( raw ) {
+	/** @type {Record<string, string>} */
 	const attrs = {};
 	for ( const match of raw.matchAll( ATTR_RE ) ) {
 		const name = match[ 1 ].toLowerCase();
@@ -227,7 +251,7 @@ function parseAttributes( raw ) {
  * @param {string}  tag        Lowercase tag name.
  * @param {number}  after      Index after the opening tag.
  * @param {boolean} selfClosed Whether the opening tag self-closed.
- * @return {Object} { source, next }.
+ * @return {{ source: string, next: number }} { source, next }.
  */
 function captureOpaque( html, index, tag, after, selfClosed ) {
 	if ( selfClosed || VOID_TAGS.has( tag ) ) {
@@ -264,7 +288,7 @@ function captureOpaque( html, index, tag, after, selfClosed ) {
  * input degrades to a whole-field object (see module docs).
  *
  * @param {string} html Inline HTML (a block's attribute-form content).
- * @return {Object} { text, formats } field.
+ * @return {EngineField} { text, formats } field.
  */
 export function htmlToField( html ) {
 	try {
@@ -289,10 +313,19 @@ export function htmlToField( html ) {
 	}
 }
 
+/**
+ * Parses inline HTML into a field, throwing UnsupportedHtml on anything the
+ * codec does not model (htmlToField turns that into the whole-field object).
+ *
+ * @param {string} html Inline HTML.
+ * @return {EngineField} { text, formats } field.
+ */
 function parseStrict( html ) {
 	let text = '';
+	/** @type {FormatSpan[]} */
 	const formats = [];
-	const stack = []; // { tag, attrs, start }
+	/** @type {OpenTag[]} */
+	const stack = [];
 	let index = 0;
 
 	while ( index < html.length ) {
@@ -399,13 +432,15 @@ function parseStrict( html ) {
  * partially overlapping spans closed and reopened as needed to stay
  * well-formed.
  *
- * @param {Object} field { text, formats }.
+ * @param {EngineField} field { text, formats }.
  * @return {string} Inline HTML.
  */
 export function fieldToHtml( field ) {
 	const text = field.text ?? '';
 	const spans = field.formats ?? [];
+	/** @type {Map<number, FormatSpan>} */
 	const objectAt = new Map();
+	/** @type {FormatSpan[]} */
 	const formatSpans = [];
 	for ( const span of spans ) {
 		if ( span.format.startsWith( 'obj|' ) ) {
@@ -416,12 +451,15 @@ export function fieldToHtml( field ) {
 	}
 	// Deterministic opening order at a position: earlier start first, then
 	// longer span, then format id.
+	/** @type {(a: FormatSpan, b: FormatSpan) => number} */
 	const order = ( a, b ) =>
 		a.start - b.start || b.end - a.end || ( a.format < b.format ? -1 : 1 );
 	formatSpans.sort( order );
 
 	let html = '';
+	/** @type {FormatSpan[]} */
 	const stack = [];
+	/** @param {FormatSpan} span */
 	const openTag = ( span ) => {
 		const decoded = decodeFormat( span.format );
 		if ( ! decoded ) {
@@ -439,6 +477,7 @@ export function fieldToHtml( field ) {
 		html += `<${ decoded.tag }${ attrText }>`;
 		stack.push( span );
 	};
+	/** @param {FormatSpan} span */
 	const closeTag = ( span ) => {
 		const decoded = decodeFormat( span.format );
 		if ( decoded ) {
@@ -457,7 +496,8 @@ export function fieldToHtml( field ) {
 			if ( ! innermostEnding ) {
 				break;
 			}
-			const span = stack.pop();
+			// The loop guard proved the stack non-empty.
+			const span = /** @type {FormatSpan} */ ( stack.pop() );
 			closeTag( span );
 			if ( span.end !== position ) {
 				reopen.push( span );

@@ -95,7 +95,7 @@ class Tests_Collaboration_WpSyncEngineRegistry extends WP_Test_REST_TestCase {
 
 	public function test_registry_defaults_to_intent_log_when_option_unset() {
 		delete_option( 'wp_sync_engine' );
-		$registry = new WP_Sync_Engine_Registry( new WP_Sync_Post_Meta_Storage() );
+		$registry = new WP_Sync_Engine_Registry( new WP_Sync_Table_Storage() );
 
 		$engine = $registry->get_engine( WP_Intent_Log_Engine::SLUG );
 		$this->assertInstanceOf( 'WP_Intent_Log_Engine', $engine );
@@ -106,7 +106,7 @@ class Tests_Collaboration_WpSyncEngineRegistry extends WP_Test_REST_TestCase {
 
 	public function test_registry_falls_back_to_first_registered_for_unknown_configured_engine() {
 		update_option( 'wp_sync_engine', 'engine-that-does-not-exist' );
-		$registry = new WP_Sync_Engine_Registry( new WP_Sync_Post_Meta_Storage() );
+		$registry = new WP_Sync_Engine_Registry( new WP_Sync_Table_Storage() );
 
 		// A configured-but-unregistered slug degrades to the FIRST
 		// registered engine (yjs-server), not the conventional default.
@@ -130,7 +130,7 @@ class Tests_Collaboration_WpSyncEngineRegistry extends WP_Test_REST_TestCase {
 		};
 		add_filter( 'wp_sync_engine_for_room', $select, 10, 2 );
 
-		$registry = new WP_Sync_Engine_Registry( new WP_Sync_Post_Meta_Storage() );
+		$registry = new WP_Sync_Engine_Registry( new WP_Sync_Table_Storage() );
 
 		$this->assertSame( 'stub-engine', $registry->get_engine_slug_for_room( 'stub/room' ) );
 		$this->assertSame( Test_Opaque_Relay_Engine::SLUG, $registry->get_engine_slug_for_room( 'postType/post:1' ) );
@@ -178,7 +178,7 @@ class Tests_Collaboration_WpSyncEngineRegistry extends WP_Test_REST_TestCase {
 
 	public function test_first_write_stamps_room_lineage() {
 		$room    = 'postType/post:' . self::$post_id;
-		$storage = new WP_Sync_Post_Meta_Storage();
+		$storage = new WP_Sync_Table_Storage();
 		$this->assertNull( $storage->get_room_engine( $room ) );
 
 		$response = rest_get_server()->dispatch( $this->build_request() );
@@ -193,13 +193,13 @@ class Tests_Collaboration_WpSyncEngineRegistry extends WP_Test_REST_TestCase {
 		);
 		$this->assertSame( 200, $response->get_status() );
 
-		$storage = new WP_Sync_Post_Meta_Storage();
+		$storage = new WP_Sync_Table_Storage();
 		$this->assertNull( $storage->get_room_engine( 'postType/post:' . self::$post_id ) );
 	}
 
 	public function test_lineage_from_another_engine_is_rejected_with_409() {
 		$room    = 'postType/post:' . self::$post_id;
-		$storage = new WP_Sync_Post_Meta_Storage();
+		$storage = new WP_Sync_Table_Storage();
 		$storage->set_room_engine( $room, 'intent-log' );
 
 		$response = rest_get_server()->dispatch( $this->build_request() );
@@ -220,7 +220,7 @@ class Tests_Collaboration_WpSyncEngineRegistry extends WP_Test_REST_TestCase {
 			)
 		);
 		$this->assertSame( 200, $write->get_status() );
-		$storage = new WP_Sync_Post_Meta_Storage();
+		$storage = new WP_Sync_Table_Storage();
 		$this->assertSame( Test_Opaque_Relay_Engine::SLUG, $storage->get_room_engine( $room ) );
 
 		// The site switches engines. A client speaking the NEW engine must
@@ -281,7 +281,7 @@ class Tests_Collaboration_WpSyncEngineRegistry extends WP_Test_REST_TestCase {
 			$this->assertErrorResponse( 'rest_sync_engine_mismatch', $response, 409 );
 			$this->assertSame(
 				Test_Opaque_Relay_Engine::SLUG,
-				( new WP_Sync_Post_Meta_Storage() )->get_room_engine( $room )
+				( new WP_Sync_Table_Storage() )->get_room_engine( $room )
 			);
 		} finally {
 			delete_option( 'wp_sync_engine' );
@@ -316,7 +316,7 @@ class Tests_Collaboration_WpSyncEngineRegistry extends WP_Test_REST_TestCase {
 			$this->assertErrorResponse( 'rest_sync_engine_mismatch', $response, 409 );
 			$this->assertSame(
 				Test_Opaque_Relay_Engine::SLUG,
-				( new WP_Sync_Post_Meta_Storage() )->get_room_engine( $room )
+				( new WP_Sync_Table_Storage() )->get_room_engine( $room )
 			);
 		} finally {
 			delete_option( 'wp_sync_engine' );
@@ -325,7 +325,7 @@ class Tests_Collaboration_WpSyncEngineRegistry extends WP_Test_REST_TestCase {
 
 	public function test_lineage_stamp_does_not_overwrite() {
 		$room    = 'postType/post:' . self::$post_id . ':lineage';
-		$storage = new WP_Sync_Post_Meta_Storage();
+		$storage = new WP_Sync_Table_Storage();
 
 		$this->assertTrue( $storage->set_room_engine( $room, 'first-engine' ) );
 		$this->assertTrue( $storage->set_room_engine( $room, 'second-engine' ) );

@@ -17,39 +17,17 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Rooms_CLI_Command' ) && defined( 'W
 	 * GUTENBERG_SYNC_ENGINES_DIAGNOSTICS constant) — see
 	 * Gutenberg_Sync_Engines_Plugin::load().
 	 *
-	 * Every read resolves the room's storage post itself before touching the
-	 * storage API: the storage's own room lookup CREATES the backing post for
-	 * an unknown room, which a diagnostic command must never do.
+	 * Reads go through the plugin's table storage, whose lookups never
+	 * create a room (there is no per-room parent row to create), so a
+	 * diagnostic read cannot bring a room into existence. Rooms are
+	 * stored by name, so listing needs no reverse lookup.
 	 *
 	 * @since 0.3.0
 	 */
 	final class Gutenberg_Sync_Engines_Rooms_CLI_Command {
 
 		/**
-		 * Postmeta key holding one update row per meta row (the framework's
-		 * WP_Sync_Post_Meta_Storage convention; meta_id is the cursor).
-		 *
-		 * @since 0.3.0
-		 * @var string
-		 */
-		private const UPDATE_META_KEY = 'wp_sync_update_data';
-
-		/**
-		 * Prefix namespacing per-room meta in postmeta (hardcoded in the
-		 * framework storage; it exposes no constant for it).
-		 *
-		 * @since 0.3.0
-		 * @var string
-		 */
-		private const ROOM_META_PREFIX = 'wp_sync_room_meta_';
-
-		/**
 		 * Lists sync storage rooms.
-		 *
-		 * Room identifiers are stored one-way (the storage post's slug is
-		 * md5( room )), so names are recovered by hashing candidate rooms for
-		 * the site's post types, posts, and taxonomies; unmatched rooms show
-		 * their hash.
 		 *
 		 * ## OPTIONS
 		 *
@@ -70,49 +48,25 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Rooms_CLI_Command' ) && defined( 'W
 		 * @return void
 		 */
 		public function list_rooms( $args, $assoc_args ) { // phpcs:ignore VariableAnalysis.CodeAnalysis.VariableAnalysis.UnusedVariable -- $args is part of the WP-CLI command signature.
-			global $wpdb;
-
-			$post_ids = get_posts(
-				array(
-					'post_type'      => 'wp_sync_storage',
-					'post_status'    => 'publish',
-					'posts_per_page' => -1,
-					'orderby'        => 'ID',
-					'order'          => 'ASC',
-					'fields'         => 'ids',
-				)
-			);
-			if ( array() === $post_ids ) {
+			$rooms = $this->storage()->list_rooms();
+			if ( array() === $rooms ) {
 				WP_CLI::log( 'No sync storage rooms found.' );
 				return;
 			}
 
-			$known_rooms = $this->build_room_hash_map();
-
 			$items = array();
-			foreach ( $post_ids as $post_id ) {
-				$slug = get_post_field( 'post_name', $post_id );
-				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Read-only diagnostics over the storage's own raw-row convention.
-				$stats = $wpdb->get_row(
-					$wpdb->prepare(
-						"SELECT COUNT(*) AS row_count, COALESCE( MAX( meta_id ), 0 ) AS max_cursor FROM {$wpdb->postmeta} WHERE post_id = %d AND meta_key = %s",
-						$post_id,
-						self::UPDATE_META_KEY
-					)
-				);
-
+			foreach ( $rooms as $room ) {
 				$items[] = array(
-					'post_id'  => $post_id,
-					'room'     => $known_rooms[ $slug ] ?? "(unresolved: {$slug})",
-					'engine'   => (string) get_post_meta( $post_id, 'wp_sync_engine', true ),
-					'rows'     => (int) $stats->row_count,
-					'cursor'   => (int) $stats->max_cursor,
-					'modified' => get_post_field( 'post_modified_gmt', $post_id ),
+					'room'        => $room['room'],
+					'engine'      => $room['engine'],
+					'rows'        => $room['rows'],
+					'cursor'      => $room['cursor'],
+					'last_update' => $room['last_update_gmt'],
 				);
 			}
 
 			$format = $assoc_args['format'] ?? 'table';
-			WP_CLI\Utils\format_items( $format, $items, array( 'post_id', 'room', 'engine', 'rows', 'cursor', 'modified' ) );
+			WP_CLI\Utils\format_items( $format, $items, array( 'room', 'engine', 'rows', 'cursor', 'last_update' ) );
 		}
 
 		/**
@@ -145,16 +99,13 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Rooms_CLI_Command' ) && defined( 'W
 		 * @return void
 		 */
 		public function inspect( $args, $assoc_args ) {
-			global $wpdb;
-
 			$room    = (string) $args[0];
-			$post_id = $this->find_room_post_id( $room );
-			if ( null === $post_id ) {
+			$storage = $this->storage();
+			$size    = $storage->get_room_size( $room );
+			if ( ! $size['found'] ) {
 				WP_CLI::error( "No storage room found for '{$room}' (rooms are only created once a client syncs; check `wp collaboration rooms list`)." );
 			}
 
-			$storage = gutenberg_sync_engines_storage();
-			// Safe now: the storage post exists, so reads cannot create it.
 			$all_rows = $storage->get_updates_after_cursor( $room, 0 );
 
 			$type_counts = array();
@@ -163,45 +114,42 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Rooms_CLI_Command' ) && defined( 'W
 				$type_counts[ $type ] = ( $type_counts[ $type ] ?? 0 ) + 1;
 			}
 
-			$awareness = $storage->get_awareness_state( $room );
+			$awareness = ( new WP_Sync_Awareness( $storage ) )->entries( $room, WP_HTTP_Polling_Sync_Server::AWARENESS_TIMEOUT );
 
 			$state = array(
 				'room'      => $room,
-				'post_id'   => $post_id,
 				'engine'    => $storage->get_room_engine( $room ),
 				'rows'      => $storage->get_update_count( $room ),
 				'cursor'    => $storage->get_cursor( $room ),
+				'bytes'     => $size['bytes'],
 				'row_types' => $type_counts,
 				'awareness' => array(
-					'clients' => array_keys( $awareness ),
+					'clients' => array_column( $awareness, 'client_id' ),
 				),
-				'room_meta' => $this->collect_room_meta( $post_id, $room ),
+				'room_meta' => $this->collect_room_meta( $storage, $room ),
 			);
 
 			$row_limit = isset( $assoc_args['rows'] ) ? max( 0, (int) $assoc_args['rows'] ) : 0;
 			if ( $row_limit > 0 ) {
-				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Read-only diagnostics; meta_id (the cursor) is not exposed by the storage API.
-				$raw_rows = $wpdb->get_results(
-					$wpdb->prepare(
-						"SELECT meta_id, meta_value FROM {$wpdb->postmeta} WHERE post_id = %d AND meta_key = %s ORDER BY meta_id DESC LIMIT %d",
-						$post_id,
-						self::UPDATE_META_KEY,
-						$row_limit
-					)
-				);
-
 				$state['last_rows'] = array();
-				foreach ( $raw_rows as $raw ) {
-					$state['last_rows'][] = $this->summarize_row( (int) $raw->meta_id, (string) $raw->meta_value );
+				foreach ( $storage->get_last_updates( $room, $row_limit ) as $raw ) {
+					$state['last_rows'][] = $this->summarize_row( $raw['cursor'], $raw['data'] );
 				}
 			}
 
 			if ( isset( $assoc_args['materialize'] ) && array() !== $all_rows ) {
-				$engine = ( new WP_HTTP_Polling_Sync_Server( $storage ) )
-					->get_engine_registry()
-					->get_engine_for_room( $room );
-				if ( method_exists( $engine, 'materialize' ) ) {
-					$state['materialized'] = $engine->materialize( $room );
+				$engine_slug = $state['engine'];
+				if ( null === $engine_slug || '' === $engine_slug ) {
+					$state['materialized'] = '(cannot materialize: room has no recorded engine lineage)';
+				} else {
+					$engine = ( new WP_HTTP_Polling_Sync_Server( $storage ) )
+						->get_engine_registry()
+						->get_engine( $engine_slug );
+					if ( null === $engine ) {
+						$state['materialized'] = "(cannot materialize: engine '{$engine_slug}' is not registered on this site)";
+					} elseif ( method_exists( $engine, 'materialize' ) ) {
+						$state['materialized'] = $engine->materialize( $room );
+					}
 				}
 			}
 
@@ -214,6 +162,24 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Rooms_CLI_Command' ) && defined( 'W
 		}
 
 		/**
+		 * The storage these diagnostics read. They understand the plugin's
+		 * table storage only; a site running on a substitute (or on the
+		 * framework's post-meta fallback because the tables are missing)
+		 * is told which one it has.
+		 *
+		 * @since 0.0.1
+		 *
+		 * @return WP_Sync_Table_Storage Storage.
+		 */
+		private function storage(): WP_Sync_Table_Storage {
+			$storage = gutenberg_sync_engines_storage();
+			if ( ! $storage instanceof WP_Sync_Table_Storage ) {
+				WP_CLI::error( 'Room diagnostics read the plugin\'s table storage, but the active sync storage is ' . get_class( $storage ) . ' (see `wp collaboration storage status`).' );
+			}
+			return $storage;
+		}
+
+		/**
 		 * Prints the human-readable summary of an inspected room.
 		 *
 		 * @since 0.3.0
@@ -222,9 +188,9 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Rooms_CLI_Command' ) && defined( 'W
 		 * @return void
 		 */
 		private function print_summary( array $state ): void {
-			WP_CLI::log( "Room:      {$state['room']} (post {$state['post_id']})" );
+			WP_CLI::log( "Room:      {$state['room']}" );
 			WP_CLI::log( 'Engine:    ' . ( $state['engine'] ? $state['engine'] : '(unstamped)' ) );
-			WP_CLI::log( "Rows:      {$state['rows']} (cursor {$state['cursor']})" );
+			WP_CLI::log( "Rows:      {$state['rows']} (cursor {$state['cursor']}, {$state['bytes']} bytes at rest)" );
 
 			$types = array();
 			foreach ( $state['row_types'] as $type => $count ) {
@@ -253,82 +219,24 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Rooms_CLI_Command' ) && defined( 'W
 		}
 
 		/**
-		 * Resolves a room identifier to its storage post without creating one:
-		 * the oldest published `wp_sync_storage` post whose slug is the room's
-		 * md5 (the canonical-post rule the framework storage uses).
+		 * Collects and summarizes the room's engine meta (checkpoints,
+		 * canonical documents, floors), one line per key.
 		 *
 		 * @since 0.3.0
 		 *
-		 * @param string $room Room identifier.
-		 * @return int|null Post ID, or null when the room has no storage post.
+		 * @param WP_Sync_Table_Storage $storage Storage.
+		 * @param string                $room    Room identifier; engine
+		 *                                       option-row stores (the
+		 *                                       de-rtc canonical chain) are
+		 *                                       summarized alongside room
+		 *                                       meta.
+		 * @return array<string, string> Meta key → summary.
 		 */
-		private function find_room_post_id( string $room ): ?int {
-			$ids = get_posts(
-				array(
-					'post_type'      => 'wp_sync_storage',
-					'post_status'    => 'publish',
-					'name'           => md5( $room ),
-					'posts_per_page' => 1,
-					'orderby'        => 'ID',
-					'order'          => 'ASC',
-					'fields'         => 'ids',
-				)
-			);
-			return array() === $ids ? null : (int) $ids[0];
-		}
-
-		/**
-		 * Builds the md5(room) → room reverse map from the site's plausible
-		 * room names: entity rooms for every post, and collection rooms for
-		 * every post type and taxonomy. Best-effort — an unmatched hash is
-		 * still listed, just unresolved.
-		 *
-		 * @since 0.3.0
-		 *
-		 * @global wpdb $wpdb WordPress database abstraction object.
-		 *
-		 * @return array<string, string> Hash → room identifier.
-		 */
-		private function build_room_hash_map(): array {
-			global $wpdb;
-
-			$map = array();
-			foreach ( get_post_types() as $type ) {
-				$map[ md5( "postType/{$type}" ) ] = "postType/{$type}";
-			}
-			foreach ( get_taxonomies() as $taxonomy ) {
-				$map[ md5( "taxonomy/{$taxonomy}" ) ] = "taxonomy/{$taxonomy}";
-			}
-
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Read-only diagnostics; one bounded scan beats a per-type query fan-out.
-			$posts = $wpdb->get_results(
-				"SELECT ID, post_type FROM {$wpdb->posts} WHERE post_type NOT IN ( 'wp_sync_storage', 'revision' ) ORDER BY ID DESC LIMIT 10000"
-			);
-			foreach ( $posts as $post ) {
-				$candidate                = "postType/{$post->post_type}:{$post->ID}";
-				$map[ md5( $candidate ) ] = $candidate;
-			}
-
-			return $map;
-		}
-
-		/**
-		 * Collects and summarizes the room's namespaced meta (engine
-		 * checkpoints, canonical documents, floors), one line per key.
-		 *
-		 * @since 0.3.0
-		 *
-		 * @param int    $post_id Storage post ID.
-		 * @param string $room    Room identifier; when known, engine
-		 *                        option-row stores (the de-rtc canonical
-		 *                        chain) are summarized alongside room meta.
-		 * @return array<string, string> Meta key (unprefixed) → summary.
-		 */
-		private function collect_room_meta( int $post_id, string $room = '' ): array {
+		private function collect_room_meta( WP_Sync_Table_Storage $storage, string $room ): array {
 			$summaries = array();
 			// The de-rtc canonical chain lives in an options row (the
 			// announce model's ordered store), not room meta.
-			if ( '' !== $room && class_exists( 'WP_Sync_Atomic_Option' ) ) {
+			if ( class_exists( 'WP_Sync_Atomic_Option' ) ) {
 				global $wpdb;
 				$canonical = WP_Sync_Atomic_Option::read( $wpdb->prefix . 'sync_de_rtc_canonical_' . md5( $room ) );
 				if ( is_string( $canonical ) ) {
@@ -337,13 +245,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Rooms_CLI_Command' ) && defined( 'W
 					$summaries['de_rtc_canonical (option)'] = $this->summarize_room_meta( 'de_rtc_canonical', $decoded );
 				}
 			}
-			foreach ( get_post_meta( $post_id ) as $meta_key => $values ) {
-				if ( 0 !== strpos( $meta_key, self::ROOM_META_PREFIX ) ) {
-					continue;
-				}
-				$key     = substr( $meta_key, strlen( self::ROOM_META_PREFIX ) );
-				$decoded = json_decode( (string) ( $values[0] ?? '' ), true );
-
+			foreach ( $storage->get_all_room_meta( $room ) as $key => $decoded ) {
 				$summaries[ $key ] = $this->summarize_room_meta( $key, $decoded );
 			}
 			return $summaries;
@@ -355,7 +257,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Rooms_CLI_Command' ) && defined( 'W
 		 *
 		 * @since 0.3.0
 		 *
-		 * @param string $key     Unprefixed meta key.
+		 * @param string $key     Meta key.
 		 * @param mixed  $decoded Decoded meta value.
 		 * @return string Summary.
 		 */
@@ -391,8 +293,8 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Rooms_CLI_Command' ) && defined( 'W
 		 *
 		 * @since 0.3.0
 		 *
-		 * @param int    $cursor Row cursor (meta_id).
-		 * @param string $raw    Raw meta value (the storage's JSON row).
+		 * @param int    $cursor Row cursor (row id).
+		 * @param string $raw    Raw stored value (the storage's JSON row).
 		 * @return array{cursor: int, summary: string} Row summary.
 		 */
 		private function summarize_row( int $cursor, string $raw ): array {

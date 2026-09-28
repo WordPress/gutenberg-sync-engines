@@ -14,6 +14,7 @@ import type {
 } from '@wordpress/sync';
 import { applyServerAwarenessStates } from '../awareness-sync';
 import { SyncUpdateType } from '../../providers/http-polling/types';
+import type { TransportSessionExtensions } from '../../providers/session-extensions';
 import {
 	base64ToUint8Array,
 	createSyncUpdate,
@@ -49,7 +50,9 @@ export const YJS_SERVER_SNAPSHOT_TYPE = 'snapshot';
  * The yjs-server session codec: EngineSessionCodec plus the transport
  * capabilities this engine declares.
  */
-export interface YjsServerSessionCodec extends EngineSessionCodec {
+export interface YjsServerSessionCodec
+	extends EngineSessionCodec,
+		Pick< TransportSessionExtensions, 'onRoomRestart' > {
 	/**
 	 * Transport capability: flush queued updates even with no collaborator
 	 * present. The SERVER's document is the source of truth for every
@@ -59,7 +62,6 @@ export interface YjsServerSessionCodec extends EngineSessionCodec {
 	 * back to the room's stale state. Ingest is idempotent (redelivered
 	 * updates settle as benign already-merged voids), so solo sends are safe.
 	 */
-	syncWhileSolo: true;
 }
 
 /**
@@ -112,6 +114,20 @@ export function createYjsServerSessionCodec(
 
 	let localUpdateListener: EngineLocalUpdateListener | null = null;
 	let isDocListenerAttached = false;
+	// The first snapshot this session received, byte for byte. A room
+	// restart whose genesis is identical to it is safe to rejoin (the
+	// server builds genesis deterministically, so an unchanged saved post
+	// yields the same items and a full-state upload is an ordinary merge).
+	let firstSnapshotData: string | null = null;
+
+	function snapshotDocData( update: EngineUpdate ): string | null {
+		try {
+			const decoded = JSON.parse( update.data );
+			return 'string' === typeof decoded?.doc ? decoded.doc : null;
+		} catch {
+			return null;
+		}
+	}
 
 	function onDocUpdate( update: Uint8Array, origin: unknown ): void {
 		if ( YJS_SERVER_SESSION_ORIGIN === origin ) {
@@ -132,6 +148,9 @@ export function createYjsServerSessionCodec(
 				try {
 					const decoded = JSON.parse( update.data );
 					if ( 'string' === typeof decoded?.doc ) {
+						if ( null === firstSnapshotData ) {
+							firstSnapshotData = decoded.doc;
+						}
 						Y.applyUpdateV2(
 							doc,
 							base64ToUint8Array( decoded.doc ),
@@ -165,7 +184,6 @@ export function createYjsServerSessionCodec(
 		clientId: doc.clientID,
 		engineSlug: YJS_SERVER_ENGINE_SLUG,
 		engineProtocol: YJS_SERVER_ENGINE_PROTOCOL,
-		syncWhileSolo: true,
 		// The server compacts by itself and never nominates a client, so
 		// the optional compaction members are omitted. Unknown-outcome
 		// recovery re-sends full state; the server stores only what it was
@@ -195,5 +213,31 @@ export function createYjsServerSessionCodec(
 			}
 		},
 		receiveUpdate: ( update ) => processDocUpdate( update ),
+		/*
+		 * Room restart: the client's Y.Doc is bound to the editor and
+		 * cannot be replaced, and two documents built separately can only
+		 * be merged when they share their genesis items. If the new genesis
+		 * is byte-identical to the one this session started from (the
+		 * saved post did not change), rejoin: the initial full-state upload
+		 * re-establishes local edits as an ordinary merge. Otherwise the
+		 * new genesis reuses the fixed genesis client id with DIFFERENT
+		 * content — merging would corrupt, not merge — so the session
+		 * leaves the room and the editor keeps its edits as unsaved
+		 * changes.
+		 */
+		onRoomRestart: ( updates ) => {
+			const snapshot = updates.find(
+				( update ) => YJS_SERVER_SNAPSHOT_TYPE === update.type
+			);
+			const genesis = snapshot ? snapshotDocData( snapshot ) : null;
+			if (
+				null !== genesis &&
+				null !== firstSnapshotData &&
+				genesis === firstSnapshotData
+			) {
+				return 'rebootstrap';
+			}
+			return 'disconnect';
+		},
 	};
 }

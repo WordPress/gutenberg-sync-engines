@@ -88,6 +88,22 @@ and a fix for a login race in a test helper we work around locally.
 **Why they are waiting:** each means talking to another project, which
 is a person's job rather than an agent's.
 
+## Sending a lone editor's changes right away instead of holding them
+
+A tab editing alone holds its changes in the browser until another
+editor arrives, a save, or the tab going hidden. The simpler design
+sends them after the usual short delay: it removes the save middleware,
+the hidden-tab flush, the pause state, and the waiters, and it makes
+each change durable sooner. The cost is one request per typing burst
+while alone.
+
+**Why it is waiting:** holding is the shape the "discard" unsaved-changes
+policy needs ([room-lifetime.md](room-lifetime.md)), where a room follows
+saves and unsaved work is exactly what the editor's own warning says it
+is. Reviewers were right that sending is simpler; we chose holding on
+purpose. If the policy flips to "keep", take the simplification in the
+same change.
+
 ## New engines, new transports, and two pieces of interface
 
 Not planned. The history slider and the hover-to-see-who-wrote-this

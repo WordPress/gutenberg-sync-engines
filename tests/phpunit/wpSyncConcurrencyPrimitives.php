@@ -53,7 +53,7 @@ class Tests_Collaboration_WpSyncConcurrencyPrimitives extends WP_UnitTestCase {
 	}
 
 	private function engine(): WP_De_RTC_Engine {
-		return new WP_De_RTC_Engine( new WP_Sync_Post_Meta_Storage() );
+		return new WP_De_RTC_Engine( new WP_Sync_Table_Storage() );
 	}
 
 	/**
@@ -168,18 +168,18 @@ class Tests_Collaboration_WpSyncConcurrencyPrimitives extends WP_UnitTestCase {
 	public function test_lost_claim_reloads_and_remerges() {
 		$stale = $this->engine();
 		// Load canonical (v1) into the stale engine's per-request cache.
-		$this->assertSame( self::GENESIS_CONTENT, $stale->materialize( $this->room() ) );
+		$this->assertSame( $this->genesis(), $stale->materialize( $this->room() ) );
 
 		// A concurrent request (fresh engine, same DB) commits first: v2.
 		$winner   = $this->engine();
-		$proposed = str_replace( 'Beta block original text.', 'Beta block edited by winner.', self::GENESIS_CONTENT );
+		$proposed = str_replace( 'Beta block original text.', 'Beta block edited by winner.', $this->genesis() );
 		$result   = $winner->handle_updates( $this->room(), 101, 0, array( $this->proposal( 'p-winner', 'v1', $proposed ) ), array() );
 		$this->assertSame( 'applied', $result['dispositions'][0]['status'] );
 		$this->assertSame( 'v2', $result['dispositions'][0]['version'] );
 
 		// The stale engine now ingests a proposal merged against its cached
 		// v1 state. Its first claim must lose, then reload and re-merge.
-		$proposed2 = str_replace( 'Alpha block original text.', 'Alpha block edited by loser.', self::GENESIS_CONTENT );
+		$proposed2 = str_replace( 'Alpha block original text.', 'Alpha block edited by loser.', $this->genesis() );
 		$result2   = $stale->handle_updates( $this->room(), 102, 0, array( $this->proposal( 'p-loser', 'v1', $proposed2 ) ), array( 'debug' => true ) );
 
 		$this->assertNotWPError( $result2 );
@@ -198,12 +198,12 @@ class Tests_Collaboration_WpSyncConcurrencyPrimitives extends WP_UnitTestCase {
 	 */
 	public function test_orphaned_claim_is_taken_over() {
 		$engine = $this->engine();
-		$this->assertSame( self::GENESIS_CONTENT, $engine->materialize( $this->room() ) );
+		$this->assertSame( $this->genesis(), $engine->materialize( $this->room() ) );
 
 		// Simulate: someone claimed v2 and crashed before add_row, 20s ago.
 		WP_Sync_Atomic_Option::reset( $this->claim_name(), '2:' . sprintf( '%.6F', microtime( true ) - 20 ) );
 
-		$proposed = str_replace( 'Alpha block original text.', 'Alpha healed after orphan.', self::GENESIS_CONTENT );
+		$proposed = str_replace( 'Alpha block original text.', 'Alpha healed after orphan.', $this->genesis() );
 		$result   = $engine->handle_updates( $this->room(), 103, 0, array( $this->proposal( 'p-heal', 'v1', $proposed ) ), array() );
 
 		$this->assertNotWPError( $result );
@@ -217,11 +217,11 @@ class Tests_Collaboration_WpSyncConcurrencyPrimitives extends WP_UnitTestCase {
 	 */
 	public function test_fresh_foreign_claim_returns_retryable_busy() {
 		$engine = $this->engine();
-		$this->assertSame( self::GENESIS_CONTENT, $engine->materialize( $this->room() ) );
+		$this->assertSame( $this->genesis(), $engine->materialize( $this->room() ) );
 
 		WP_Sync_Atomic_Option::reset( $this->claim_name(), '2:' . sprintf( '%.6F', microtime( true ) ) );
 
-		$proposed = str_replace( 'Alpha block original text.', 'Alpha never lands.', self::GENESIS_CONTENT );
+		$proposed = str_replace( 'Alpha block original text.', 'Alpha never lands.', $this->genesis() );
 		$result   = $engine->handle_updates( $this->room(), 104, 0, array( $this->proposal( 'p-busy', 'v1', $proposed ) ), array() );
 
 		$this->assertWPError( $result );
@@ -238,13 +238,23 @@ class Tests_Collaboration_WpSyncConcurrencyPrimitives extends WP_UnitTestCase {
 		WP_Sync_Atomic_Option::reset( $this->claim_name(), '47:' . sprintf( '%.6F', microtime( true ) ) );
 
 		$engine = $this->engine();
-		$this->assertSame( self::GENESIS_CONTENT, $engine->materialize( $this->room() ), 'Genesis must run normally.' );
+		$this->assertSame( $this->genesis(), $engine->materialize( $this->room() ), 'Genesis must run normally.' );
 		$this->assertStringStartsWith( '1:', (string) WP_Sync_Atomic_Option::read( $this->claim_name() ), 'Genesis must re-seed the claim to its own seq.' );
 
-		$proposed = str_replace( 'Alpha block original text.', 'Alpha after reseed.', self::GENESIS_CONTENT );
+		$proposed = str_replace( 'Alpha block original text.', 'Alpha after reseed.', $this->genesis() );
 		$result   = $engine->handle_updates( $this->room(), 105, 0, array( $this->proposal( 'p-reseed', 'v1', $proposed ) ), array() );
 		$this->assertNotWPError( $result );
 		$this->assertSame( 'applied', $result['dispositions'][0]['status'] );
 		$this->assertSame( 'v2', $result['dispositions'][0]['version'] );
+	}
+
+	/**
+	 * The room's genesis content: the saved post with every block stamped
+	 * with its deterministic identity (what the room actually serves).
+	 *
+	 * @return string Stamped genesis content.
+	 */
+	private function genesis(): string {
+		return WP_De_RTC_Block_Identity::stamp_genesis( self::GENESIS_CONTENT, self::$post_id );
 	}
 }

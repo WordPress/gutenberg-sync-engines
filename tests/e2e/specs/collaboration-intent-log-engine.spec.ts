@@ -9,7 +9,7 @@ import type { RequestUtils } from '@wordpress/e2e-test-utils-playwright';
 import { test, expect } from '../config/collaboration-fixtures';
 // The engine's deterministic genesis id function (vector-pinned against the
 // PHP twin) — imported directly so the spec asserts EXACT id agreement.
-import { genesisSyncId } from '../../../src/engines/intent-log/sync-id.js';
+import { genesisSyncId } from '../../js/engines/intent-log/genesis-sync-id.js';
 
 /**
  * Two-client collaboration through the intent-log sync engine.
@@ -58,7 +58,7 @@ async function setSyncEngine(
 	} );
 }
 
-test.describe( 'Collaboration - intent-log engine', () => {
+test.describe( 'Collaboration - intent-log engine @engine-intent-log', () => {
 	// Per TEST, after fixture setup: the collaboration fixture's
 	// writing-form toggle must never be able to wipe the engine selection
 	// between the flip and the pages loading.
@@ -655,7 +655,17 @@ test.describe( 'Collaboration - intent-log engine', () => {
 				{ content: 'Newborn block settled' }
 			);
 		} );
+		// saveDraft() resolves on a "Draft saved" notice, and the first
+		// save's notice is still up; wait for this save's own response
+		// (a lone tab flushes its held work through the room first).
+		const saved = page1.waitForResponse(
+			( response ) =>
+				decodeURIComponent( response.url() ).includes(
+					`/wp/v2/posts/${ post.id }`
+				) && 'POST' === response.request().method()
+		);
 		await editor.saveDraft();
+		await saved;
 		const settledSave = await requestUtils.rest< {
 			content: { raw: string };
 		} >( {
@@ -1602,10 +1612,12 @@ test.describe( 'Collaboration - intent-log engine', () => {
 		// endless 409 retry loop. The suite's afterAll deletes the option.
 		await setSyncEngine( requestUtils, 'yjs-server' );
 
+		// Tabs connected over the advisory channel poll on demand plus a
+		// 25 s safety poll, so the fence is noticed within that window.
 		for ( const page of [ page1, page2 ] ) {
 			await expect(
 				page.getByText( 'Collaboration settings changed' )
-			).toBeVisible( { timeout: 15000 } );
+			).toBeVisible( { timeout: 35000 } );
 		}
 	} );
 

@@ -2,6 +2,7 @@
  * Internal dependencies
  */
 import { makeBlock } from './intent-log/document.js';
+import type { BlockSpec } from './intent-log/document.js';
 import { applyIntent } from './intent-log/reducer.js';
 import { mintSyncId } from './intent-log/sync-id.js';
 import { fieldToHtml, htmlToField } from './intent-log/rich-text.js';
@@ -266,7 +267,7 @@ export function blockToEngineSpec(
 	raw?: RawContentAdapter,
 	saveMarkup?: SaveMarkupAdapter,
 	sources?: Map< Record< string, unknown >, BridgeBlock >
-): Record< string, unknown > {
+): BlockSpec {
 	const attributes = { ...block.attributes };
 	const metadata = {
 		...( attributes.metadata as Record< string, unknown > | undefined ),
@@ -295,7 +296,7 @@ export function blockToEngineSpec(
 	}
 
 	const fields: Record< string, EngineField > = {};
-	let children: Array< Record< string, unknown > >;
+	let children: BlockSpec[];
 	if ( raw?.is( block.name ) ) {
 		/*
 		 * Raw-content block: the markup lives in innerContent, not any
@@ -368,7 +369,7 @@ export function blockToEngineSpec(
 		}
 	}
 
-	const spec: Record< string, unknown > = {
+	const spec: BlockSpec = {
 		syncId,
 		blockType: block.name,
 		attrs,
@@ -479,7 +480,7 @@ interface FlatEntry {
  * @return The accumulator.
  */
 function flattenSpecs(
-	specs: Array< Record< string, unknown > >,
+	specs: BlockSpec[],
 	parentId: string | null,
 	into: Map< string, FlatEntry >
 ): Map< string, FlatEntry > {
@@ -487,11 +488,7 @@ function flattenSpecs(
 	for ( const spec of specs ) {
 		const syncId = spec.syncId as string;
 		into.set( syncId, { parentId, previousId, spec } );
-		flattenSpecs(
-			( spec.children as Array< Record< string, unknown > > ) ?? [],
-			syncId,
-			into
-		);
+		flattenSpecs( ( spec.children as BlockSpec[] ) ?? [], syncId, into );
 		previousId = syncId;
 	}
 	return into;
@@ -736,7 +733,7 @@ function textsAreSimilar( a: string, b: string ): boolean {
 }
 
 function adoptExistingIds(
-	specs: Array< Record< string, unknown > >,
+	specs: BlockSpec[],
 	docBlocks: EngineBlock[],
 	claimed: Set< string >,
 	eligible: Set< string >
@@ -806,7 +803,7 @@ function adoptExistingIds(
 			docBlocks.find( ( docBlock ) => docBlock.syncId === spec.syncId ) ??
 			docBlocks[ index ];
 		adoptExistingIds(
-			( spec.children as Array< Record< string, unknown > > ) ?? [],
+			( spec.children as BlockSpec[] ) ?? [],
 			counterpart?.children ?? [],
 			claimed,
 			eligible
@@ -815,15 +812,12 @@ function adoptExistingIds(
 }
 
 function collectSpecIds(
-	specs: Array< Record< string, unknown > >,
+	specs: BlockSpec[],
 	into: Set< string >
 ): Set< string > {
 	for ( const spec of specs ) {
 		into.add( spec.syncId as string );
-		collectSpecIds(
-			( spec.children as Array< Record< string, unknown > > ) ?? [],
-			into
-		);
+		collectSpecIds( ( spec.children as BlockSpec[] ) ?? [], into );
 	}
 	return into;
 }
@@ -851,7 +845,7 @@ function collectSpecIds(
  */
 function deriveSplitsAndMerges(
 	doc: EngineDocument,
-	specs: Array< Record< string, unknown > >,
+	specs: BlockSpec[],
 	options: DeriveOptions
 ): Array< { type: string; payload: Record< string, unknown > } > {
 	const intents: Array< {
@@ -868,10 +862,7 @@ function deriveSplitsAndMerges(
 	collect( doc.root );
 	const specIds = collectSpecIds( specs, new Set() );
 
-	const walkLevel = (
-		levelSpecs: Array< Record< string, unknown > >,
-		docBlocks: EngineBlock[]
-	) => {
+	const walkLevel = ( levelSpecs: BlockSpec[], docBlocks: EngineBlock[] ) => {
 		const docById = new Map(
 			docBlocks.map( ( block ) => [ block.syncId, block ] )
 		);
@@ -944,8 +935,7 @@ function deriveSplitsAndMerges(
 			// Recurse into matching children.
 			if ( docBlock ) {
 				walkLevel(
-					( spec.children as Array< Record< string, unknown > > ) ??
-						[],
+					( spec.children as BlockSpec[] ) ?? [],
 					docBlock.children
 				);
 			}
@@ -979,7 +969,7 @@ export function deriveIntents(
 	doc: EngineDocument,
 	blocks: BridgeBlock[],
 	options: DeriveOptions = {}
-): ( DerivedIntents & { specs: Array< Record< string, unknown > > } ) | null {
+): ( DerivedIntents & { specs: BlockSpec[] } ) | null {
 	const resolver = options.richTextFields ?? defaultRichTextFields;
 	const raw = options.rawContent;
 	const minted = new Set< string >();
@@ -1038,9 +1028,7 @@ export function deriveIntents(
 		}
 	};
 	indexDocBlocks( doc.root );
-	const fillUndefinedAttrs = (
-		specList: Array< Record< string, unknown > >
-	) => {
+	const fillUndefinedAttrs = ( specList: BlockSpec[] ) => {
 		for ( const spec of specList ) {
 			const attrs = spec.attrs as Record< string, unknown >;
 			const docBlock = docBlocksById.get( spec.syncId as string );
@@ -1054,9 +1042,7 @@ export function deriveIntents(
 					delete attrs[ key ];
 				}
 			}
-			fillUndefinedAttrs(
-				spec.children as Array< Record< string, unknown > >
-			);
+			fillUndefinedAttrs( spec.children as BlockSpec[] );
 		}
 	};
 	fillUndefinedAttrs( specs );
@@ -1071,9 +1057,7 @@ export function deriveIntents(
 	 * specs contribute nothing.
 	 */
 	const editorClientIds = new Map< string, string >();
-	const collectAssignedClientIds = (
-		specList: Array< Record< string, unknown > >
-	) => {
+	const collectAssignedClientIds = ( specList: BlockSpec[] ) => {
 		for ( const spec of specList ) {
 			const source = sources.get( spec );
 			const incomingId = (
@@ -1082,9 +1066,7 @@ export function deriveIntents(
 			if ( source?.clientId && spec.syncId !== incomingId ) {
 				editorClientIds.set( spec.syncId as string, source.clientId );
 			}
-			collectAssignedClientIds(
-				( spec.children as Array< Record< string, unknown > > ) ?? []
-			);
+			collectAssignedClientIds( ( spec.children as BlockSpec[] ) ?? [] );
 		}
 	};
 	collectAssignedClientIds( specs );
@@ -1100,9 +1082,7 @@ export function deriveIntents(
 	 * never read as a deletion.
 	 */
 	const authoredContentIds = new Set< string >();
-	const collectAuthoredContent = (
-		specList: Array< Record< string, unknown > >
-	) => {
+	const collectAuthoredContent = ( specList: BlockSpec[] ) => {
 		for ( const spec of specList ) {
 			const specFields = ( spec.fields ?? {} ) as Record<
 				string,
@@ -1114,9 +1094,7 @@ export function deriveIntents(
 			) {
 				authoredContentIds.add( spec.syncId as string );
 			}
-			collectAuthoredContent(
-				( spec.children as Array< Record< string, unknown > > ) ?? []
-			);
+			collectAuthoredContent( ( spec.children as BlockSpec[] ) ?? [] );
 		}
 	};
 	collectAuthoredContent( specs );
@@ -1481,16 +1459,14 @@ export function summarizeEditorTree(
 	const resolver = options.richTextFields ?? defaultRichTextFields;
 	const seenIds = new Set< string >();
 	const summary: EditorTreeSummary = { blocks: new Map() };
-	const collect = ( specs: Array< Record< string, unknown > > ) => {
+	const collect = ( specs: BlockSpec[] ) => {
 		for ( const spec of specs ) {
 			summary.blocks.set( spec.syncId as string, {
 				blockType: spec.blockType as string,
 				fields: ( spec.fields ?? {} ) as Record< string, EngineField >,
 				attrs: ( spec.attrs ?? {} ) as Record< string, unknown >,
 			} );
-			collect(
-				( spec.children as Array< Record< string, unknown > > ) ?? []
-			);
+			collect( ( spec.children as BlockSpec[] ) ?? [] );
 		}
 	};
 	collect(
@@ -1654,16 +1630,16 @@ function applyScratch(
  * @return Filtered specs.
  */
 function filterExcludedSpecs(
-	specs: Array< Record< string, unknown > >,
+	specs: BlockSpec[],
 	excludeIds: Set< string >
-): Array< Record< string, unknown > > {
-	const kept: Array< Record< string, unknown > > = [];
+): BlockSpec[] {
+	const kept: BlockSpec[] = [];
 	for ( const spec of specs ) {
 		if ( excludeIds.has( spec.syncId as string ) ) {
 			continue;
 		}
 		spec.children = filterExcludedSpecs(
-			( spec.children as Array< Record< string, unknown > > ) ?? [],
+			( spec.children as BlockSpec[] ) ?? [],
 			excludeIds
 		);
 		kept.push( spec );
@@ -1677,9 +1653,7 @@ function filterExcludedSpecs(
  * @param specs Engine block specs.
  * @return Engine document.
  */
-function specsToDocument(
-	specs: Array< Record< string, unknown > >
-): EngineDocument {
+function specsToDocument( specs: BlockSpec[] ): EngineDocument {
 	return { root: specs.map( ( spec ) => makeBlock( spec ) ) };
 }
 

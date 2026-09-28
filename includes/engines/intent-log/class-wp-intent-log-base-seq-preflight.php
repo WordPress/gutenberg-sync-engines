@@ -132,7 +132,7 @@ if ( ! class_exists( 'WP_Intent_Log_Base_Seq_Preflight' ) ) {
 				return $maybe_empty;
 			}
 			$post_id = isset( $postarr['ID'] ) ? (int) $postarr['ID'] : 0;
-			if ( $post_id <= 0 || ! class_exists( 'WP_Sync_Post_Meta_Storage' ) ) {
+			if ( $post_id <= 0 || ! interface_exists( 'WP_Sync_Storage' ) ) {
 				return $maybe_empty;
 			}
 

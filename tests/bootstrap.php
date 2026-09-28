@@ -73,4 +73,26 @@ tests_add_filter(
 	}
 );
 
+/*
+ * The plugin's storage tables. Activation hooks never fire under PHPUnit,
+ * and the WP test installer only recreates WordPress's own tables, so the
+ * plugin's tables persist across runs while the options table (with the
+ * recorded schema version) does not. The plugin's own upgrade path
+ * recreates them on `plugins_loaded`; this runs after it and EMPTIES them,
+ * so a row that escaped a previous run's transaction rollback cannot leak
+ * into this one (post ids restart at 1 every run, so stale rooms would
+ * collide). Outside any test transaction — dbDelta's DDL would commit one.
+ */
+tests_add_filter(
+	'plugins_loaded',
+	static function () {
+		if ( ! WP_Sync_Table_Schema::install() ) {
+			fwrite( STDERR, "Could not create the plugin's storage tables.\n" ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite
+			exit( 1 );
+		}
+		WP_Sync_Table_Schema::delete_all_rows();
+	},
+	20
+);
+
 require $gse_tests_dir . '/includes/bootstrap.php';

@@ -53,7 +53,7 @@ class Tests_Collaboration_WpDeRtcBlockConflictSalvage extends WP_UnitTestCase {
 	}
 
 	private function engine(): WP_De_RTC_Engine {
-		return new WP_De_RTC_Engine( new WP_Sync_Post_Meta_Storage() );
+		return new WP_De_RTC_Engine( new WP_Sync_Table_Storage() );
 	}
 
 	private function proposal( string $proposal_id, string $base_version, string $proposed, array $block_bases = array() ): array {
@@ -78,7 +78,7 @@ class Tests_Collaboration_WpDeRtcBlockConflictSalvage extends WP_UnitTestCase {
 			array_filter(
 				$response['updates'],
 				static function ( $update ) {
-					return WP_De_RTC_Engine::UPDATE_TYPE_PROPOSAL_PARKED === $update['type'];
+					return WP_De_RTC_Engine::UPDATE_TYPE_PARKED === $update['type'];
 				}
 			)
 		);
@@ -86,10 +86,10 @@ class Tests_Collaboration_WpDeRtcBlockConflictSalvage extends WP_UnitTestCase {
 
 	public function test_conflicting_block_parks_while_clean_block_lands() {
 		$engine = $this->engine();
-		$this->assertSame( self::GENESIS_CONTENT, $engine->materialize( $this->room() ) );
+		$this->assertSame( $this->genesis(), $engine->materialize( $this->room() ) );
 
 		// The session rewrites Alpha from v1.
-		$session = str_replace( 'Alpha block original text.', 'Alpha rewritten by the session.', self::GENESIS_CONTENT );
+		$session = str_replace( 'Alpha block original text.', 'Alpha rewritten by the session.', $this->genesis() );
 		$result  = $engine->handle_updates( $this->room(), 601, 0, array( $this->proposal( 'p-session', 'v1', $session ) ), array() );
 		$this->assertSame( 'applied', $result['dispositions'][0]['status'] );
 
@@ -98,7 +98,7 @@ class Tests_Collaboration_WpDeRtcBlockConflictSalvage extends WP_UnitTestCase {
 		$stale  = str_replace(
 			array( 'Alpha block original text.', 'Beta block original text.' ),
 			array( 'Alpha rewritten by the stale client.', 'Beta cleanly edited.' ),
-			self::GENESIS_CONTENT
+			$this->genesis()
 		);
 		$result = $engine->handle_updates( $this->room(), 602, 0, array( $this->proposal( 'p-stale', 'v1', $stale ) ), array() );
 
@@ -130,17 +130,17 @@ class Tests_Collaboration_WpDeRtcBlockConflictSalvage extends WP_UnitTestCase {
 	 */
 	public function test_per_block_base_merges_true_same_block_concurrency() {
 		$engine = $this->engine();
-		$this->assertSame( self::GENESIS_CONTENT, $engine->materialize( $this->room() ) );
+		$this->assertSame( $this->genesis(), $engine->materialize( $this->room() ) );
 
 		// A peer prefixes Alpha from v1 -> v2.
-		$peer   = str_replace( 'Alpha block original text.', 'Peer prefix. Alpha block original text.', self::GENESIS_CONTENT );
+		$peer   = str_replace( 'Alpha block original text.', 'Peer prefix. Alpha block original text.', $this->genesis() );
 		$result = $engine->handle_updates( $this->room(), 611, 0, array( $this->proposal( 'p-peer', 'v1', $peer ) ), array() );
 		$this->assertSame( 'applied', $result['dispositions'][0]['status'] );
 
 		// The LWW-class re-proposal: whole-doc base v2 (incorporated), but
 		// Alpha's text was built on v1 (suffix edit, ignorant of the
 		// peer's prefix) — declared honestly via blockBaseVersions.
-		$mine   = str_replace( 'Alpha block original text.', 'Alpha block original text. Client suffix.', self::GENESIS_CONTENT );
+		$mine   = str_replace( 'Alpha block original text.', 'Alpha block original text. Client suffix.', $this->genesis() );
 		$result = $engine->handle_updates(
 			$this->room(),
 			612,
@@ -163,13 +163,13 @@ class Tests_Collaboration_WpDeRtcBlockConflictSalvage extends WP_UnitTestCase {
 	 */
 	public function test_per_block_base_parks_true_overlap_instead_of_lww() {
 		$engine = $this->engine();
-		$this->assertSame( self::GENESIS_CONTENT, $engine->materialize( $this->room() ) );
+		$this->assertSame( $this->genesis(), $engine->materialize( $this->room() ) );
 
-		$peer   = str_replace( 'Alpha block original text.', 'Alpha rewritten by the peer.', self::GENESIS_CONTENT );
+		$peer   = str_replace( 'Alpha block original text.', 'Alpha rewritten by the peer.', $this->genesis() );
 		$result = $engine->handle_updates( $this->room(), 613, 0, array( $this->proposal( 'p-peer', 'v1', $peer ) ), array() );
 		$this->assertSame( 'applied', $result['dispositions'][0]['status'] );
 
-		$mine   = str_replace( 'Alpha block original text.', 'Alpha rewritten by me.', self::GENESIS_CONTENT );
+		$mine   = str_replace( 'Alpha block original text.', 'Alpha rewritten by me.', $this->genesis() );
 		$result = $engine->handle_updates(
 			$this->room(),
 			614,
@@ -197,13 +197,13 @@ class Tests_Collaboration_WpDeRtcBlockConflictSalvage extends WP_UnitTestCase {
 	 */
 	public function test_without_block_bases_the_lww_residual_remains() {
 		$engine = $this->engine();
-		$this->assertSame( self::GENESIS_CONTENT, $engine->materialize( $this->room() ) );
+		$this->assertSame( $this->genesis(), $engine->materialize( $this->room() ) );
 
-		$peer   = str_replace( 'Alpha block original text.', 'Alpha rewritten by the peer.', self::GENESIS_CONTENT );
+		$peer   = str_replace( 'Alpha block original text.', 'Alpha rewritten by the peer.', $this->genesis() );
 		$result = $engine->handle_updates( $this->room(), 615, 0, array( $this->proposal( 'p-peer', 'v1', $peer ) ), array() );
 		$this->assertSame( 'applied', $result['dispositions'][0]['status'] );
 
-		$mine   = str_replace( 'Alpha block original text.', 'Alpha rewritten by me.', self::GENESIS_CONTENT );
+		$mine   = str_replace( 'Alpha block original text.', 'Alpha rewritten by me.', $this->genesis() );
 		$result = $engine->handle_updates( $this->room(), 616, 0, array( $this->proposal( 'p-mine', 'v2', $mine ) ), array() );
 		$this->assertSame( 'applied', $result['dispositions'][0]['status'] );
 
@@ -213,7 +213,7 @@ class Tests_Collaboration_WpDeRtcBlockConflictSalvage extends WP_UnitTestCase {
 
 	public function test_structural_conflict_keeps_the_whole_proposal_fallback() {
 		$engine = $this->engine();
-		$this->assertSame( self::GENESIS_CONTENT, $engine->materialize( $this->room() ) );
+		$this->assertSame( $this->genesis(), $engine->materialize( $this->room() ) );
 
 		// The session removes Beta (structure changes).
 		$session = "<!-- wp:paragraph -->\n<p>Alpha rewritten by the session.</p>\n<!-- /wp:paragraph -->";
@@ -221,15 +221,61 @@ class Tests_Collaboration_WpDeRtcBlockConflictSalvage extends WP_UnitTestCase {
 		$this->assertSame( 'applied', $result['dispositions'][0]['status'] );
 
 		// A stale client rewrites Alpha differently against the removed
-		// structure: positional alignment lies, so salvage must refuse.
-		$stale  = str_replace( 'Alpha block original text.', 'Alpha rewritten by the stale client.', self::GENESIS_CONTENT );
+		// structure. Identity sees through the structural change (Beta's
+		// deletion is untouched by the stale client, so it stands) and
+		// resolves the one true conflict per block: canonical keeps the
+		// session's Alpha, the stale client's Alpha parks.
+		$stale  = str_replace( 'Alpha block original text.', 'Alpha rewritten by the stale client.', $this->genesis() );
 		$result = $engine->handle_updates( $this->room(), 604, 0, array( $this->proposal( 'p-stale', 'v1', $stale ) ), array() );
 
 		$disposition = $result['dispositions'][0];
-		$this->assertSame( 'escalated', $disposition['status'], 'Structural divergence keeps the whole-proposal escalation.' );
-		$this->assertSame( 'manual-conflict-required', $disposition['reason'] );
+		$this->assertSame( 'applied', $disposition['status'] );
+		$this->assertSame( 1, $disposition['parkedBlocks'] );
 
 		$final = $this->engine()->materialize( $this->room() );
 		$this->assertStringNotContainsString( 'Alpha rewritten by the stale client.', $final );
+		$this->assertStringContainsString( 'Alpha rewritten by the session.', $final );
+		$this->assertStringNotContainsString( 'Beta', $final, 'The session\'s deletion stands.' );
+
+		$parked = array_filter(
+			$this->engine()->get_updates_since( $this->room(), 999, 0, array() )['updates'],
+			static function ( array $row ): bool {
+				return WP_De_RTC_Engine::UPDATE_TYPE_PARKED === $row['type'];
+			}
+		);
+		$this->assertCount( 1, $parked );
+		$row = json_decode( array_values( $parked )[0]['data'], true );
+		$this->assertSame( 'p-stale', $row['proposalId'] );
+		$this->assertStringContainsString( 'Alpha rewritten by the stale client.', $row['changedBlocks'][0]['html'] );
+	}
+
+	public function test_content_identity_cannot_model_keeps_the_whole_proposal_fallback() {
+		$engine = $this->engine();
+		$this->assertSame( $this->genesis(), $engine->materialize( $this->room() ) );
+
+		$session = str_replace( 'Alpha block original text.', 'Alpha rewritten by the session.', $this->genesis() );
+		$result  = $engine->handle_updates( $this->room(), 605, 0, array( $this->proposal( 'p-session', 'v1', $session ) ), array() );
+		$this->assertSame( 'applied', $result['dispositions'][0]['status'] );
+
+		// Classic content between blocks: identity declines, per-block
+		// extraction is unavailable, and the positional policy stands —
+		// the whole proposal escalates.
+		$stale  = "Classic text between blocks.\n\n" . str_replace( 'Alpha block original text.', 'Alpha rewritten by the stale client.', $this->genesis() );
+		$result = $engine->handle_updates( $this->room(), 606, 0, array( $this->proposal( 'p-stale', 'v1', $stale ) ), array() );
+
+		$disposition = $result['dispositions'][0];
+		$this->assertSame( 'escalated', $disposition['status'] );
+		$this->assertSame( 'manual-conflict-required', $disposition['reason'] );
+		$this->assertStringNotContainsString( 'Alpha rewritten by the stale client.', $this->engine()->materialize( $this->room() ) );
+	}
+
+	/**
+	 * The room's genesis content: the saved post with every block stamped
+	 * with its deterministic identity (what the room actually serves).
+	 *
+	 * @return string Stamped genesis content.
+	 */
+	private function genesis(): string {
+		return WP_De_RTC_Block_Identity::stamp_genesis( self::GENESIS_CONTENT, self::$post_id );
 	}
 }

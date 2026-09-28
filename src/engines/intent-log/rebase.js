@@ -21,12 +21,112 @@ import { locateBlock, subtreeContains } from './document.js';
 import { IntentTypes, TEXT_INTENT_TYPES, withPayload } from './intents.js';
 import { applyIntent, replay } from './reducer.js';
 
+/** @typedef {import('./engine-types').EngineDocument} EngineDocument */
+/** @typedef {import('./engine-types').IntentEnvelope} IntentEnvelope */
+/** @typedef {import('./engine-types').IntentDisposition} IntentDisposition */
+/** @typedef {import('./engine-types').IntentProposal} IntentProposal */
+/** @typedef {import('./engine-types').PlanRow} PlanRow */
+/** @typedef {import('./engine-types').LogReplica} LogReplica */
+/** @typedef {import('./engine-types').IntentLogServer} IntentLogServer */
+
+/**
+ * An intent whose payload fields are read by name. Payload shapes vary per
+ * intent type (see intents.js), so the transform reads them dynamically;
+ * every IntentEnvelope satisfies this type. (The reducer reads the same
+ * fields through the strict IntentPayload; here every rebased envelope
+ * flows back through withPayload as a plain IntentEnvelope, so the strict
+ * type would need a cast at each of ~17 sites.)
+ *
+ * @typedef {IntentEnvelope & { payload: Record<string, any> }} Intent
+ */
+
+/** @typedef {import('./document.js').BlockSpec} BlockSpec */
+
+/**
+ * Outcome of transforming an intent over priors: clean (with the transformed
+ * intent), or set aside. Non-clean outcomes of rebaseIntent/planBatch also
+ * carry `atSeq`, the absolute log index of the prior that settled them.
+ *
+ * @typedef {Object} CleanOutcome
+ * @property {'clean'}   outcome  Outcome.
+ * @property {Intent}    intent   The intent, transformed over the priors.
+ * @property {undefined} [reason] Never set.
+ * @property {undefined} [atSeq]  Never set.
+ */
+
+/**
+ * @typedef {Object} TransformSettled
+ * @property {'escalate'|'void'} outcome Outcome.
+ * @property {Intent}            intent  The intent as transformed so far.
+ * @property {string}            reason  Escalation or void reason.
+ */
+
+/**
+ * @typedef {CleanOutcome|TransformSettled} TransformResult
+ */
+
+/**
+ * @typedef {Object} EscalateOutcome
+ * @property {'escalate'} outcome Outcome.
+ * @property {Intent}     intent  The intent as transformed so far.
+ * @property {string}     reason  Escalation reason (ESCALATION_REASONS).
+ * @property {number}     atSeq   Log index of the settling prior.
+ */
+
+/**
+ * @typedef {Object} VoidOutcome
+ * @property {'void'} outcome Outcome.
+ * @property {Intent} intent  The intent as transformed so far.
+ * @property {string} reason  Void reason.
+ * @property {number} atSeq   Log index of the settling prior.
+ */
+
+/**
+ * @typedef {CleanOutcome|EscalateOutcome|VoidOutcome} RebaseOutcome
+ */
+
+/**
+ * A frame key's own-write record (see createFrameState).
+ *
+ * @typedef {{ state: 'applied', atSeq?: undefined }
+ *   | { state: 'phantom', atSeq: number }} OwnWrite
+ */
+
+/**
+ * Per-batch frame state (see createFrameState).
+ *
+ * @typedef {Object} FrameState
+ * @property {Map<string, OwnWrite>} ownWrites Frame key → own-write record.
+ * @property {Map<string, number>}   broken    Block id → settling log index.
+ */
+
+/**
+ * ( frameKey ) → log index of the first overlapping other-actor frame write
+ * at or after the intent's baseSeq, or null.
+ *
+ * @typedef {( key: string ) => number|null} FirstRemoteSeq
+ */
+
+/**
+ * @param {Intent} intent Intent.
+ * @return {CleanOutcome} Clean outcome.
+ */
 const clean = ( intent ) => ( { outcome: 'clean', intent } );
+/**
+ * @param {Intent} intent Intent.
+ * @param {string} reason Escalation reason.
+ * @return {TransformSettled} Escalate outcome.
+ */
 const escalate = ( intent, reason ) => ( {
 	outcome: 'escalate',
 	intent,
 	reason,
 } );
+/**
+ * @param {Intent} intent Intent.
+ * @param {string} reason Void reason.
+ * @return {TransformSettled} Void outcome.
+ */
 const voidOut = ( intent, reason ) => ( {
 	outcome: 'void',
 	intent,
@@ -55,7 +155,7 @@ export const ESCALATION_REASONS = new Set( [
  * Block ids that must survive for the intent to remain applicable
  * (escalation rule 1: target or required ancestor deleted).
  *
- * @param {Object} intent Intent.
+ * @param {Intent} intent Intent.
  * @return {string[]} Required block ids.
  */
 function requiredTargets( intent ) {
@@ -120,7 +220,7 @@ export function frameKeysOverlap( a, b ) {
  * so a format range under a stale frame may drift. That imprecision is
  * cosmetic and recoverable; content placement is not.
  *
- * @param {Object} intent Intent.
+ * @param {Intent} intent Intent.
  * @return {string[]} Frame keys the payload depends on.
  */
 export function frameReadTargets( intent ) {
@@ -148,7 +248,7 @@ export function frameReadTargets( intent ) {
  * Frame keys an intent WRITES (shifts, splits, merges, or replaces),
  * invalidating offsets authored before it.
  *
- * @param {Object} intent Intent.
+ * @param {Intent} intent Intent.
  * @return {string[]} Frame keys the intent changes.
  */
 export function frameWriteTargets( intent ) {
@@ -175,6 +275,11 @@ export function frameWriteTargets( intent ) {
 	}
 }
 
+/**
+ * @param {BlockSpec} blockPayload Block spec (insert_block payload).
+ * @param {string[]}  into         Accumulator.
+ * @return {string[]} `into`, with the subtree's ids appended.
+ */
 function collectBlockIds( blockPayload, into ) {
 	into.push( blockPayload.syncId );
 	for ( const child of blockPayload.children ?? [] ) {
@@ -187,7 +292,7 @@ function collectBlockIds( blockPayload, into ) {
  * Block ids an intent brings into existence. If the intent does not apply,
  * these ids exist only in its author's local (phantom) state.
  *
- * @param {Object} intent Intent.
+ * @param {Intent} intent Intent.
  * @return {string[]} Created block ids.
  */
 export function createdIds( intent ) {
@@ -224,7 +329,7 @@ export function createdIds( intent ) {
  *   apply. Anything addressing them (with a baseSeq predating the
  *   settlement) references structure the server never had.
  *
- * @return {Object} Frame state.
+ * @return {FrameState} Frame state.
  */
 export function createFrameState() {
 	return { ownWrites: new Map(), broken: new Map() };
@@ -243,14 +348,16 @@ export function createFrameState() {
  * earlier member that fails outright needs no check here — rule 4 already
  * escalates the whole unit.)
  *
- * @param {Object[]} members        The unit's intents, ORIGINAL payloads.
- * @param {number}   index          Member being checked.
- * @param {Function} firstRemoteSeq ( frameKey ) → first overlapping
- *                                  other-actor frame write at/after the
- *                                  member's baseSeq, or null.
+ * @param {Intent[]}       members        The unit's intents, ORIGINAL
+ *                                        payloads.
+ * @param {number}         index          Member being checked.
+ * @param {FirstRemoteSeq} firstRemoteSeq ( frameKey ) → first overlapping
+ *                                        other-actor frame write at/after
+ *                                        the member's baseSeq, or null.
  * @return {number|null} The conflicting remote write's log index, or null.
  */
 export function intraUnitConflictSeq( members, index, firstRemoteSeq ) {
+	/** @type {Set<string>} */
 	const priorWrites = new Set();
 	for ( let k = 0; k < index; k++ ) {
 		for ( const id of frameWriteTargets( members[ k ] ) ) {
@@ -281,12 +388,16 @@ export function intraUnitConflictSeq( members, index, firstRemoteSeq ) {
  * the earliest trigger, so any other choice would be delivery-dependent and
  * break prediction parity.
  *
- * @param {Object[]} outcomes    Per-member outcomes carrying
- *                               { outcome|kind, atSeq }.
- * @param {Function} isEscalated ( outcome ) → boolean.
- * @return {Object|null} The settling outcome, or null.
+ * @template T
+ * @template {T & { atSeq: number }} E
+ * @param {T[]}                            outcomes    Per-member outcomes
+ *                                                     carrying
+ *                                                     { outcome|kind, atSeq }.
+ * @param {( outcome: T ) => outcome is E} isEscalated ( outcome ) → boolean.
+ * @return {E|null} The settling outcome, or null.
  */
 export function unitEscalation( outcomes, isEscalated ) {
+	/** @type {E|null} */
 	let best = null;
 	for ( const outcome of outcomes ) {
 		if ( ! isEscalated( outcome ) ) {
@@ -316,12 +427,14 @@ export function unitEscalation( outcomes, isEscalated ) {
  * an intent authored AFTER its author observed the settling entry was
  * authored on a frame with the phantom already dropped, and is clean.
  *
- * @param {Object}   frame          Frame state (createFrameState).
- * @param {Object}   intent         Intent, with its ORIGINAL payload.
- * @param {Function} firstRemoteSeq ( frameKey ) → log index of the first
- *                                  overlapping other-actor frame write at
- *                                  or after intent.baseSeq, or null.
- * @return {Object|null} { reason, atSeq }, or null.
+ * @param {FrameState}     frame          Frame state (createFrameState).
+ * @param {Intent}         intent         Intent, with its ORIGINAL payload.
+ * @param {FirstRemoteSeq} firstRemoteSeq ( frameKey ) → log index of the
+ *                                        first overlapping other-actor
+ *                                        frame write at or after
+ *                                        intent.baseSeq, or null.
+ * @return {{ reason: string, atSeq: number }|null} { reason, atSeq }, or
+ *                                                   null.
  */
 export function frameEscalation( frame, intent, firstRemoteSeq ) {
 	for ( const id of requiredTargets( intent ) ) {
@@ -333,6 +446,7 @@ export function frameEscalation( frame, intent, firstRemoteSeq ) {
 	for ( const key of frameReadTargets( intent ) ) {
 		// Overlap-aware lookup: a block-wide write covers every field key
 		// of that block and vice versa.
+		/** @type {number|null} */
 		let phantomAt = null;
 		let hasApplied = false;
 		for ( const [ ownKey, own ] of frame.ownWrites ) {
@@ -370,8 +484,8 @@ export function frameEscalation( frame, intent, firstRemoteSeq ) {
  * sides drop the effect identically, and any text-frame divergence it could
  * mask is already caught by the frame-conflict rule.
  *
- * @param {Object}      frame   Frame state.
- * @param {Object}      intent  Intent, with its ORIGINAL payload.
+ * @param {FrameState}  frame   Frame state.
+ * @param {Intent}      intent  Intent, with its ORIGINAL payload.
  * @param {boolean}     applied Whether the intent survived rebase cleanly.
  * @param {number|null} atSeq   Log index of the settling entry when not
  *                              applied.
@@ -396,7 +510,12 @@ export function recordFrameOutcome( frame, intent, applied, atSeq = null ) {
 	}
 }
 
-// A point position carried by the intent, or null.
+/**
+ * A point position carried by the intent, or null.
+ *
+ * @param {Intent} intent Intent.
+ * @return {number|null} Offset, or null.
+ */
 function pointOf( intent ) {
 	if ( intent.type === IntentTypes.INSERT_TEXT ) {
 		return intent.payload.offset;
@@ -407,10 +526,19 @@ function pointOf( intent ) {
 	return null;
 }
 
+/**
+ * @param {Intent} intent Intent.
+ * @param {number} point  New offset.
+ * @return {Intent} Transformed intent.
+ */
 function withPoint( intent, point ) {
 	return withPayload( intent, { offset: point } );
 }
 
+/**
+ * @param {Intent} intent Intent.
+ * @return {boolean} Whether the intent carries a { start, end } range.
+ */
 function hasRange( intent ) {
 	return (
 		intent.type === IntentTypes.DELETE_TEXT ||
@@ -424,7 +552,7 @@ function hasRange( intent ) {
  * (text family ops and split; the ops whose payloads a concurrent frame
  * write can invalidate).
  *
- * @param {Object} intent Intent.
+ * @param {Intent} intent Intent.
  * @param {string} syncId Block id.
  * @param {string} field  Field name.
  * @return {boolean} Whether the intent targets that exact text frame.
@@ -442,7 +570,7 @@ function targetsTextOf( intent, syncId, field ) {
  * Whether the intent addresses any text content of the given block,
  * whatever the field (used when the whole block disappears in a merge).
  *
- * @param {Object} intent Intent.
+ * @param {Intent} intent Intent.
  * @param {string} syncId Block id.
  * @return {boolean} Whether the intent targets any field of that block.
  */
@@ -458,12 +586,13 @@ function targetsAnyTextOf( intent, syncId ) {
 /**
  * Transforms `intent` over one accepted prior from another actor.
  *
- * @param {Object} intent Intent being rebased.
- * @param {Object} prior  Accepted prior intent (other actor).
- * @param {Object} doc    Document state immediately BEFORE `prior` applied
- *                        (needed for subtree checks and actual merge
- *                        offsets).
- * @return {Object} { outcome: 'clean'|'escalate'|'void', intent, reason? }.
+ * @param {Intent}         intent Intent being rebased.
+ * @param {Intent}         prior  Accepted prior intent (other actor).
+ * @param {EngineDocument} doc    Document state immediately BEFORE `prior`
+ *                                applied (needed for subtree checks and
+ *                                actual merge offsets).
+ * @return {TransformResult} { outcome: 'clean'|'escalate'|'void', intent,
+ *                           reason? }.
  */
 function transformOne( intent, prior, doc ) {
 	const { type, payload } = intent;
@@ -674,6 +803,7 @@ function transformOne( intent, prior, doc ) {
 					? priorPayload.text.length
 					: 0;
 			const isReplace = prior.type === IntentTypes.REPLACE_TEXT;
+			/** @param {number} position */
 			const mapPosition = ( position ) => {
 				if ( position <= ds ) {
 					return position;
@@ -694,6 +824,7 @@ function transformOne( intent, prior, doc ) {
 			const { start, end } = payload;
 			if ( end <= ds || start >= de ) {
 				// Disjoint: pure shift.
+				/** @param {number} position */
 				const shift = ( position ) =>
 					position >= de ? position - removed + inserted : position;
 				return clean(
@@ -779,15 +910,16 @@ function transformOne( intent, prior, doc ) {
 /**
  * Rebases one intent over the accepted slice (intent.baseSeq, head].
  *
- * @param {Object}   intent    Intent to rebase.
- * @param {Object[]} priors    Accepted intents after startSeq, in log order.
- * @param {Object}   docAtBase Document at startSeq.
- * @param {number}   startSeq  Log index of priors[0] (defaults to
- *                             intent.baseSeq). Non-clean outcomes carry
- *                             `atSeq`, the absolute log index of the prior
- *                             that settled them.
- * @return {Object} { outcome: 'clean'|'escalate'|'void', intent, reason?,
- *                  atSeq? }.
+ * @param {Intent}         intent     Intent to rebase.
+ * @param {Intent[]}       priors     Accepted intents after startSeq, in log
+ *                                    order.
+ * @param {EngineDocument} docAtBase  Document at startSeq.
+ * @param {number|null}    [startSeq] Log index of priors[0] (defaults to
+ *                                    intent.baseSeq). Non-clean outcomes
+ *                                    carry `atSeq`, the absolute log index
+ *                                    of the prior that settled them.
+ * @return {RebaseOutcome} { outcome: 'clean'|'escalate'|'void', intent,
+ *                         reason?, atSeq? }.
  */
 export function rebaseIntent( intent, priors, docAtBase, startSeq = null ) {
 	const base = startSeq ?? intent.baseSeq;
@@ -810,10 +942,11 @@ export function rebaseIntent( intent, priors, docAtBase, startSeq = null ) {
 /**
  * Creates a server: the single ordering and trust authority.
  *
- * @param {Object} initialDoc Genesis document (server-owned).
- * @param {number} [firstSeq] Engine seq of the initial document (> 0 when
- *                            reconstructed from a compaction checkpoint).
- * @return {Object} Server state.
+ * @param {EngineDocument} initialDoc Genesis document (server-owned).
+ * @param {number}         [firstSeq] Engine seq of the initial document
+ *                                    (> 0 when reconstructed from a
+ *                                    compaction checkpoint).
+ * @return {IntentLogServer} Server state.
  */
 export function createServer( initialDoc, firstSeq = 0 ) {
 	return {
@@ -835,9 +968,10 @@ export function createServer( initialDoc, firstSeq = 0 ) {
  * nearest earlier snapshot, so repeated ingests stay linear instead of
  * replaying from genesis each time.
  *
- * @param {Object} server Server.
- * @param {number} seq    Log position (0 = genesis).
- * @return {Object} Document (read-only — do not mutate).
+ * @param {LogReplica} server Server (or any replica holding a log copy
+ *                            and document cache — the client qualifies).
+ * @param {number}     seq    Log position (0 = genesis).
+ * @return {EngineDocument} Document (read-only — do not mutate).
  */
 export function serverDocAt( server, seq ) {
 	const cached = server.docCache.get( seq );
@@ -855,7 +989,7 @@ export function serverDocAt( server, seq ) {
 		}
 	}
 	const doc = replay(
-		server.docCache.get( nearest ),
+		/** @type {EngineDocument} */ ( server.docCache.get( nearest ) ),
 		server.log.slice( nearest - firstSeq, seq - firstSeq )
 	);
 	server.docCache.set( seq, doc );
@@ -865,12 +999,14 @@ export function serverDocAt( server, seq ) {
 /**
  * Groups a batch into atomic units.
  *
- * @param {Object[]} intents Intents in authoring order.
- * @return {Object[][]} Units: contiguous runs sharing a txnId, singletons
- *                      otherwise. Shared by server ingest and the client's
- *                      prediction path so both resolve rule 4 identically.
+ * @param {IntentEnvelope[]} intents Intents in authoring order.
+ * @return {IntentEnvelope[][]} Units: contiguous runs sharing a txnId,
+ *                              singletons otherwise. Shared by server
+ *                              ingest and the client's prediction path so
+ *                              both resolve rule 4 identically.
  */
 export function groupUnits( intents ) {
+	/** @type {IntentEnvelope[][]} */
 	const units = [];
 	for ( const intent of intents ) {
 		const last = units.at( -1 );
@@ -903,32 +1039,41 @@ export function groupUnits( intents ) {
  * (lowest-trigger) escalation; surviving intents apply in order to the head
  * document.
  *
- * @param {Object[][]} units      Batch grouped into units (groupUnits), in
- *                                authoring order.
- * @param {Object[]}   log        Accepted log (the batch's intents NOT
- *                                included).
- * @param {Function}   docAt      ( seq ) → document at that log position
- *                                (read-only).
- * @param {number}     [firstSeq] Engine seq of log[0]; callers guarantee
- *                                every intent's baseSeq >= firstSeq.
- * @return {Object} { rows, headDoc }. Each row:
- *                  { intent, disposition, accepted, proposal } — `accepted`
- *                  is the transformed intent to append (null if not
- *                  accepted), `proposal` the proposal-lane record (null if
- *                  not escalated).
+ * @param {IntentEnvelope[][]}                units      Batch grouped into
+ *                                                       units (groupUnits),
+ *                                                       in authoring order.
+ * @param {IntentEnvelope[]}                  log        Accepted log (the
+ *                                                       batch's intents NOT
+ *                                                       included).
+ * @param {( seq: number ) => EngineDocument} docAt      ( seq ) → document
+ *                                                       at that log position
+ *                                                       (read-only).
+ * @param {number}                            [firstSeq] Engine seq of
+ *                                                       log[0]; callers
+ *                                                       guarantee every
+ *                                                       intent's baseSeq >=
+ *                                                       firstSeq.
+ * @return {{ rows: PlanRow[], headDoc: EngineDocument }} { rows, headDoc }.
+ *                  Each row: { intent, disposition, accepted, proposal } —
+ *                  `accepted` is the transformed intent to append (null if
+ *                  not accepted), `proposal` the proposal-lane record (null
+ *                  if not escalated).
  */
 export function planBatch( units, log, docAt, firstSeq = 0 ) {
 	// Frame state spans the whole batch: one client's sequential authoring.
 	const frame = createFrameState();
+	/** @type {PlanRow[]} */
 	const rows = [];
 	let headDoc = docAt( firstSeq + log.length );
 	for ( const unit of units ) {
+		/** @type {RebaseOutcome[]} */
 		const rebased = [];
 		for ( let j = 0; j < unit.length; j++ ) {
 			const intent = unit[ j ];
 			// Callers guarantee baseSeq >= firstSeq (the server rejects or
 			// stale-voids intents older than its retention horizon).
 			const slice = log.slice( intent.baseSeq - firstSeq );
+			/** @type {FirstRemoteSeq} */
 			const firstRemoteSeq = ( key ) => {
 				const index = slice.findIndex(
 					( entry ) =>
@@ -947,6 +1092,7 @@ export function planBatch( units, log, docAt, firstSeq = 0 ) {
 			const conflictSeq = frameProblem
 				? null
 				: intraUnitConflictSeq( unit, j, firstRemoteSeq );
+			/** @type {RebaseOutcome} */
 			let result;
 			if ( frameProblem ) {
 				result = {
@@ -970,8 +1116,11 @@ export function planBatch( units, log, docAt, firstSeq = 0 ) {
 		for ( let j = 0; j < unit.length; j++ ) {
 			const intent = unit[ j ];
 			const result = rebased[ j ];
+			/** @type {IntentDisposition|null} */
 			let disposition = null;
+			/** @type {IntentEnvelope|null} */
 			let accepted = null;
+			/** @type {IntentProposal|null} */
 			let proposal = null;
 			if ( escalation ) {
 				// Rule 4: the unit escalates together, attributed to its
@@ -1031,9 +1180,9 @@ export function planBatch( units, log, docAt, firstSeq = 0 ) {
  * In production, actorId is stamped here from the authenticated request;
  * the prototype trusts the envelope because the simulator plays both roles.
  *
- * @param {Object}   server  Server.
- * @param {Object[]} intents Intents in authoring order.
- * @return {Object[]} Dispositions, one per intent.
+ * @param {IntentLogServer}  server  Server.
+ * @param {IntentEnvelope[]} intents Intents in authoring order.
+ * @return {IntentDisposition[]} Dispositions, one per intent.
  */
 export function serverIngestBatch( server, intents ) {
 	// Optional transcript recorder (see tools/generate-planner-vectors.js):
@@ -1046,6 +1195,7 @@ export function serverIngestBatch( server, intents ) {
 	// redeliveries of settled intents: without the in-batch set, a batch
 	// containing the same intentId twice would double-apply (the settled
 	// map is only populated after planning).
+	/** @type {Set<string>} */
 	const seenInBatch = new Set();
 	const units = groupUnits( intents )
 		.map( ( unit ) =>
@@ -1080,7 +1230,9 @@ export function serverIngestBatch( server, intents ) {
 		( server.firstSeq ?? 0 ) + server.log.length,
 		headDoc
 	);
-	return intents.map( ( intent ) =>
-		server.dispositions.get( intent.intentId )
+	// Every intent in the batch was planned now or settled earlier, so the
+	// lookup never misses; the cast records that invariant for the checker.
+	return /** @type {IntentDisposition[]} */ (
+		intents.map( ( intent ) => server.dispositions.get( intent.intentId ) )
 	);
 }

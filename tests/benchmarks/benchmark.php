@@ -234,7 +234,7 @@ if ( ! empty( $wp_sync_bench_workload['seconds_per_round'] ) ) {
 	 * service time models that wait. yjs-server is lock-free (no room
 	 * queue), but every in-flight ingest still holds a PHP WORKER, so its
 	 * peak concurrent worker demand is reported instead. MODELED, not
-	 * measured — `npm run bench -- concurrency=N` measures it for real.
+	 * measured — `npm run bench -- --concurrency=N` measures it for real.
 	 */
 	$wp_sync_bench_histogram  = WP_Sync_Bench_Workload::ingest_concurrency_histogram( $wp_sync_bench_workload['rounds'] );
 	$wp_sync_bench_serialized = in_array( $engine_slug, array( 'intent-log', 'de-rtc' ), true );
@@ -453,13 +453,13 @@ if ( null !== $report['hosting'] ) {
 	$q = $h['queueing_model'];
 	if ( $q['serialized_ingest'] ) {
 		printf(
-			"  queueing (MODELED from the workload's concurrency, not measured): +%.2f ms mean / +%.2f ms worst-case ingest wait behind the per-room lock; measure for real with `npm run bench -- concurrency=N`\n",
+			"  queueing (MODELED from the workload's concurrency, not measured): +%.2f ms mean / +%.2f ms worst-case ingest wait behind the per-room lock; measure for real with `npm run bench -- --concurrency=N`\n",
 			$q['modeled_wait_ms_mean'],
 			$q['modeled_wait_ms_worst']
 		);
 	} else {
 		printf(
-			"  queueing: lock-free ingest (no per-room queue), but up to %d concurrent ingests each hold a PHP worker for the full service time; measure for real with `npm run bench -- concurrency=N`\n",
+			"  queueing: lock-free ingest (no per-room queue), but up to %d concurrent ingests each hold a PHP worker for the full service time; measure for real with `npm run bench -- --concurrency=N`\n",
 			$q['peak_concurrent_workers']
 		);
 	}

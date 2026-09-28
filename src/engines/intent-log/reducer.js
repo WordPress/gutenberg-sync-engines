@@ -23,12 +23,49 @@ import {
 } from './document.js';
 import { IntentTypes } from './intents.js';
 
+/** @typedef {import('./engine-types').EngineBlock} EngineBlock */
+/** @typedef {import('./engine-types').EngineDocument} EngineDocument */
+/** @typedef {import('./engine-types').EngineField} EngineField */
+/** @typedef {import('./engine-types').FormatSpan} FormatSpan */
+/** @typedef {import('./engine-types').IntentDisposition} IntentDisposition */
+/** @typedef {import('./engine-types').IntentEnvelope} IntentEnvelope */
+/** @typedef {import('./document.js').BlockSpec} BlockSpec */
+
+/**
+ * The reducer's verdict on one intent: the next document (a clone of the
+ * input, whether or not anything changed) and the intent's disposition.
+ *
+ * @typedef {Object} ReducerResult
+ * @property {EngineDocument}    doc         Next document.
+ * @property {IntentDisposition} disposition 'applied', or 'voided' with a
+ *                                           reason.
+ */
+
+/** @typedef {import('./engine-types').IntentPayload} ReducerPayload */
+
+/**
+ * @param {EngineDocument} doc Next document.
+ * @return {ReducerResult} Applied result.
+ */
 const applied = ( doc ) => ( { doc, disposition: { status: 'applied' } } );
+/**
+ * @param {EngineDocument} doc    Next document (unchanged clone).
+ * @param {string}         reason Void reason.
+ * @return {ReducerResult} Voided result.
+ */
 const voided = ( doc, reason ) => ( {
 	doc,
 	disposition: { status: 'voided', reason },
 } );
 
+/**
+ * Inserts a block after a named sibling: first when the anchor is null,
+ * last when the anchor is missing.
+ *
+ * @param {EngineBlock[]} siblings       Target sibling array (mutated).
+ * @param {EngineBlock}   block          Block to insert.
+ * @param {string|null}   afterSiblingId Anchor sibling id.
+ */
 function insertIntoSiblings( siblings, block, afterSiblingId ) {
 	if ( afterSiblingId === null ) {
 		siblings.unshift( block );
@@ -42,6 +79,14 @@ function insertIntoSiblings( siblings, block, afterSiblingId ) {
 	}
 }
 
+/**
+ * Shifts format spans to account for `length` characters inserted at
+ * `offset` (spans are mutated in place).
+ *
+ * @param {FormatSpan[]} formats Spans (mutated).
+ * @param {number}       offset  Insert position.
+ * @param {number}       length  Inserted length.
+ */
 function shiftFormatsForInsert( formats, offset, length ) {
 	for ( const span of formats ) {
 		if ( offset <= span.start ) {
@@ -53,8 +98,18 @@ function shiftFormatsForInsert( formats, offset, length ) {
 	}
 }
 
+/**
+ * Shifts format spans to account for [start, end) deleted; spans collapsed
+ * to nothing are dropped.
+ *
+ * @param {FormatSpan[]} formats Spans (mutated, then filtered).
+ * @param {number}       start   Deleted range start.
+ * @param {number}       end     Deleted range end (exclusive).
+ * @return {FormatSpan[]} Surviving spans.
+ */
 function shiftFormatsForDelete( formats, start, end ) {
 	const removed = end - start;
+	/** @param {number} position Span boundary. */
 	const adjust = ( position ) => {
 		if ( position <= start ) {
 			return position;
@@ -71,11 +126,21 @@ function shiftFormatsForDelete( formats, start, end ) {
 	return formats.filter( ( span ) => span.end > span.start );
 }
 
+/**
+ * @param {EngineField} field Field (mutated).
+ * @param {number}      start Range start.
+ * @param {number}      end   Range end (exclusive).
+ */
 function applyTextDelete( field, start, end ) {
 	field.text = field.text.slice( 0, start ) + field.text.slice( end );
 	field.formats = shiftFormatsForDelete( field.formats, start, end );
 }
 
+/**
+ * @param {EngineField} field  Field (mutated).
+ * @param {number}      offset Insert position.
+ * @param {string}      text   Inserted text.
+ */
 function applyTextInsert( field, offset, text ) {
 	field.text =
 		field.text.slice( 0, offset ) + text + field.text.slice( offset );
@@ -85,13 +150,13 @@ function applyTextInsert( field, offset, text ) {
 /**
  * Applies one intent to a document.
  *
- * @param {Object} doc    Document (not mutated).
- * @param {Object} intent Intent.
- * @return {Object} { doc, disposition: { status: 'applied'|'voided', reason? } }.
+ * @param {EngineDocument} doc    Document (not mutated).
+ * @param {IntentEnvelope} intent Intent.
+ * @return {ReducerResult} { doc, disposition: { status: 'applied'|'voided', reason? } }.
  */
 export function applyIntent( doc, intent ) {
 	const next = cloneDocument( doc );
-	const { payload } = intent;
+	const { payload } = /** @type {IntentEnvelope & { payload: ReducerPayload }} */ ( intent );
 
 	switch ( intent.type ) {
 		case IntentTypes.SET_ATTR: {
@@ -128,13 +193,15 @@ export function applyIntent( doc, intent ) {
 			// EVERY id the payload subtree brings in must be new, and unique
 			// within the payload itself: a nested duplicate would silently
 			// retarget all later intents addressing that id.
+			/** @type {string[]} */
 			const incomingIds = [];
-			( function collectIds( blockPayload ) {
+			( /** @param {BlockSpec} blockPayload */ function collectIds( blockPayload ) {
 				incomingIds.push( blockPayload.syncId );
 				for ( const child of blockPayload.children ?? [] ) {
 					collectIds( child );
 				}
 			} )( payload.block );
+			/** @type {Set<string>} */
 			const seenIds = new Set();
 			for ( const id of incomingIds ) {
 				if ( getBlock( next, id ) || seenIds.has( id ) ) {
@@ -322,6 +389,7 @@ export function applyIntent( doc, intent ) {
 				field.formats.push( { start, end, format: payload.format } );
 				return applied( next );
 			}
+			/** @type {FormatSpan[]} */
 			const nextFormats = [];
 			for ( const span of field.formats ) {
 				if (
@@ -377,9 +445,9 @@ export function applyIntent( doc, intent ) {
 /**
  * Replays a log of intents from an initial document.
  *
- * @param {Object}   initialDoc Genesis document.
- * @param {Object[]} log        Ordered accepted intents.
- * @return {Object} Final document.
+ * @param {EngineDocument}   initialDoc Genesis document.
+ * @param {IntentEnvelope[]} log        Ordered accepted intents.
+ * @return {EngineDocument} Final document.
  */
 export function replay( initialDoc, log ) {
 	let doc = initialDoc;

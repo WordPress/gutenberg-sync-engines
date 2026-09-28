@@ -12,7 +12,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Capture_CLI_Command' ) && defined( 
 	 * the transport seam and export them as replayable fixtures in the
 	 * community capture format (see
 	 * Gutenberg_Sync_Engines_Session_Capture). The capture→sanitize→replay
-	 * workflow is documented in tests/benchmarks/replay/README.md.
+	 * workflow is documented in tests/debugging/replay/README.md.
 	 *
 	 * A development tool, loaded only where diagnostics are allowed — see
 	 * Gutenberg_Sync_Engines_Plugin::load().
@@ -119,7 +119,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Capture_CLI_Command' ) && defined( 
 		 *
 		 * The raw export contains document content and user awareness
 		 * (names, colors); sanitize before sharing:
-		 * node tests/benchmarks/replay/sanitize.mjs <fixture.json>.
+		 * node tests/debugging/replay/sanitize.mjs <fixture.json>.
 		 *
 		 * ## OPTIONS
 		 *

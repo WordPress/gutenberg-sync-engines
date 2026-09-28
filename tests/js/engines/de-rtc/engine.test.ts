@@ -1,7 +1,14 @@
 /**
  * External dependencies
  */
-import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import {
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	jest,
+} from '@jest/globals';
 import * as Y from 'yjs';
 
 /**
@@ -9,9 +16,9 @@ import * as Y from 'yjs';
  */
 import { createDeRtcEngine } from '../../../../src/engines/de-rtc/engine';
 import {
-	DE_RTC_CONTENT_TYPE,
 	DE_RTC_PROPOSAL_TYPE,
 	DE_RTC_SNAPSHOT_TYPE,
+	setDeRtcBurstQuietMsForTesting,
 } from '../../../../src/engines/de-rtc/session';
 import { CRDT_RECORD_MAP_KEY } from '../../../../src/engines/yjs/constants';
 // eslint-disable-next-line import/no-unresolved -- Provided at runtime as wp.sync.
@@ -59,29 +66,18 @@ function snapshotRow( version: string, content: string ) {
 	};
 }
 
-function contentRow(
-	version: string,
-	content: string,
-	authorClientId: number,
-	proposalId = 'p-x'
-) {
-	return {
-		type: DE_RTC_CONTENT_TYPE,
-		data: JSON.stringify( {
-			version,
-			baseVersion: 'v1',
-			content,
-			authorClientId,
-			proposalId,
-		} ),
-	};
-}
-
 describe( 'createDeRtcEngine', () => {
 	let syncConfig: jest.MockedObject< SyncConfig >;
 
 	beforeEach( () => {
 		syncConfig = makeSyncConfig();
+		// These suites drive edits and snapshots in the same tick; the
+		// typing-burst quiet gate would defer every snapshot otherwise.
+		setDeRtcBurstQuietMsForTesting( 0 );
+	} );
+
+	afterEach( () => {
+		setDeRtcBurstQuietMsForTesting( 500 );
 	} );
 
 	function makeEntity() {
@@ -186,7 +182,7 @@ describe( 'createDeRtcEngine', () => {
 		] );
 	} );
 
-	it( 'applies a remote content row when clean and reports a remote change', () => {
+	it( 'applies a fetched canonical snapshot when clean and reports a remote change', () => {
 		const entity = makeEntity();
 		const session = entity.createSession();
 		const onRemoteChange = jest.fn();
@@ -195,8 +191,9 @@ describe( 'createDeRtcEngine', () => {
 		session.receiveUpdate( snapshotRow( 'v1', contentOf( BLOCK_A ) ) );
 		onRemoteChange.mockClear();
 
+		// A peer's accepted version, delivered as the fetch answer.
 		session.receiveUpdate(
-			contentRow( 'v2', contentOf( BLOCK_A, BLOCK_C ), 999 )
+			snapshotRow( 'v2', contentOf( BLOCK_A, BLOCK_C ) )
 		);
 
 		expect( onRemoteChange ).toHaveBeenCalled();
@@ -214,7 +211,7 @@ describe( 'createDeRtcEngine', () => {
 		expect( JSON.parse( sent[ 0 ].data ).baseVersion ).toBe( 'v2' );
 	} );
 
-	it( 'defers a remote content row while a proposal is in flight, then adopts it', () => {
+	it( 'defers a canonical snapshot while a proposal is in flight, then adopts it', () => {
 		const entity = makeEntity();
 		const session = entity.createSession();
 		const sent: any[] = [];
@@ -228,10 +225,10 @@ describe( 'createDeRtcEngine', () => {
 		);
 		expect( sent ).toHaveLength( 1 );
 
-		// A peer's row arrives while ours is in flight: the local doc must
-		// NOT lose the un-acked local state.
+		// A peer's version arrives while ours is in flight: the local doc
+		// must NOT lose the un-acked local state.
 		session.receiveUpdate(
-			contentRow( 'v2', contentOf( BLOCK_A, BLOCK_C ), 999 )
+			snapshotRow( 'v2', contentOf( BLOCK_A, BLOCK_C ) )
 		);
 		let changes = entity.getEditorChanges( { blocks: [] } as any ) as any;
 		expect( changes.blocks ).toEqual( [ BLOCK_B ] );
@@ -246,40 +243,6 @@ describe( 'createDeRtcEngine', () => {
 		] );
 		changes = entity.getEditorChanges( { blocks: [] } as any ) as any;
 		expect( changes.blocks ).toEqual( [ BLOCK_A, BLOCK_C ] );
-	} );
-
-	it( 'clears the in-flight slot when its own accepted row arrives', () => {
-		const entity = makeEntity();
-		const session = entity.createSession();
-		const sent: any[] = [];
-		session.onLocalUpdate( ( update ) => sent.push( update ) );
-
-		session.receiveUpdate( snapshotRow( 'v1', contentOf( BLOCK_A ) ) );
-		entity.applyLocalChanges(
-			{ blocks: [ BLOCK_B ] } as any,
-			'editor',
-			{}
-		);
-		expect( sent ).toHaveLength( 1 );
-
-		// The server merged and broadcast OUR proposal (echoing its id).
-		session.receiveUpdate(
-			contentRow(
-				'v2',
-				contentOf( BLOCK_B ),
-				session.clientId,
-				JSON.parse( sent[ 0 ].data ).proposalId
-			)
-		);
-
-		// The slot is free: a new local edit proposes against v2.
-		entity.applyLocalChanges(
-			{ blocks: [ BLOCK_B, BLOCK_C ] } as any,
-			'editor',
-			{}
-		);
-		expect( sent ).toHaveLength( 2 );
-		expect( JSON.parse( sent[ 1 ].data ).baseVersion ).toBe( 'v2' );
 	} );
 
 	it( 'creates an inert collection: rows ignored, nothing proposed', () => {

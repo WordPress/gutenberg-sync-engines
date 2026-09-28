@@ -162,3 +162,118 @@ describe( 'de-rtc doc bridge per-block base honesty', () => {
 		expect( bridge.blockBaseVersions() ).toEqual( {} );
 	} );
 } );
+
+/**
+ * Durable identity on the client: a canonical application re-keys the
+ * freshly parsed blocks onto the clientIds the doc already holds for the
+ * same `metadata.syncId`, so the canvas never remounts a block that only
+ * kept its identity across the round trip.
+ */
+describe( 'de-rtc doc bridge clientId stability by syncId', () => {
+	const withId = ( block: any, syncId: string, clientId?: string ) => ( {
+		...block,
+		...( clientId ? { clientId } : {} ),
+		attributes: { ...block.attributes, metadata: { syncId } },
+	} );
+
+	let doc: Y.Doc;
+	let bridge: ReturnType< typeof createDeRtcDocBridge >;
+
+	beforeEach( () => {
+		doc = new Y.Doc();
+		bridge = createDeRtcDocBridge( doc, makeSyncConfig() );
+	} );
+
+	function localBlocks(): any[] {
+		return doc.getMap( CRDT_RECORD_MAP_KEY ).get( 'blocks' ) as any[];
+	}
+
+	it( 'keeps the clientId of every block whose identity survived, at every depth', () => {
+		bridge.applyCanonical(
+			'v1',
+			contentOf( withId( A, 'id-a' ), withId( B, 'id-b' ) )
+		);
+		// The editor assigned clientIds to what it rendered.
+		doc.getMap( CRDT_RECORD_MAP_KEY ).set( 'blocks', [
+			{
+				name: 'core/group',
+				clientId: 'c-group',
+				attributes: { metadata: { syncId: 'id-group' } },
+				innerBlocks: [ withId( A, 'id-a', 'c-a' ) ],
+			},
+			withId( B, 'id-b', 'c-b' ),
+		] );
+
+		bridge.applyCanonical(
+			'v2',
+			contentOf(
+				{
+					name: 'core/group',
+					clientId: 'fresh-group',
+					attributes: { metadata: { syncId: 'id-group' } },
+					innerBlocks: [ withId( A_PEER, 'id-a', 'fresh-a' ) ],
+				},
+				withId( B, 'id-b', 'fresh-b' ),
+				withId(
+					{ name: 'core/paragraph', attributes: { content: 'New' } },
+					'id-new',
+					'fresh-new'
+				)
+			)
+		);
+
+		const blocks = localBlocks();
+		expect( blocks[ 0 ].clientId ).toBe( 'c-group' );
+		expect( blocks[ 0 ].innerBlocks[ 0 ].clientId ).toBe( 'c-a' );
+		expect( blocks[ 0 ].innerBlocks[ 0 ].attributes.content ).toBe(
+			'Alpha peer'
+		);
+		expect( blocks[ 1 ].clientId ).toBe( 'c-b' );
+		expect( blocks[ 2 ].clientId ).toBe( 'fresh-new' );
+	} );
+
+	it( 'maps a duplicated identity once so clientIds stay unique', () => {
+		doc.getMap( CRDT_RECORD_MAP_KEY ).set( 'blocks', [
+			withId( A, 'id-a', 'c-a' ),
+		] );
+		bridge.applyCanonical(
+			'v1',
+			contentOf(
+				withId( A, 'id-a', 'fresh-1' ),
+				withId( B, 'id-a', 'fresh-2' )
+			)
+		);
+		expect( localBlocks().map( ( block ) => block.clientId ) ).toEqual( [
+			'c-a',
+			'fresh-2',
+		] );
+	} );
+
+	it( 'stabilizes the adopted blocks of an incorporation too', () => {
+		bridge.applyCanonical(
+			'v1',
+			contentOf( withId( A, 'id-a' ), withId( B, 'id-b' ) )
+		);
+		doc.getMap( CRDT_RECORD_MAP_KEY ).set( 'blocks', [
+			withId( A_LOCAL_NEWER, 'id-a', 'c-a' ),
+			withId( B, 'id-b', 'c-b' ),
+		] );
+
+		bridge.incorporateCanonicalPreservingLocalEdits(
+			'v2',
+			contentOf(
+				withId( A, 'id-a', 'fresh-a' ),
+				withId( B_PEER, 'id-b', 'fresh-b' )
+			),
+			contentOf(
+				withId( A_LOCAL, 'id-a', 'c-a' ),
+				withId( B, 'id-b', 'c-b' )
+			)
+		);
+
+		const blocks = localBlocks();
+		expect( blocks[ 0 ].clientId ).toBe( 'c-a' ); // Kept local block.
+		expect( blocks[ 1 ].clientId ).toBe( 'c-b' ); // Adopted canonical block.
+		expect( blocks[ 1 ].attributes.content ).toBe( 'Beta peer' );
+	} );
+} );

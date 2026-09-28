@@ -9,11 +9,10 @@ if ( ! class_exists( 'WP_De_RTC_Review_Controller' ) ) {
 
 	/**
 	 * The de-rtc REST review lane (B5): review RESOLUTIONS are mutations,
-	 * and mutations do not belong on the advisory transport. This route
-	 * carries them instead; the stamped `resolved` row the engine appends
-	 * still broadcasts to peers through the ordinary transport rows, and
-	 * the transport's own resolution-row path stays accepted for legacy
-	 * clients.
+	 * and mutations do not belong on the advisory transport. This route is
+	 * the ONLY way clients send them (the engine rejects client-sent
+	 * resolution rows); the stamped `resolved` row the engine appends
+	 * still broadcasts to peers through the ordinary transport rows.
 	 *
 	 * @since 0.3.0
 	 */

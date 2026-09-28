@@ -37,7 +37,7 @@ class Tests_Collaboration_WpDeRtcBaseVersionPreflight extends WP_UnitTestCase {
 	}
 
 	private function engine(): WP_De_RTC_Engine {
-		return new WP_De_RTC_Engine( new WP_Sync_Post_Meta_Storage() );
+		return new WP_De_RTC_Engine( new WP_Sync_Table_Storage() );
 	}
 
 	private function make_post_with_room(): array {
@@ -48,7 +48,7 @@ class Tests_Collaboration_WpDeRtcBaseVersionPreflight extends WP_UnitTestCase {
 			)
 		);
 		$room    = 'postType/post:' . $post_id;
-		$this->assertSame( self::GENESIS_CONTENT, $this->engine()->materialize( $room ) );
+		$this->assertSame( $this->genesis( $post_id ), $this->engine()->materialize( $room ) );
 		return array( $post_id, $room );
 	}
 
@@ -70,12 +70,12 @@ class Tests_Collaboration_WpDeRtcBaseVersionPreflight extends WP_UnitTestCase {
 		list( $post_id, $room ) = $this->make_post_with_room();
 
 		// The session advances Alpha past the writer's read.
-		$session = str_replace( 'Alpha block original text.', 'Alpha advanced by the session.', self::GENESIS_CONTENT );
+		$session = str_replace( 'Alpha block original text.', 'Alpha advanced by the session.', $this->genesis( $post_id ) );
 		$result  = $this->engine()->handle_updates( $room, 701, 0, array( $this->proposal( 'p-1', 'v1', $session ) ), array() );
 		$this->assertSame( 'applied', $result['dispositions'][0]['status'] );
 
 		// A cooperating writer edits Beta against the v1 copy it read.
-		$writer_copy = str_replace( 'Beta block original text.', 'Beta updated by the integration.', self::GENESIS_CONTENT );
+		$writer_copy = str_replace( 'Beta block original text.', 'Beta updated by the integration.', $this->genesis( $post_id ) );
 		$updated     = wp_update_post(
 			array(
 				'ID'           => $post_id,
@@ -109,8 +109,10 @@ class Tests_Collaboration_WpDeRtcBaseVersionPreflight extends WP_UnitTestCase {
 
 		$before = get_post( $post_id )->post_content;
 
-		// The writer rewrites Alpha differently against the old structure.
-		$writer_copy = str_replace( 'Alpha block original text.', 'Alpha rewritten by the integration.', self::GENESIS_CONTENT );
+		// The writer rewrites Alpha differently against the old structure,
+		// with classic content between the blocks so identity cannot
+		// model the copy and the positional policy decides.
+		$writer_copy = "Classic text between blocks.\n\n" . str_replace( 'Alpha block original text.', 'Alpha rewritten by the integration.', $this->genesis( $post_id ) );
 		$updated     = wp_update_post(
 			array(
 				'ID'           => $post_id,
@@ -131,10 +133,49 @@ class Tests_Collaboration_WpDeRtcBaseVersionPreflight extends WP_UnitTestCase {
 		$parked   = array_filter(
 			$response['updates'],
 			static function ( $update ) {
-				return WP_De_RTC_Engine::UPDATE_TYPE_PROPOSAL_PARKED === $update['type'];
+				return WP_De_RTC_Engine::UPDATE_TYPE_PARKED === $update['type'];
 			}
 		);
 		$this->assertNotEmpty( $parked );
+	}
+
+	public function test_a_conflicting_rewrite_beside_a_structural_change_parks_just_that_block() {
+		list( $post_id, $room ) = $this->make_post_with_room();
+
+		// The session removes Beta and advances Alpha.
+		$session = "<!-- wp:paragraph -->\n<p>Alpha advanced by the session.</p>\n<!-- /wp:paragraph -->";
+		$result  = $this->engine()->handle_updates( $room, 703, 0, array( $this->proposal( 'p-1', 'v1', $session ) ), array() );
+		$this->assertSame( 'applied', $result['dispositions'][0]['status'] );
+
+		// The writer rewrites Alpha differently against v1. Identity
+		// merges block-for-block: Beta's deletion stands, the writer's
+		// Alpha loses to canonical and parks, and the save lands as the
+		// canonical content.
+		$writer_copy = str_replace( 'Alpha block original text.', 'Alpha rewritten by the integration.', $this->genesis( $post_id ) );
+		$updated     = wp_update_post(
+			array(
+				'ID'           => $post_id,
+				'post_content' => $writer_copy,
+				'base_version' => 'v1',
+			),
+			true
+		);
+		$this->assertSame( $post_id, $updated );
+		$saved = get_post( $post_id )->post_content;
+		$this->assertStringContainsString( 'Alpha advanced by the session.', $saved );
+		$this->assertStringNotContainsString( 'Alpha rewritten by the integration.', $saved );
+		$this->assertStringNotContainsString( 'Beta', $saved );
+
+		$response = $this->engine()->get_updates_since( $room, 999, 0, array() );
+		$parked   = array_filter(
+			$response['updates'],
+			static function ( $update ) {
+				return WP_De_RTC_Engine::UPDATE_TYPE_PARKED === $update['type'];
+			}
+		);
+		$this->assertCount( 1, $parked );
+		$row = json_decode( array_values( $parked )[0]['data'], true );
+		$this->assertStringContainsString( 'Alpha rewritten by the integration.', $row['changedBlocks'][0]['html'] );
 	}
 
 	public function test_unknown_base_version_rejects_with_stale_error() {
@@ -161,7 +202,7 @@ class Tests_Collaboration_WpDeRtcBaseVersionPreflight extends WP_UnitTestCase {
 		$updated = wp_update_post(
 			array(
 				'ID'           => $post_id,
-				'post_content' => str_replace( 'Beta block original text.', 'Beta plain save.', self::GENESIS_CONTENT ),
+				'post_content' => str_replace( 'Beta block original text.', 'Beta plain save.', $this->genesis( $post_id ) ),
 			),
 			true
 		);
@@ -188,5 +229,16 @@ class Tests_Collaboration_WpDeRtcBaseVersionPreflight extends WP_UnitTestCase {
 
 		$this->assertWPError( $updated );
 		$this->assertSame( 'de_rtc_base_version_no_room', WP_De_RTC_Base_Version_Preflight::last_error()->get_error_code() );
+	}
+
+	/**
+	 * The room's genesis content: the saved post with every block stamped
+	 * with its deterministic identity (what the room actually serves).
+	 *
+	 * @param int $post_id Post ID.
+	 * @return string Stamped genesis content.
+	 */
+	private function genesis( int $post_id ): string {
+		return WP_De_RTC_Block_Identity::stamp_genesis( self::GENESIS_CONTENT, $post_id );
 	}
 }

@@ -1,4 +1,9 @@
 /**
+ * External dependencies
+ */
+import type { Page } from '@playwright/test';
+
+/**
  * WordPress dependencies
  */
 import type { RequestUtils } from '@wordpress/e2e-test-utils-playwright';
@@ -41,7 +46,38 @@ async function setSyncEngine(
 	} );
 }
 
-test.describe( 'Collaboration - yjs-server engine', () => {
+/**
+ * Waits until the page's sync traffic has been quiet for a moment: no
+ * request to the sync endpoint for QUIET_MS, checked for up to MAX_MS. A
+ * lone tab polls only on demand, so this is the wait for "its queued work
+ * has gone out" (a fixed number of future polls may never come).
+ *
+ * @param page The page to watch.
+ */
+async function waitForSyncQuiet( page: Page ): Promise< void > {
+	const QUIET_MS = 1500;
+	const MAX_MS = 10000;
+	let lastRequestAt = Date.now();
+	const onRequest = ( request: { url: () => string } ) => {
+		if ( request.url().includes( 'wp-sync' ) ) {
+			lastRequestAt = Date.now();
+		}
+	};
+	page.on( 'request', onRequest );
+	const deadline = Date.now() + MAX_MS;
+	try {
+		while ( Date.now() < deadline ) {
+			if ( Date.now() - lastRequestAt >= QUIET_MS ) {
+				return;
+			}
+			await page.waitForTimeout( 100 );
+		}
+	} finally {
+		page.off( 'request', onRequest );
+	}
+}
+
+test.describe( 'Collaboration - yjs-server engine @engine-yjs-server', () => {
 	test.beforeEach( async ( { requestUtils } ) => {
 		await setSyncEngine( requestUtils, 'yjs-server' );
 	} );
@@ -282,9 +318,9 @@ test.describe( 'Collaboration - yjs-server engine', () => {
 		 * The post-new.php shape: the room's genesis snapshot is built from
 		 * an EMPTY auto-draft, so everything typed in this session reaches
 		 * the room only as sync updates. The session is SOLO, which is the
-		 * regression surface: the polling transport holds updates back until
-		 * a collaborator appears unless the engine declares syncWhileSolo,
-		 * and a reload bootstraps the editor from the server's document —
+		 * regression surface: a lone tab schedules no polls, so its updates
+		 * must still go out on demand (one request after the first queued
+		 * update), and a reload bootstraps the editor from the server's document —
 		 * if the solo updates never landed, the stale empty snapshot wipes
 		 * the freshly loaded title and content.
 		 */
@@ -299,19 +335,25 @@ test.describe( 'Collaboration - yjs-server engine', () => {
 			.click();
 		await page.keyboard.type( 'Solo reload body' );
 
+		// A lone tab holds its work and flushes it through the room right
+		// before the save, so wait for the save's own response (saveDraft
+		// resolves on a notice) and then for the sync traffic to go quiet.
+		const saved = page.waitForResponse(
+			( response ) =>
+				decodeURIComponent( response.url() ).includes(
+					'/wp/v2/posts/'
+				) && 'POST' === response.request().method()
+		);
 		await editor.saveDraft();
-
-		// The solo queue drains on the polling cadence, and the save's own
-		// marker update is queued as saveDraft resolves: two full cycles
-		// guarantee everything typed above has reached the room.
-		await collaborationUtils.waitForSyncCycle( page, 2 );
+		await saved;
+		await waitForSyncQuiet( page );
 
 		await page.reload();
 		await collaborationUtils.waitForCollaborationReady( page );
 
 		// Let the fresh session bootstrap from the server's snapshot and
 		// settle: before the fix this is when the editor got wiped.
-		await collaborationUtils.waitForSyncCycle( page, 2 );
+		await waitForSyncQuiet( page );
 
 		await expect(
 			editor.canvas.getByRole( 'textbox', { name: 'Add title' } )

@@ -40,7 +40,7 @@ const GENESIS_BLOCKS = [
  * A wire-level stand-in for WP_Intent_Log_Engine: rows in storage order
  * (snapshot first), planner-backed ingest, dispositions as the ack. Mirrors
  * the PHP engine's commit rules (accepted → intent rows, escalations →
- * proposal rows, voided → marker rows).
+ * parked rows, voided → marker rows).
  */
 function makeWireServer() {
 	const initialDoc = createDocument( GENESIS_BLOCKS );
@@ -69,7 +69,7 @@ function makeWireServer() {
 			) ) {
 				rows.push( {
 					data: JSON.stringify( proposal ),
-					type: INTENT_LOG_UPDATE_TYPES.PROPOSAL,
+					type: INTENT_LOG_UPDATE_TYPES.PARKED,
 				} );
 			}
 			const dispositions = intents.map(
@@ -464,11 +464,8 @@ describe( 'intent-log session codec', () => {
 		expect( session.getPeers() ).toEqual( { 22: { user: 'bob' } } );
 	} );
 
-	it( 'declares syncWhileSolo and relays transport discards to onDiscard listeners', () => {
+	it( 'relays transport discards to onDiscard listeners', () => {
 		const session = makeSession( 1, 11 );
-		// Ingest is idempotent by intentId, so solo flushing is safe — and
-		// it keeps unsent local work off the terminal-unregister cliff.
-		expect( session.syncWhileSolo ).toBe( true );
 
 		const listener = jest.fn();
 		session.onDiscard( listener );
@@ -480,5 +477,36 @@ describe( 'intent-log session codec', () => {
 		session.destroy();
 		session.onUpdatesDiscarded( discarded );
 		expect( listener ).toHaveBeenCalledTimes( 1 );
+	} );
+
+	it( 'a room restart drops the replica, fires onReset, and re-bootstraps from the next genesis', () => {
+		const session = makeSession( 1, 11 );
+		const onReset = jest.fn();
+		session.onReset( onReset );
+		session.receiveUpdate( {
+			data: JSON.stringify( { doc: createDocument( GENESIS_BLOCKS ) } ),
+			type: INTENT_LOG_UPDATE_TYPES.SNAPSHOT,
+		} );
+		session.author( 'insert_text', { syncId: 'p1', offset: 0, text: 'x' } );
+		expect( session.isInitialized() ).toBe( true );
+
+		expect( session.onRoomRestart() ).toBe( 'rebootstrap' );
+		expect( session.isInitialized() ).toBe( false );
+		expect( onReset ).toHaveBeenCalledTimes( 1 );
+
+		// The new room's genesis (a seq-0 snapshot, which a live replica
+		// would have ignored as stale) bootstraps the replica afresh.
+		const fresh = [
+			{ syncId: 'z9', blockType: 'core/paragraph', text: 'Saved' },
+		];
+		session.receiveUpdate( {
+			data: JSON.stringify( { doc: createDocument( fresh ) } ),
+			type: INTENT_LOG_UPDATE_TYPES.SNAPSHOT,
+		} );
+		expect( session.isInitialized() ).toBe( true );
+		expect( session.getBootstrapSeq() ).toBe( 0 );
+		expect( canonicalJson( session.getDocument()! ) ).toBe(
+			canonicalJson( createDocument( fresh ) )
+		);
 	} );
 } );

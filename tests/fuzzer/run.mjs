@@ -11,7 +11,7 @@
  *      FOREIGN wp-env on :8889 cannot silently retarget the run.
  *   2. Per combo: selects the engine (`wp_sync_engine`) and transport
  *      (`gutenberg_sync_engines_transport`) on the tests site via wp-cli,
- *      wipes `wp_sync_storage` rooms (room lineage is stamped per engine;
+ *      empties every room (room lineage is stamped per engine;
  *      stale collection rooms 409 over websocket where healing can't run),
  *      and — for websocket combos — runs the `wp collaboration sync-server`
  *      daemon through the compose file with the port PUBLISHED and the
@@ -40,6 +40,7 @@ import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { parseArgs } from 'node:util';
 
 const __filename = fileURLToPath( import.meta.url );
 const FUZZER_ROOT = path.dirname( __filename );
@@ -72,118 +73,75 @@ const DEFAULT_ENGINES = [ 'intent-log', 'yjs-server', 'de-rtc' ];
  * doc that documents the gap.
  */
 const ENGINE_CAPABILITIES = {};
-const DEFAULT_TRANSPORTS = [ 'http-polling', 'http-long-polling', 'websocket' ];
+const DEFAULT_TRANSPORTS = [ 'http-polling', 'sse', 'websocket' ];
 
-function parseArgs( argv ) {
-	const args = {
-		combos: null,
-		engines: DEFAULT_ENGINES,
-		headed: false,
-		burstRate: null,
-		faultRate: null,
-		noFaults: false,
-		noLifecycle: false,
-		noReload: false,
-		out: path.join( FUZZER_ROOT, 'artifacts' ),
-		profile: null,
-		recheck: true,
-		shrink: false,
-		seedList: null,
-		seedStart: 1,
-		seeds: 5,
-		steps: 12,
-		trace: null,
-		users: 2,
+const CLI_OPTIONS = {
+	engines: { type: 'string' },
+	transports: { type: 'string' },
+	combos: { type: 'string' },
+	seeds: { type: 'string' },
+	'seed-start': { type: 'string' },
+	'seed-list': { type: 'string' },
+	steps: { type: 'string' },
+	users: { type: 'string' },
+	trace: { type: 'string' },
+	out: { type: 'string' },
+	'no-recheck': { type: 'boolean' },
+	shrink: { type: 'boolean' },
+	'no-faults': { type: 'boolean' },
+	'no-lifecycle': { type: 'boolean' },
+	'fault-rate': { type: 'string' },
+	'burst-rate': { type: 'string' },
+	profile: { type: 'string' },
+	'no-reload': { type: 'boolean' },
+	headed: { type: 'boolean' },
+	help: { type: 'boolean', short: 'h' },
+};
+
+function readArgs( argv ) {
+	const { values } = parseArgs( { args: argv, options: CLI_OPTIONS } );
+	if ( values.help ) {
+		printUsage();
+		process.exit( 0 );
+	}
+	const int = ( value, fallback ) =>
+		undefined === value ? fallback : Number.parseInt( value, 10 );
+	const list = ( value ) =>
+		undefined === value ? null : value.split( ',' ).filter( Boolean );
+	const combos = list( values.combos );
+	return {
+		combos:
+			combos &&
+			combos.map( ( token ) => {
+				const [ engine, transport ] = token.split( '/' );
+				if ( ! engine || ! transport ) {
+					throw new Error(
+						`--combos entries must be engine/transport, got "${ token }"`
+					);
+				}
+				return { engine, transport };
+			} ),
+		engines: list( values.engines ) ?? DEFAULT_ENGINES,
+		transports: list( values.transports ) ?? DEFAULT_TRANSPORTS,
+		headed: Boolean( values.headed ),
+		burstRate: values[ 'burst-rate' ] ?? null,
+		faultRate: values[ 'fault-rate' ] ?? null,
+		noFaults: Boolean( values[ 'no-faults' ] ),
+		noLifecycle: Boolean( values[ 'no-lifecycle' ] ),
+		noReload: Boolean( values[ 'no-reload' ] ),
+		out: values.out
+			? path.resolve( values.out )
+			: path.join( FUZZER_ROOT, 'artifacts' ),
+		profile: values.profile ?? null,
+		recheck: ! values[ 'no-recheck' ],
+		shrink: Boolean( values.shrink ),
+		seedList: list( values[ 'seed-list' ] ),
+		seedStart: int( values[ 'seed-start' ], 1 ),
+		seeds: int( values.seeds, 5 ),
+		steps: int( values.steps, 12 ),
+		trace: values.trace ?? null,
+		users: int( values.users, 2 ),
 	};
-	for ( const raw of argv ) {
-		const [ key, value ] = raw.includes( '=' )
-			? [
-					raw.slice( 0, raw.indexOf( '=' ) ),
-					raw.slice( raw.indexOf( '=' ) + 1 ),
-			  ]
-			: [ raw, '' ];
-		switch ( key ) {
-			case '--engines':
-				args.engines = value.split( ',' ).filter( Boolean );
-				break;
-			case '--transports':
-				args.transports = value.split( ',' ).filter( Boolean );
-				break;
-			case '--combos':
-				args.combos = value
-					.split( ',' )
-					.filter( Boolean )
-					.map( ( token ) => {
-						const [ engine, transport ] = token.split( '/' );
-						if ( ! engine || ! transport ) {
-							throw new Error(
-								`--combos entries must be engine/transport, got "${ token }"`
-							);
-						}
-						return { engine, transport };
-					} );
-				break;
-			case '--seeds':
-				args.seeds = Number.parseInt( value, 10 );
-				break;
-			case '--seed-start':
-				args.seedStart = Number.parseInt( value, 10 );
-				break;
-			case '--seed-list':
-				args.seedList = value.split( ',' ).filter( Boolean );
-				break;
-			case '--steps':
-				args.steps = Number.parseInt( value, 10 );
-				break;
-			case '--users':
-				args.users = Number.parseInt( value, 10 );
-				break;
-			case '--trace':
-				args.trace = value;
-				break;
-			case '--out':
-				args.out = path.resolve( value );
-				break;
-			case '--no-recheck':
-				args.recheck = false;
-				break;
-			case '--shrink':
-				args.shrink = true;
-				break;
-			case '--no-faults':
-				args.noFaults = true;
-				break;
-			case '--no-lifecycle':
-				args.noLifecycle = true;
-				break;
-			case '--fault-rate':
-				args.faultRate = value;
-				break;
-			case '--burst-rate':
-				args.burstRate = value;
-				break;
-			case '--profile':
-				args.profile = value;
-				break;
-			case '--no-reload':
-				args.noReload = true;
-				break;
-			case '--headed':
-				args.headed = true;
-				break;
-			case '--help':
-			case '-h':
-				printUsage();
-				process.exit( 0 );
-				break;
-			default:
-				throw new Error( `Unknown argument: ${ raw }` );
-		}
-	}
-	if ( ! args.transports ) {
-		args.transports = DEFAULT_TRANSPORTS;
-	}
-	return args;
 }
 
 function printUsage() {
@@ -192,7 +150,7 @@ function printUsage() {
 			'Usage: npm run fuzz -- [options]',
 			'',
 			'  --engines=a,b        Engines to sweep (default: intent-log,yjs-server,de-rtc)',
-			'  --transports=a,b     Transports to sweep (default: http-polling,http-long-polling,websocket)',
+			'  --transports=a,b     Transports to sweep (default: http-polling,sse,websocket)',
 			'  --combos=e/t,...     Explicit engine/transport pairs (overrides the cross product)',
 			'  --seeds=N            Seeds per combo (default: 5)',
 			'  --seed-start=N       First seed (default: 1)',
@@ -449,27 +407,44 @@ async function enableCollaborationExperiment() {
 }
 
 /**
- * Delete all wp_sync_storage posts on the tests site: every room's rows,
- * lineage, and meta. Rooms are rebuildable change-feeds; a fresh combo must
- * not inherit another engine's room lineage.
+ * Empty every room on the tests site (all update rows, lineage, and meta in
+ * the plugin's storage tables). Rooms are rebuildable change-feeds; a fresh
+ * combo must not inherit another engine's room lineage.
  */
 async function wipeSyncRooms() {
 	const { stdout } = await runWpCli( [
-		'post',
+		'collaboration',
+		'rooms',
 		'list',
-		'--post_type=wp_sync_storage',
-		'--post_status=any',
-		'--format=ids',
+		'--format=count',
 	] );
-	const ids = stdout
-		.split( /\s+/ )
-		.map( ( token ) => token.trim() )
-		.filter( ( token ) => /^\d+$/.test( token ) );
-	if ( ! ids.length ) {
-		return 0;
+	const count = Number.parseInt( stdout.trim(), 10 ) || 0;
+	await runWpCli( [ 'collaboration', 'storage', 'reset', '--yes' ] );
+	return count;
+}
+
+/**
+ * The SSE transport wakes its streams through Redis, which the tests
+ * config's afterStart hook runs as a sibling container of the env
+ * (`<work directory name>-redis`). Without it every tab silently
+ * receives over polling, and an sse combo would certify nothing.
+ *
+ * @param {string} workDirectory The tests env's wp-env work directory.
+ */
+function assertRedisRunning( workDirectory ) {
+	const container = `${ path.basename( workDirectory ) }-redis`;
+	const state = spawnSync(
+		'docker',
+		[ 'inspect', '-f', '{{.State.Running}}', container ],
+		{ encoding: 'utf8' }
+	);
+	if ( 0 !== state.status || 'true' !== state.stdout.trim() ) {
+		throw new Error(
+			`sse combos need Redis, but container ${ container } is ${
+				0 === state.status ? 'stopped' : 'absent'
+			} — npm run env:tests start (its afterStart hook runs npm run redis:start)`
+		);
 	}
-	await runWpCli( [ 'post', 'delete', ...ids, '--force' ] );
-	return ids.length;
 }
 
 function stopWsDaemon() {
@@ -682,7 +657,7 @@ async function runPlaywright( {
 }
 
 async function main() {
-	const args = parseArgs( process.argv.slice( 2 ) );
+	const args = readArgs( process.argv.slice( 2 ) );
 
 	// Fail fast on missing build prerequisites. An unbuilt subtree still
 	// activates as a plugin, but gutenberg.php refuses to load the
@@ -789,7 +764,11 @@ async function main() {
 			await setOption( TRANSPORT_OPTION, combo.transport );
 			const wiped = await wipeSyncRooms();
 			if ( wiped ) {
-				log( `Wiped ${ wiped } sync-storage room post(s).` );
+				log( `Emptied ${ wiped } sync-storage room(s).` );
+			}
+
+			if ( combo.transport === 'sse' ) {
+				assertRedisRunning( workDirectory );
 			}
 
 			// The daemon caches options at boot: start it AFTER the engine

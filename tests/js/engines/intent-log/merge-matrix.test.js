@@ -43,7 +43,7 @@ import {
 	createClient,
 	flushClient,
 } from '../../../../src/engines/intent-log/client.js';
-import { verifyEffect } from '../../../../src/engines/intent-log/simulator.js';
+import { verifyEffect } from './simulator.js';
 
 const baseDoc = () =>
 	createDocument( [

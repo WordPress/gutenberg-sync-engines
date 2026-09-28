@@ -1,10 +1,9 @@
 <?php
 /**
  * Unit tests covering WP_De_RTC_Review_Controller (the B5 REST review
- * lane): review resolutions POST to an authenticated route instead of
- * riding the advisory transport; the stamped `resolved` row the engine
- * appends still broadcasts to peers through ordinary room reads, and
- * the legacy transport row path stays accepted.
+ * lane): review resolutions POST to an authenticated route — the only
+ * way clients send them; the stamped `resolved` row the engine appends
+ * still broadcasts to peers through ordinary room reads.
  *
  * @package GutenbergSyncEngines
  */
@@ -67,7 +66,7 @@ class Tests_Collaboration_WpDeRtcReviewController extends WP_UnitTestCase {
 	 * @return WP_De_RTC_Engine Engine.
 	 */
 	private function engine(): WP_De_RTC_Engine {
-		return new WP_De_RTC_Engine( new WP_Sync_Post_Meta_Storage() );
+		return new WP_De_RTC_Engine( new WP_Sync_Table_Storage() );
 	}
 
 	/**
@@ -247,7 +246,7 @@ class Tests_Collaboration_WpDeRtcReviewController extends WP_UnitTestCase {
 
 	public function test_fences_rooms_with_another_engine_lineage() {
 		$room    = 'postType/post:' . self::$post_id . ':foreign';
-		$storage = new WP_Sync_Post_Meta_Storage();
+		$storage = new WP_Sync_Table_Storage();
 		$this->assertTrue( $storage->set_room_engine( $room, 'intent-log' ) );
 
 		$response = $this->dispatch_resolve(
@@ -259,5 +258,15 @@ class Tests_Collaboration_WpDeRtcReviewController extends WP_UnitTestCase {
 		);
 		$this->assertSame( 409, $response->get_status() );
 		$this->assertSame( 'rest_sync_engine_mismatch', $response->get_data()['code'] );
+	}
+
+	/**
+	 * The room's genesis content: the saved post with every block stamped
+	 * with its deterministic identity (what the room actually serves).
+	 *
+	 * @return string Stamped genesis content.
+	 */
+	private function genesis(): string {
+		return WP_De_RTC_Block_Identity::stamp_genesis( self::GENESIS_CONTENT, self::$post_id );
 	}
 }

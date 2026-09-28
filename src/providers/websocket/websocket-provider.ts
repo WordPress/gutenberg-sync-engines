@@ -14,11 +14,6 @@ import type {
 } from '@wordpress/sync';
 import { websocketManager } from './websocket-manager';
 
-/**
- * Transport slug (matches the server's WP_WebSocket_Sync_Transport).
- */
-export const WEBSOCKET_TRANSPORT_SLUG = 'websocket';
-
 interface ProviderOptions {
 	room: string;
 	session: EngineSessionCodec;

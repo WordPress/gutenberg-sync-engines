@@ -64,7 +64,7 @@ class Tests_Collaboration_WpDeRtcDescriptorEnforcement extends WP_UnitTestCase {
 	}
 
 	private function engine(): WP_De_RTC_Engine {
-		return new WP_De_RTC_Engine( new WP_Sync_Post_Meta_Storage() );
+		return new WP_De_RTC_Engine( new WP_Sync_Table_Storage() );
 	}
 
 	/**
@@ -103,7 +103,7 @@ class Tests_Collaboration_WpDeRtcDescriptorEnforcement extends WP_UnitTestCase {
 		$response = $this->engine()->get_updates_since( $this->room(), 999, 0, array() );
 		$rows     = array();
 		foreach ( $response['updates'] as $update ) {
-			if ( WP_De_RTC_Engine::UPDATE_TYPE_PROPOSAL_PARKED === $update['type'] ) {
+			if ( WP_De_RTC_Engine::UPDATE_TYPE_PARKED === $update['type'] ) {
 				$rows[] = json_decode( $update['data'], true );
 			}
 		}
@@ -112,10 +112,10 @@ class Tests_Collaboration_WpDeRtcDescriptorEnforcement extends WP_UnitTestCase {
 
 	public function test_valid_descriptor_is_accepted_and_merges() {
 		$engine = $this->engine();
-		$this->assertSame( self::GENESIS_CONTENT, $engine->materialize( $this->room() ) );
+		$this->assertSame( $this->genesis(), $engine->materialize( $this->room() ) );
 
-		$proposed = str_replace( 'Alpha block original text.', 'Alpha edited with evidence.', self::GENESIS_CONTENT );
-		$result   = $engine->handle_updates( $this->room(), 701, 0, array( $this->proposal( 'p-valid', 'v1', self::GENESIS_CONTENT, $proposed ) ), array() );
+		$proposed = str_replace( 'Alpha block original text.', 'Alpha edited with evidence.', $this->genesis() );
+		$result   = $engine->handle_updates( $this->room(), 701, 0, array( $this->proposal( 'p-valid', 'v1', $this->genesis(), $proposed ) ), array() );
 
 		$this->assertSame( 'applied', $result['dispositions'][0]['status'] );
 		$this->assertStringContainsString( 'Alpha edited with evidence.', (string) $this->engine()->materialize( $this->room() ) );
@@ -123,13 +123,13 @@ class Tests_Collaboration_WpDeRtcDescriptorEnforcement extends WP_UnitTestCase {
 
 	public function test_tampered_content_hash_voids_the_proposal() {
 		$engine = $this->engine();
-		$this->assertSame( self::GENESIS_CONTENT, $engine->materialize( $this->room() ) );
+		$this->assertSame( $this->genesis(), $engine->materialize( $this->room() ) );
 
-		$proposed                        = str_replace( 'Alpha block original text.', 'Alpha honest edit.', self::GENESIS_CONTENT );
-		$tampered                        = wp_de_rtc_create_automerge_update_for_content_change( self::GENESIS_CONTENT, $proposed, 'client-test' );
+		$proposed                        = str_replace( 'Alpha block original text.', 'Alpha honest edit.', $this->genesis() );
+		$tampered                        = wp_de_rtc_create_automerge_update_for_content_change( $this->genesis(), $proposed, 'client-test' );
 		$tampered['proposedContentHash'] = str_repeat( '0', 64 );
 
-		$result = $engine->handle_updates( $this->room(), 702, 0, array( $this->proposal( 'p-tampered-hash', 'v1', self::GENESIS_CONTENT, $proposed, $tampered ) ), array() );
+		$result = $engine->handle_updates( $this->room(), 702, 0, array( $this->proposal( 'p-tampered-hash', 'v1', $this->genesis(), $proposed, $tampered ) ), array() );
 
 		$this->assertSame( 'voided', $result['dispositions'][0]['status'] );
 		$this->assertSame( 'automerge_block_native_proposed_hash_mismatch', $result['dispositions'][0]['reason'] );
@@ -138,16 +138,16 @@ class Tests_Collaboration_WpDeRtcDescriptorEnforcement extends WP_UnitTestCase {
 
 	public function test_descriptor_for_different_content_voids_the_proposal() {
 		$engine = $this->engine();
-		$this->assertSame( self::GENESIS_CONTENT, $engine->materialize( $this->room() ) );
+		$this->assertSame( $this->genesis(), $engine->materialize( $this->room() ) );
 
 		// Evidence derived for one edit, submitted beside ANOTHER: the
 		// fingerprints cannot match the re-derived expectation.
-		$claimed  = str_replace( 'Alpha block original text.', 'Alpha claimed edit.', self::GENESIS_CONTENT );
-		$actual   = str_replace( 'Alpha block original text.', 'Alpha smuggled edit.', self::GENESIS_CONTENT );
-		$evidence = wp_de_rtc_create_automerge_update_for_content_change( self::GENESIS_CONTENT, $claimed, 'client-test' );
+		$claimed  = str_replace( 'Alpha block original text.', 'Alpha claimed edit.', $this->genesis() );
+		$actual   = str_replace( 'Alpha block original text.', 'Alpha smuggled edit.', $this->genesis() );
+		$evidence = wp_de_rtc_create_automerge_update_for_content_change( $this->genesis(), $claimed, 'client-test' );
 		unset( $evidence['change_range'], $evidence['baseContentHash'], $evidence['proposedContentHash'] );
 
-		$result = $engine->handle_updates( $this->room(), 703, 0, array( $this->proposal( 'p-smuggle', 'v1', self::GENESIS_CONTENT, $actual, $evidence ) ), array() );
+		$result = $engine->handle_updates( $this->room(), 703, 0, array( $this->proposal( 'p-smuggle', 'v1', $this->genesis(), $actual, $evidence ) ), array() );
 
 		$this->assertSame( 'voided', $result['dispositions'][0]['status'] );
 		$this->assertSame( 'automerge_client_update_materialization_mismatch', $result['dispositions'][0]['reason'] );
@@ -156,12 +156,12 @@ class Tests_Collaboration_WpDeRtcDescriptorEnforcement extends WP_UnitTestCase {
 
 	public function test_hash_pinned_unsupported_fallback_is_accepted() {
 		$engine = $this->engine();
-		$this->assertSame( self::GENESIS_CONTENT, $engine->materialize( $this->room() ) );
+		$this->assertSame( $this->genesis(), $engine->materialize( $this->room() ) );
 
 		// A client whose parser twin refused to split blocks sends the
 		// single fallback op with verified hashes: digest-only evidence,
 		// not tamper.
-		$proposed = str_replace( 'Beta block original text.', 'Beta via digest evidence.', self::GENESIS_CONTENT );
+		$proposed = str_replace( 'Beta block original text.', 'Beta via digest evidence.', $this->genesis() );
 		$fallback = array(
 			'format'              => 'native-automerge-blocks-v1',
 			'schema'              => 'de-rtc-automerge-v1',
@@ -174,11 +174,11 @@ class Tests_Collaboration_WpDeRtcDescriptorEnforcement extends WP_UnitTestCase {
 				),
 			),
 			'stateVector'         => array( 'client-test' => 1 ),
-			'baseContentHash'     => wp_de_rtc_hash_content( self::GENESIS_CONTENT ),
+			'baseContentHash'     => wp_de_rtc_hash_content( $this->genesis() ),
 			'proposedContentHash' => wp_de_rtc_hash_content( $proposed ),
 		);
 
-		$result = $engine->handle_updates( $this->room(), 704, 0, array( $this->proposal( 'p-fallback', 'v1', self::GENESIS_CONTENT, $proposed, $fallback ) ), array() );
+		$result = $engine->handle_updates( $this->room(), 704, 0, array( $this->proposal( 'p-fallback', 'v1', $this->genesis(), $proposed, $fallback ) ), array() );
 
 		$this->assertSame( 'applied', $result['dispositions'][0]['status'] );
 		$this->assertStringContainsString( 'Beta via digest evidence.', (string) $this->engine()->materialize( $this->room() ) );
@@ -186,9 +186,9 @@ class Tests_Collaboration_WpDeRtcDescriptorEnforcement extends WP_UnitTestCase {
 
 	public function test_unsupported_fallback_without_hashes_is_rejected() {
 		$engine = $this->engine();
-		$this->assertSame( self::GENESIS_CONTENT, $engine->materialize( $this->room() ) );
+		$this->assertSame( $this->genesis(), $engine->materialize( $this->room() ) );
 
-		$proposed = str_replace( 'Beta block original text.', 'Beta unpinned.', self::GENESIS_CONTENT );
+		$proposed = str_replace( 'Beta block original text.', 'Beta unpinned.', $this->genesis() );
 		$fallback = array(
 			'format'      => 'native-automerge-blocks-v1',
 			'operations'  => array(
@@ -197,7 +197,7 @@ class Tests_Collaboration_WpDeRtcDescriptorEnforcement extends WP_UnitTestCase {
 			'stateVector' => array( 'client-test' => 1 ),
 		);
 
-		$result = $engine->handle_updates( $this->room(), 705, 0, array( $this->proposal( 'p-unpinned', 'v1', self::GENESIS_CONTENT, $proposed, $fallback ) ), array() );
+		$result = $engine->handle_updates( $this->room(), 705, 0, array( $this->proposal( 'p-unpinned', 'v1', $this->genesis(), $proposed, $fallback ) ), array() );
 
 		$this->assertSame( 'voided', $result['dispositions'][0]['status'] );
 		$this->assertSame( 'automerge_client_update_materialization_mismatch', $result['dispositions'][0]['reason'] );
@@ -205,15 +205,15 @@ class Tests_Collaboration_WpDeRtcDescriptorEnforcement extends WP_UnitTestCase {
 
 	public function test_kses_sequestration_survives_a_valid_descriptor() {
 		$engine = $this->engine();
-		$this->assertSame( self::GENESIS_CONTENT, $engine->materialize( $this->room() ) );
+		$this->assertSame( $this->genesis(), $engine->materialize( $this->room() ) );
 
 		// Validate-once-then-drop: previously a descriptor-carrying
 		// risky proposal escalated WHOLE; now the descriptor validates
 		// against the ORIGINAL proposal and the sequestration lane still
 		// parks exactly the risky block.
 		wp_set_current_user( self::$author_id );
-		$proposed = self::GENESIS_CONTENT . "\n\n<!-- wp:html -->\n<script>alert(1)</script>\n<!-- /wp:html -->";
-		$result   = $engine->handle_updates( $this->room(), 706, 0, array( $this->proposal( 'p-risky', 'v1', self::GENESIS_CONTENT, $proposed ) ), array() );
+		$proposed = $this->genesis() . "\n\n<!-- wp:html -->\n<script>alert(1)</script>\n<!-- /wp:html -->";
+		$result   = $engine->handle_updates( $this->room(), 706, 0, array( $this->proposal( 'p-risky', 'v1', $this->genesis(), $proposed ) ), array() );
 
 		$this->assertSame( 'applied', $result['dispositions'][0]['status'], 'The safe remainder lands (sequestration, not whole-park).' );
 		$materialized = (string) $this->engine()->materialize( $this->room() );
@@ -227,11 +227,11 @@ class Tests_Collaboration_WpDeRtcDescriptorEnforcement extends WP_UnitTestCase {
 
 	public function test_per_block_salvage_survives_a_valid_descriptor() {
 		$engine = $this->engine();
-		$this->assertSame( self::GENESIS_CONTENT, $engine->materialize( $this->room() ) );
+		$this->assertSame( $this->genesis(), $engine->materialize( $this->room() ) );
 
 		// A session rewrites Alpha from v1.
-		$session = str_replace( 'Alpha block original text.', 'Alpha rewritten by the session.', self::GENESIS_CONTENT );
-		$result  = $engine->handle_updates( $this->room(), 707, 0, array( $this->proposal( 'p-session', 'v1', self::GENESIS_CONTENT, $session ) ), array() );
+		$session = str_replace( 'Alpha block original text.', 'Alpha rewritten by the session.', $this->genesis() );
+		$result  = $engine->handle_updates( $this->room(), 707, 0, array( $this->proposal( 'p-session', 'v1', $this->genesis(), $session ) ), array() );
 		$this->assertSame( 'applied', $result['dispositions'][0]['status'] );
 
 		// A stale descriptor-carrying client conflicts on Alpha and edits
@@ -240,9 +240,9 @@ class Tests_Collaboration_WpDeRtcDescriptorEnforcement extends WP_UnitTestCase {
 		$stale  = str_replace(
 			array( 'Alpha block original text.', 'Beta block original text.' ),
 			array( 'Alpha rewritten by the stale client.', 'Beta cleanly edited.' ),
-			self::GENESIS_CONTENT
+			$this->genesis()
 		);
-		$result = $engine->handle_updates( $this->room(), 708, 0, array( $this->proposal( 'p-stale', 'v1', self::GENESIS_CONTENT, $stale ) ), array() );
+		$result = $engine->handle_updates( $this->room(), 708, 0, array( $this->proposal( 'p-stale', 'v1', $this->genesis(), $stale ) ), array() );
 
 		$disposition = $result['dispositions'][0];
 		$this->assertSame( 'applied', $disposition['status'] );
@@ -255,11 +255,11 @@ class Tests_Collaboration_WpDeRtcDescriptorEnforcement extends WP_UnitTestCase {
 
 	public function test_descriptor_composes_with_block_base_versions() {
 		$engine = $this->engine();
-		$this->assertSame( self::GENESIS_CONTENT, $engine->materialize( $this->room() ) );
+		$this->assertSame( $this->genesis(), $engine->materialize( $this->room() ) );
 
 		// A peer prefixes Alpha: v1 -> v2.
-		$peer   = str_replace( 'Alpha block original text.', 'Peer prefix. Alpha block original text.', self::GENESIS_CONTENT );
-		$result = $engine->handle_updates( $this->room(), 709, 0, array( $this->proposal( 'p-peer', 'v1', self::GENESIS_CONTENT, $peer ) ), array() );
+		$peer   = str_replace( 'Alpha block original text.', 'Peer prefix. Alpha block original text.', $this->genesis() );
+		$result = $engine->handle_updates( $this->room(), 709, 0, array( $this->proposal( 'p-peer', 'v1', $this->genesis(), $peer ) ), array() );
 		$this->assertSame( 'applied', $result['dispositions'][0]['status'] );
 
 		// A client that kept its own Alpha through the colliding
@@ -301,18 +301,28 @@ class Tests_Collaboration_WpDeRtcDescriptorEnforcement extends WP_UnitTestCase {
 
 	public function test_malformed_descriptor_is_rejected_as_malformed() {
 		$engine = $this->engine();
-		$this->assertSame( self::GENESIS_CONTENT, $engine->materialize( $this->room() ) );
+		$this->assertSame( $this->genesis(), $engine->materialize( $this->room() ) );
 
-		$proposed = str_replace( 'Beta block original text.', 'Beta with junk evidence.', self::GENESIS_CONTENT );
+		$proposed = str_replace( 'Beta block original text.', 'Beta with junk evidence.', $this->genesis() );
 		$result   = $engine->handle_updates(
 			$this->room(),
 			711,
 			0,
-			array( $this->proposal( 'p-junk', 'v1', self::GENESIS_CONTENT, $proposed, array( 'format' => 'not-a-format' ) ) ),
+			array( $this->proposal( 'p-junk', 'v1', $this->genesis(), $proposed, array( 'format' => 'not-a-format' ) ) ),
 			array()
 		);
 
 		$this->assertSame( 'voided', $result['dispositions'][0]['status'] );
 		$this->assertSame( 'automerge_client_update_unsupported_format', $result['dispositions'][0]['reason'] );
+	}
+
+	/**
+	 * The room's genesis content: the saved post with every block stamped
+	 * with its deterministic identity (what the room actually serves).
+	 *
+	 * @return string Stamped genesis content.
+	 */
+	private function genesis(): string {
+		return WP_De_RTC_Block_Identity::stamp_genesis( self::GENESIS_CONTENT, self::$post_id );
 	}
 }

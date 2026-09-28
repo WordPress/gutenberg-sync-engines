@@ -91,7 +91,7 @@ async function clearAndType(
 }
 
 for ( const engine of ENGINES ) {
-	test.describe( `Collaboration multi-client content - ${ engine } engine`, () => {
+	test.describe( `Collaboration multi-client content - ${ engine } engine @engine-${ engine }`, () => {
 		// Per TEST, after fixture setup: the collaboration fixture's
 		// writing-form toggle must never be able to wipe the engine
 		// selection between the flip and the pages loading.

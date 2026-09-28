@@ -38,7 +38,7 @@ module.exports = {
 	// adding a project babel config) keeps this scoped to Jest and leaves the
 	// webpack build's babel untouched.
 	transform: {
-		'\\.[jt]sx?$': [
+		'\\.(?:mjs|[jt]sx?)$': [
 			require.resolve( 'babel-jest' ),
 			{
 				presets: [
@@ -76,6 +76,9 @@ module.exports = {
 			FRAMEWORK_MODULES,
 			'@wordpress/hooks'
 		),
+		// The slow-awareness store is a @wordpress/data store; resolve the
+		// package from the subtree (the single wp.data at runtime).
+		'^@wordpress/data$': path.join( FRAMEWORK_MODULES, '@wordpress/data' ),
 		// The de-rtc doc bridge serializes/parses through the editor's block
 		// library (the single wp.blocks at runtime); resolve it from the
 		// subtree. Tests mock it — block registration is editor state.

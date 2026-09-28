@@ -38,6 +38,50 @@ if ( ! class_exists( 'WP_De_RTC_Sync_Meta_Colocation' ) ) {
 		 */
 		public static function register(): void {
 			add_filter( 'wp_insert_post_data', array( __CLASS__, 'embed_sync_meta' ), 20, 2 );
+			add_action( 'rest_api_init', array( __CLASS__, 'register_rest_filters' ) );
+		}
+
+		/**
+		 * Hooks the REST response filter for every post type the editor can
+		 * load, so the editor never receives the co-located sync-meta script
+		 * in `content.raw` (it would parse it as a block).
+		 *
+		 * @since 0.0.1
+		 *
+		 * @return void
+		 */
+		public static function register_rest_filters(): void {
+			foreach ( get_post_types( array( 'show_in_rest' => true ), 'names' ) as $post_type ) {
+				add_filter( "rest_prepare_{$post_type}", array( __CLASS__, 'strip_sync_meta_from_rest_response' ), 20 );
+			}
+		}
+
+		/**
+		 * Strips the co-located sync-meta script from the raw content a REST
+		 * response carries. The script is bookkeeping for the server (the
+		 * room re-reads it from the saved post); an editor that parsed it
+		 * would show it as a stray block and propose it back as content.
+		 *
+		 * @since 0.0.1
+		 *
+		 * @param WP_REST_Response $response The response.
+		 * @return WP_REST_Response The response, raw content stripped.
+		 */
+		public static function strip_sync_meta_from_rest_response( $response ) {
+			if ( ! $response instanceof WP_REST_Response || ! function_exists( 'wp_de_rtc_parse_post_content_sync_meta' ) ) {
+				return $response;
+			}
+			$data = $response->get_data();
+			$raw  = $data['content']['raw'] ?? null;
+			if ( ! is_string( $raw ) || false === strpos( $raw, 'data-wp-sync-meta' ) ) {
+				return $response;
+			}
+			$parsed = wp_de_rtc_parse_post_content_sync_meta( $raw, array( 'allow_script_stripped_sync_meta' => true ) );
+			if ( is_array( $parsed ) && is_string( $parsed['content'] ?? null ) ) {
+				$data['content']['raw'] = $parsed['content'];
+				$response->set_data( $data );
+			}
+			return $response;
 		}
 
 		/**
@@ -119,7 +163,6 @@ if ( ! class_exists( 'WP_De_RTC_Sync_Meta_Colocation' ) ) {
 			$storage = gutenberg_sync_engines_storage();
 			if (
 				! method_exists( $storage, 'peek_room_engine' )
-				|| ! method_exists( $storage, 'get_room_meta' )
 				|| 'de-rtc' !== $storage->peek_room_engine( $room )
 			) {
 				return null;
@@ -127,8 +170,7 @@ if ( ! class_exists( 'WP_De_RTC_Sync_Meta_Colocation' ) ) {
 
 			/*
 			 * Canonical truth lives in the engine's chained options row
-			 * (`<seq>|<json>`; the announce model's ordered store), with the
-			 * legacy `de_rtc_doc` room meta as the pre-chain fallback.
+			 * (`<seq>|<json>`; the announce model's ordered store).
 			 */
 			$doc = null;
 			if ( class_exists( 'WP_Sync_Atomic_Option' ) ) {
@@ -142,9 +184,6 @@ if ( ! class_exists( 'WP_De_RTC_Sync_Meta_Colocation' ) ) {
 						}
 					}
 				}
-			}
-			if ( null === $doc ) {
-				$doc = $storage->get_room_meta( $room, WP_De_RTC_Engine::META_DOC );
 			}
 			if ( ! is_array( $doc ) || ! is_string( $doc['version'] ?? null ) ) {
 				return null;

@@ -2,7 +2,7 @@
 /**
  * Engine-level tests for the server-authoritative Yjs sync engine
  * (WP_Yjs_Server_Engine), driving the production WP_Sync_Engine seam
- * against the postmeta storage with real y-php documents on both sides.
+ * against the table storage with real y-php documents on both sides.
  *
  * @package Gutenberg
  */
@@ -67,7 +67,7 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 	 * @return WP_Yjs_Server_Engine Engine.
 	 */
 	private function engine(): WP_Yjs_Server_Engine {
-		return new WP_Yjs_Server_Engine( new WP_Sync_Post_Meta_Storage() );
+		return new WP_Yjs_Server_Engine( new WP_Sync_Table_Storage() );
 	}
 
 	/**
@@ -185,7 +185,7 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 		$this->assertSame( 'Hello world', $block->get( 'attributes' )->get( 'content' )->toString() );
 
 		// The genesis row stamps the engine lineage.
-		$storage = new WP_Sync_Post_Meta_Storage();
+		$storage = new WP_Sync_Table_Storage();
 		$this->assertSame( 'yjs-server', $storage->get_room_engine( $this->room() ) );
 	}
 
@@ -319,6 +319,85 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 			get_post( $nested_post_id )->post_content,
 			$engine->materialize( $room ),
 			'nested genesis content must roundtrip byte-identically'
+		);
+
+		wp_delete_post( $nested_post_id, true );
+	}
+
+	/**
+	 * REGRESSION (issue #38, fuzzer seed 8): genesis blocks seeded only the
+	 * comment-delimiter attributes, so registered defaults were missing from
+	 * the doc. Clients adopt doc blocks verbatim (no parse, no createBlock —
+	 * nothing re-fills defaults), and core/group's save() renders its wrapper
+	 * from the `tagName` attribute: with it missing, the group serialized to
+	 * an EMPTY string, landed in post_content as a void `<!-- wp:group /-->`
+	 * with every child dropped, and the next reload showed the invalid-content
+	 * recovery screen with an empty recovery copy. Genesis must fill unsourced
+	 * attribute defaults; materialize strips them again (the roundtrip test
+	 * above certifies that half).
+	 */
+	public function test_genesis_fills_unsourced_attribute_defaults() {
+		$nested_content = implode(
+			"\n",
+			array(
+				'<!-- wp:group {"layout":{"type":"constrained"}} -->',
+				'<div class="wp-block-group"><!-- wp:paragraph -->',
+				'<p>Inside the group</p>',
+				'<!-- /wp:paragraph --></div>',
+				'<!-- /wp:group -->',
+			)
+		);
+		$nested_post_id = self::factory()->post->create(
+			array( 'post_content' => $nested_content )
+		);
+		$room           = 'postType/post:' . $nested_post_id;
+
+		$engine   = $this->engine();
+		$response = $engine->get_updates_since( $room, 101, 0, array() );
+		$doc      = $this->client_doc_from_response( $response );
+
+		$group = $doc->getMap( 'document' )->get( 'blocks' )->get( 0 );
+		$this->assertSame( 'core/group', $group->get( 'name' ) );
+		$attributes = $group->get( 'attributes' );
+		$this->assertSame(
+			'div',
+			$attributes->get( 'tagName' ),
+			'genesis must fill the registered tagName default the comment delimiters omit'
+		);
+		$this->assertSame(
+			array( 'type' => 'constrained' ),
+			(array) $attributes->get( 'layout' ),
+			'comment-delimiter attributes must survive alongside the filled defaults'
+		);
+
+		/*
+		 * ORDER is part of the contract: the editor's convergence checks
+		 * compare block state as serialized JSON, and parse/createBlock emit
+		 * attributes in schema registration order — registered keys first
+		 * (rich-text content at its own schema slot), extras appended.
+		 * A doc-adopted `{dropCap, content}` against a peer's parsed
+		 * `{content, dropCap}` never compares equal (e2e late-joiner-paste
+		 * failure on the first version of this fix).
+		 */
+		$this->assertSame(
+			array( 'tagName', 'layout' ),
+			array_keys( (array) $attributes->toJSON() ),
+			'group attributes must sit in schema order with extras appended'
+		);
+		$paragraph = $group->get( 'innerBlocks' )->get( 0 );
+		$this->assertSame( 'core/paragraph', $paragraph->get( 'name' ) );
+		$this->assertSame(
+			array( 'content', 'dropCap' ),
+			array_keys( (array) $paragraph->get( 'attributes' )->toJSON() ),
+			'the rich-text content attribute must occupy its schema position, not be appended last'
+		);
+
+		// The materialized content must NOT carry the filled defaults back
+		// into the comment delimiters.
+		$this->assertSame(
+			get_post( $nested_post_id )->post_content,
+			$engine->materialize( $room ),
+			'filled defaults must strip back out of materialized content'
 		);
 
 		wp_delete_post( $nested_post_id, true );
@@ -531,7 +610,7 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 		$first = $this->engine()->handle_updates( $this->room(), 101, 0, array( $row ), array() );
 		$this->assertSame( 'applied', $first['dispositions'][0]['status'] );
 
-		$storage    = new WP_Sync_Post_Meta_Storage();
+		$storage    = new WP_Sync_Table_Storage();
 		$row_count  = $storage->get_update_count( $this->room() );
 		$redelivery = $this->engine()->handle_updates( $this->room(), 101, 0, array( $row ), array() );
 
@@ -545,7 +624,7 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 			$redelivery['dispositions']
 		);
 		// Nothing new was stored.
-		$this->assertSame( $row_count, ( new WP_Sync_Post_Meta_Storage() )->get_update_count( $this->room() ) );
+		$this->assertSame( $row_count, ( new WP_Sync_Table_Storage() )->get_update_count( $this->room() ) );
 	}
 
 	public function test_malformed_update_voids_per_update_without_starving_the_batch() {
@@ -683,7 +762,7 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 				$this->assertFalse( $read['should_compact'] );
 			}
 
-			$storage = new WP_Sync_Post_Meta_Storage();
+			$storage = new WP_Sync_Table_Storage();
 			$rows    = $storage->get_updates_after_cursor( $this->room(), 0 );
 
 			// Checkpoint snapshots were appended by the server.
@@ -737,7 +816,7 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 		// Genesis stamps cursor 0: a racing initializer's client can append
 		// a row below this genesis row's id, so even the genesis row id
 		// would over-claim.
-		$storage = new WP_Sync_Post_Meta_Storage();
+		$storage = new WP_Sync_Table_Storage();
 		$meta    = $storage->get_room_meta( $this->room(), WP_Yjs_Server_Engine::META_DOC );
 		$this->assertSame( 0, (int) $meta['cursor'] );
 
@@ -760,7 +839,7 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 			array()
 		);
 
-		$storage = new WP_Sync_Post_Meta_Storage();
+		$storage = new WP_Sync_Table_Storage();
 		$meta    = $storage->get_room_meta( $this->room(), WP_Yjs_Server_Engine::META_DOC );
 		$storage->get_updates_after_cursor( $this->room(), 0 );
 		$head = $storage->get_cursor( $this->room() );
@@ -823,7 +902,7 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 				$this->first_block_content( $doc )->insert( 0, 'bravo ' );
 			}
 		);
-		$storage  = new WP_Sync_Post_Meta_Storage();
+		$storage  = new WP_Sync_Table_Storage();
 		$storage->add_update(
 			$this->room(),
 			array(
@@ -916,7 +995,7 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 		// Corrupt the canonical the way the visibility race would: content
 		// reverted to genesis, stamp claiming the head, nothing left above
 		// the stamp for the load-path repair to apply.
-		$storage = new WP_Sync_Post_Meta_Storage();
+		$storage = new WP_Sync_Table_Storage();
 		$storage->get_updates_after_cursor( $this->room(), 0 );
 		$head = $storage->get_cursor( $this->room() );
 		$storage->set_room_meta(
@@ -991,7 +1070,7 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 			}
 		);
 
-		$storage = new WP_Sync_Post_Meta_Storage();
+		$storage = new WP_Sync_Table_Storage();
 		$storage->get_updates_after_cursor( $this->room(), 0 );
 		$rows_before = $storage->get_update_count( $this->room() );
 
@@ -1018,7 +1097,7 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 		);
 
 		// Nothing was stored for the unresolvable update.
-		$storage = new WP_Sync_Post_Meta_Storage();
+		$storage = new WP_Sync_Table_Storage();
 		$storage->get_updates_after_cursor( $this->room(), 0 );
 		$this->assertSame( $rows_before, $storage->get_update_count( $this->room() ) );
 
@@ -1060,7 +1139,7 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 		$initialize->invoke( $engine_a, $this->room(), $doc_a );
 		$initialize->invoke( $engine_b, $this->room(), $doc_b );
 
-		$storage = new WP_Sync_Post_Meta_Storage();
+		$storage = new WP_Sync_Table_Storage();
 		$rows    = $storage->get_updates_after_cursor( $this->room(), 0 );
 		$this->assertCount( 2, $rows );
 		$this->assertSame( $rows[0]['data'], $rows[1]['data'] );

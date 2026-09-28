@@ -137,7 +137,7 @@ class Tests_Collaboration_WpSyncEscalationCriteria extends WP_UnitTestCase {
 				if ( 'WP_De_RTC_Engine' === $engine_class ) {
 					/*
 					 * de-rtc surfaces every conflict as a durable
-					 * proposal-parked row — both whole-proposal escalations
+					 * parked row — both whole-proposal escalations
 					 * (which ALSO report an escalated disposition) and
 					 * partial-acceptance salvage (which reports applied).
 					 * Unique parked proposalIds are therefore the one
@@ -145,7 +145,7 @@ class Tests_Collaboration_WpSyncEscalationCriteria extends WP_UnitTestCase {
 					 */
 					$parked_ids = array();
 					foreach ( $storage->get_updates_after_cursor( $room, 0 ) as $row ) {
-						if ( 'proposal-parked' !== ( $row['type'] ?? '' ) ) {
+						if ( 'parked' !== ( $row['type'] ?? '' ) ) {
 							continue;
 						}
 						$decoded = json_decode( (string) $row['data'], true );

@@ -46,6 +46,8 @@ class Tests_Collaboration_GutenbergSyncEnginesDiagnostics extends WP_UnitTestCas
 	public function set_up() {
 		global $wpdb;
 		parent::set_up();
+		Gutenberg_Sync_Engines_Request_Log::reset_whole_request();
+		unset( $_SERVER['HTTP_X_RTC_TEST'], $_SERVER['HTTP_X_RTC_SCENARIO'], $_SERVER['HTTP_X_RTC_APPROACH'] );
 		// The plugin bootstrap registered the diagnostics hooks (the test
 		// bootstrap defines GUTENBERG_SYNC_ENGINES_DIAGNOSTICS); these tests
 		// only need clean tables.
@@ -208,6 +210,164 @@ class Tests_Collaboration_GutenbergSyncEnginesDiagnostics extends WP_UnitTestCas
 		$this->simulate_dispatch( $request, array() );
 
 		$this->assertSame( array(), Gutenberg_Sync_Engines_Request_Log::fetch_rows() );
+	}
+
+	public function test_option_writes_are_counted_per_request() {
+		$request = $this->build_sync_request( 'postType/post:' . self::$post_id );
+		$request->set_header( 'X-RTC-Test', '1' );
+		$request->set_header( 'X-RTC-Scenario', 'editing' );
+
+		$server = rest_get_server();
+		apply_filters( 'rest_pre_dispatch', null, $server, $request );
+		// Two options-API writes inside the measured window; the direct-SQL
+		// primitives (room lock, CAS) deliberately bypass the API and must
+		// not count.
+		update_option( 'gutenberg_sync_engines_test_option', 'a' );
+		delete_option( 'gutenberg_sync_engines_test_option' );
+		apply_filters(
+			'rest_post_dispatch',
+			new WP_REST_Response( $this->room_response(), 200 ),
+			$server,
+			$request
+		);
+
+		$rows = Gutenberg_Sync_Engines_Request_Log::fetch_rows();
+		$this->assertCount( 1, $rows );
+		$this->assertGreaterThanOrEqual( 2, $rows[0]['option_writes'] );
+		// The PHP-process block-I/O columns exist and are sane (zero on
+		// platforms whose getrusage does not fill the fields).
+		$this->assertGreaterThanOrEqual( 0, $rows[0]['php_io_reads'] );
+		$this->assertGreaterThanOrEqual( 0, $rows[0]['php_io_writes'] );
+	}
+
+	public function test_db_io_counters_are_cumulative_and_route_matches() {
+		$first = Gutenberg_Sync_Engines_Request_Log::db_io_counters();
+		$this->assertArrayHasKey( 'available', $first );
+		$this->assertArrayHasKey( 'data_reads', $first );
+		$this->assertArrayHasKey( 'data_writes', $first );
+		$this->assertArrayHasKey( 'fsyncs', $first );
+		$this->assertArrayHasKey( 'buffer_pool_reads', $first );
+
+		if ( $first['available'] ) {
+			// Force at least one write transaction, then resample: the
+			// counters are cumulative and must never go backward.
+			update_option( 'gutenberg_sync_engines_dbio_probe', wp_rand() );
+			delete_option( 'gutenberg_sync_engines_dbio_probe' );
+			$second = Gutenberg_Sync_Engines_Request_Log::db_io_counters();
+			$this->assertGreaterThanOrEqual( $first['data_writes'], $second['data_writes'] );
+			$this->assertGreaterThanOrEqual( $first['fsyncs'], $second['fsyncs'] );
+		}
+
+		$log  = new Gutenberg_Sync_Engines_Request_Log();
+		$data = $log->rest_db_io()->get_data();
+		$this->assertSame( $first['available'], $data['available'] );
+	}
+
+	public function test_room_size_route_reports_storage_without_creating() {
+		$log = new Gutenberg_Sync_Engines_Request_Log();
+
+		$missing = new WP_REST_Request( 'GET', '/rtc-test/v1/room-size' );
+		$missing->set_param( 'room', 'postType/post:999999' );
+		$data = $log->rest_room_size( $missing )->get_data();
+		$this->assertFalse( $data['found'] );
+		$this->assertSame( 0, $data['rows'] );
+
+		// The probe must not have created the room by looking.
+		$this->assertFalse( ( new WP_Sync_Table_Storage() )->get_room_size( 'postType/post:999999' )['found'] );
+
+		// A room with two update rows.
+		$room    = 'postType/post:' . self::$post_id;
+		$storage = new WP_Sync_Table_Storage();
+		$storage->add_update( $room, 'payload-one' );
+		$storage->add_update( $room, 'payload-two-longer' );
+
+		$request = new WP_REST_Request( 'GET', '/rtc-test/v1/room-size' );
+		$request->set_param( 'room', $room );
+		$data = $log->rest_room_size( $request )->get_data();
+		$this->assertTrue( $data['found'] );
+		$this->assertSame( 2, $data['rows'] );
+		$this->assertGreaterThan( 0, $data['bytes'] );
+	}
+
+	public function test_whole_request_capture_logs_any_tagged_request() {
+		// The mu-plugin lane: an untagged request arms nothing…
+		$log = new Gutenberg_Sync_Engines_Request_Log();
+		$log->capture_whole_request();
+		Gutenberg_Sync_Engines_Request_Log::flush_whole_request();
+		$this->assertSame( array(), Gutenberg_Sync_Engines_Request_Log::fetch_rows() );
+
+		// …and a tagged one (any route — there is no REST request at all
+		// here, as on a page load or admin-ajax) logs a whole-request row.
+		$_SERVER['HTTP_X_RTC_TEST']     = '1';
+		$_SERVER['HTTP_X_RTC_SCENARIO'] = 'host-editing';
+		$_SERVER['HTTP_X_RTC_APPROACH'] = 'baseline';
+		$log->capture_whole_request();
+		Gutenberg_Sync_Engines_Request_Log::flush_whole_request();
+
+		$rows = Gutenberg_Sync_Engines_Request_Log::fetch_rows();
+		$this->assertCount( 1, $rows );
+		$this->assertSame( 'host-editing', $rows[0]['scenario'] );
+		$this->assertSame( 'baseline', $rows[0]['approach'] );
+		$this->assertSame( 0.0, $rows[0]['ms'] );
+		$this->assertGreaterThan( 0, $rows[0]['total_ms'] );
+		$this->assertGreaterThan( 0, $rows[0]['peak_memory'] );
+		$this->assertGreaterThanOrEqual( 1, $rows[0]['concurrent'] );
+
+		// A second flush must not insert a second row.
+		Gutenberg_Sync_Engines_Request_Log::flush_whole_request();
+		$this->assertCount( 1, Gutenberg_Sync_Engines_Request_Log::fetch_rows() );
+	}
+
+	public function test_whole_request_capture_merges_with_rest_dispatch() {
+		// Armed whole-request lane + a tagged REST dispatch in the same
+		// request (the mu-plugin scenario with the plugin active): ONE
+		// row, carrying the dispatch detail AND whole-request totals.
+		$_SERVER['HTTP_X_RTC_TEST']     = '1';
+		$_SERVER['HTTP_X_RTC_SCENARIO'] = 'host-editing';
+		$_SERVER['HTTP_X_RTC_APPROACH'] = 'intent-log';
+		$log                            = new Gutenberg_Sync_Engines_Request_Log();
+		$log->capture_whole_request();
+
+		$request = $this->build_sync_request( 'postType/post:' . self::$post_id );
+		$request->set_header( 'X-RTC-Test', '1' );
+		$request->set_header( 'X-RTC-Scenario', 'host-editing' );
+		$request->set_header( 'X-RTC-Approach', 'intent-log' );
+		$response = $this->simulate_dispatch( $request, $this->room_response() );
+
+		// The dispatch deferred its insert to the shutdown flush.
+		$this->assertSame( array(), Gutenberg_Sync_Engines_Request_Log::fetch_rows() );
+		$this->assertSame( 'deferred', $response->get_headers()['X-RTC-DB-Insert'] );
+
+		Gutenberg_Sync_Engines_Request_Log::flush_whole_request();
+		$rows = Gutenberg_Sync_Engines_Request_Log::fetch_rows();
+		$this->assertCount( 1, $rows );
+		$this->assertSame( 'host-editing', $rows[0]['scenario'] );
+		$this->assertSame( 'intent-log', $rows[0]['approach'] );
+		// Dispatch detail survived the merge…
+		$this->assertSame( 1, $rows[0]['rooms'] );
+		$this->assertGreaterThan( 0, $rows[0]['response_bytes'] );
+		// …and the totals are whole-request measurements.
+		$this->assertGreaterThan( 0, $rows[0]['total_ms'] );
+	}
+
+	public function test_tagged_autosave_route_is_logged() {
+		// De-rtc commits travel through the ordinary autosave endpoint, so
+		// a client that tags one (the host benchmark tags commit-shaped
+		// autosaves) opts it into the log; untagged autosaves stay out.
+		$untagged = new WP_REST_Request( 'POST', '/wp/v2/posts/' . self::$post_id . '/autosaves' );
+		$this->simulate_dispatch( $untagged, array() );
+		$this->assertSame( array(), Gutenberg_Sync_Engines_Request_Log::fetch_rows() );
+
+		$tagged = new WP_REST_Request( 'POST', '/wp/v2/posts/' . self::$post_id . '/autosaves' );
+		$tagged->set_header( 'X-RTC-Test', '1' );
+		$tagged->set_header( 'X-RTC-Scenario', 'host-editing' );
+		$this->simulate_dispatch( $tagged, array( 'id' => self::$post_id ) );
+
+		$rows = Gutenberg_Sync_Engines_Request_Log::fetch_rows();
+		$this->assertCount( 1, $rows );
+		$this->assertSame( 'host-editing', $rows[0]['scenario'] );
+		$this->assertSame( 0, $rows[0]['rooms'] );
+		$this->assertSame( 0, $rows[0]['updates_in'] );
 	}
 
 	public function test_report_text_includes_baseline_ratio() {

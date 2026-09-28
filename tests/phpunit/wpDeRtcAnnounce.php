@@ -54,7 +54,7 @@ class Tests_Collaboration_WpDeRtcAnnounce extends WP_UnitTestCase {
 	}
 
 	private function engine(): WP_De_RTC_Engine {
-		return new WP_De_RTC_Engine( new WP_Sync_Post_Meta_Storage() );
+		return new WP_De_RTC_Engine( new WP_Sync_Table_Storage() );
 	}
 
 	private function proposal( string $proposal_id, string $base_version, string $proposed ): array {
@@ -80,9 +80,9 @@ class Tests_Collaboration_WpDeRtcAnnounce extends WP_UnitTestCase {
 
 	public function test_accepted_proposal_stores_an_announce_row_without_content() {
 		$engine = $this->engine();
-		$this->assertSame( self::GENESIS_CONTENT, $engine->materialize( $this->room() ) );
+		$this->assertSame( $this->genesis(), $engine->materialize( $this->room() ) );
 
-		$proposed = str_replace( 'Alpha block original text.', 'Alpha edited under the announce model.', self::GENESIS_CONTENT );
+		$proposed = str_replace( 'Alpha block original text.', 'Alpha edited under the announce model.', $this->genesis() );
 		$result   = $engine->handle_updates( $this->room(), 101, 0, array( $this->proposal( 'p-1', 'v1', $proposed ) ), array() );
 		$this->assertSame( 'applied', $result['dispositions'][0]['status'] );
 		$this->assertSame( 'v2', $result['dispositions'][0]['version'] );
@@ -95,8 +95,8 @@ class Tests_Collaboration_WpDeRtcAnnounce extends WP_UnitTestCase {
 			}
 			// The transport never carries the document in stored rows: only
 			// the genesis snapshot (a bootstrap necessity) has content.
-			if ( WP_De_RTC_Engine::UPDATE_TYPE_CONTENT === $update['type'] ) {
-				$this->fail( 'No legacy content rows may be written under the announce model.' );
+			if ( WP_De_RTC_Engine::UPDATE_TYPE_SNAPSHOT !== $update['type'] ) {
+				$this->assertArrayNotHasKey( 'content', (array) json_decode( $update['data'], true ), 'Only snapshot rows may carry content under the announce model.' );
 			}
 		}
 
@@ -144,6 +144,46 @@ class Tests_Collaboration_WpDeRtcAnnounce extends WP_UnitTestCase {
 		$this->assertSame( array(), $caught_up['updates'] );
 	}
 
+	public function test_a_fetch_sent_beside_an_open_stream_is_answered_with_the_snapshot_and_nothing_stored() {
+		// The client's send lane under SSE: `rows_received_separately: true`. The stored
+		// rows (genesis, announces) are the stream's to deliver; the
+		// never-stored fetch answer rides the send's own response.
+		update_option( 'wp_sync_engine', WP_De_RTC_Engine::SLUG );
+		try {
+			$engine   = $this->engine();
+			$proposed = str_replace( 'Beta block original text.', 'Beta advanced.', (string) $engine->materialize( $this->room() ) );
+			$engine->handle_updates( $this->room(), 101, 0, array( $this->proposal( 'p-3', 'v1', $proposed ) ), array() );
+
+			$request = new WP_REST_Request( 'POST', '/wp-sync/v1/updates' );
+			$request->set_body_params(
+				array(
+					'rooms' => array(
+						array(
+							'after'                    => 0,
+							'awareness'                => array( 'name' => 'b' ),
+							'client_id'                => 202,
+							'rows_received_separately' => true,
+							'room'                     => $this->room(),
+							'updates'                  => array( $this->fetch_row( 'v1' ) ),
+						),
+					),
+				)
+			);
+			$response = rest_get_server()->dispatch( $request );
+			$this->assertSame( 200, $response->get_status() );
+			$data = $response->get_data()['rooms'][0];
+
+			$this->assertCount( 1, $data['updates'], 'Exactly the synthesized answer, no stored rows.' );
+			$this->assertSame( WP_De_RTC_Engine::UPDATE_TYPE_SNAPSHOT, $data['updates'][0]['type'] );
+			$snapshot = json_decode( $data['updates'][0]['data'], true );
+			$this->assertSame( 'v2', $snapshot['version'] );
+			$this->assertTrue( $snapshot['ephemeral'] );
+			$this->assertGreaterThan( 0, $data['end_cursor'], 'The head the stream must reach before the answer applies.' );
+		} finally {
+			delete_option( 'wp_sync_engine' );
+		}
+	}
+
 	public function test_announce_rows_stay_small_as_the_document_grows() {
 		$engine  = $this->engine();
 		$content = (string) $engine->materialize( $this->room() );
@@ -179,11 +219,11 @@ class Tests_Collaboration_WpDeRtcAnnounce extends WP_UnitTestCase {
 
 	public function test_convergence_via_announce_and_fetch_round_trip() {
 		$engine = $this->engine();
-		$this->assertSame( self::GENESIS_CONTENT, $engine->materialize( $this->room() ) );
+		$this->assertSame( $this->genesis(), $engine->materialize( $this->room() ) );
 
 		// Client A edits; client B (bootstrapped at v1) sees the announce,
 		// fetches, and lands its own edit against the fetched version.
-		$a_edit = str_replace( 'Alpha block original text.', 'Alpha by A.', self::GENESIS_CONTENT );
+		$a_edit = str_replace( 'Alpha block original text.', 'Alpha by A.', $this->genesis() );
 		$engine->handle_updates( $this->room(), 101, 0, array( $this->proposal( 'p-a', 'v1', $a_edit ) ), array() );
 
 		$engine->handle_updates( $this->room(), 202, 0, array( $this->fetch_row( 'v1' ) ), array() );
@@ -198,5 +238,15 @@ class Tests_Collaboration_WpDeRtcAnnounce extends WP_UnitTestCase {
 		$final = (string) $this->engine()->materialize( $this->room() );
 		$this->assertStringContainsString( 'Alpha by A.', $final );
 		$this->assertStringContainsString( 'Beta by B.', $final );
+	}
+
+	/**
+	 * The room's genesis content: the saved post with every block stamped
+	 * with its deterministic identity (what the room actually serves).
+	 *
+	 * @return string Stamped genesis content.
+	 */
+	private function genesis(): string {
+		return WP_De_RTC_Block_Identity::stamp_genesis( self::GENESIS_CONTENT, self::$post_id );
 	}
 }

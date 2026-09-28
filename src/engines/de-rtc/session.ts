@@ -14,6 +14,8 @@ import type {
 	EngineUpdate,
 } from '@wordpress/sync';
 import { applyServerAwarenessStates } from '../awareness-sync';
+import { announceLocalWrite } from '../../providers/advisory/announce';
+import type { TransportSessionExtensions } from '../../providers/session-extensions';
 import type { DeRtcCommitAdapter } from './commit';
 import { buildDeRtcClientUpdate, hashDeRtcContent } from './descriptor';
 import { DE_RTC_REMOTE_ORIGIN, type DeRtcDocBridge } from './doc-bridge';
@@ -38,14 +40,6 @@ export const DE_RTC_ENGINE_PROTOCOL = 2;
 export const DE_RTC_PROPOSAL_TYPE = 'proposal';
 
 /**
- * Server-emitted row type: accepted canonical content at a version.
- * Matches WP_De_RTC_Engine::UPDATE_TYPE_CONTENT. Receive-only.
- * LEGACY (protocol 1): rooms written before the announce model still
- * replay these; the server no longer writes them.
- */
-export const DE_RTC_CONTENT_TYPE = 'content';
-
-/**
  * Server-emitted row type: a canonical version ANNOUNCEMENT — version,
  * base version, content hash, author attribution, merged properties, NO
  * content (the transport carries advisories, not documents).
@@ -68,13 +62,14 @@ export const DE_RTC_SNAPSHOT_TYPE = 'snapshot';
 
 /**
  * Server-emitted row type: an escalated proposal parked for review.
- * Matches WP_De_RTC_Engine::UPDATE_TYPE_PROPOSAL_PARKED. Receive-only.
+ * Matches WP_De_RTC_Engine::UPDATE_TYPE_PARKED. Receive-only.
  */
-export const DE_RTC_PROPOSAL_PARKED_TYPE = 'proposal-parked';
+export const DE_RTC_PARKED_TYPE = 'parked';
 
 /**
- * Row type closing a parked proposal (client-sent; the server relays its
- * stamped copy). Matches WP_De_RTC_Engine::UPDATE_TYPE_RESOLVED.
+ * Server-emitted row type closing a parked proposal (the server stamps
+ * one when a resolution POSTs to the REST review route). Matches
+ * WP_De_RTC_Engine::UPDATE_TYPE_RESOLVED. Receive-only.
  */
 export const DE_RTC_RESOLVED_TYPE = 'resolved';
 
@@ -138,20 +133,22 @@ export function setDeRtcBurstQuietMsForTesting( ms: number ): void {
  *
  * The wire is DE-RTC's save-centric shape mapped onto the room protocol:
  * the client sends whole-content PROPOSALS against the version it last
- * incorporated, and the server answers with three-way-merged canonical
- * CONTENT rows plus per-proposal dispositions. Two rules keep the client
- * honest without doing any merging of its own:
+ * incorporated, and the server three-way-merges each one and answers
+ * with an ANNOUNCE row (version + content hash, no content) plus
+ * per-proposal dispositions; a client that is behind FETCHES one
+ * canonical snapshot. Two rules keep the client honest without doing
+ * any merging of its own:
  *
  * - ONE proposal in flight, coalesced: local edits mark the doc dirty;
  *   a proposal is built from the doc's current content only when none is
  *   pending, so a burst of typing costs one proposal per poll cycle. The
  *   base version is the version last APPLIED to the doc — a stale base is
  *   fine, that is exactly what the server's three-way merge is for.
- * - Canonical rows are DEFERRED while local edits are dirty or in
+ * - Canonical snapshots are DEFERRED while local edits are dirty or in
  *   flight: applying the server's content would overwrite edits the
- *   server has not seen yet. The newest deferred row applies once the
- *   local state settles (the accepted row for our own proposal already
- *   contains our edits, merged). On a genuine conflict the server
+ *   server has not seen yet. The newest deferred snapshot applies once
+ *   the local state settles (our own unchanged proposal is confirmed by
+ *   hash and needs no content at all). On a genuine conflict the server
  *   escalates: it sets the proposal aside as a parked review row (see
  *   review.ts and the framework review panel), and the canonical state
  *   wins locally once applied — a person then decides what to keep.
@@ -161,7 +158,11 @@ export function setDeRtcBurstQuietMsForTesting( ms: number ): void {
  */
 export function createDeRtcSessionCodec(
 	options: DeRtcSessionOptions
-): EngineSessionCodec & { prepareForSave: () => Promise< () => void > } {
+): EngineSessionCodec &
+	Pick< TransportSessionExtensions, 'onRoomRestart' > & {
+		prepareForSave: () => Promise< () => void >;
+		sendsWhileAlone: true;
+	} {
 	const { bridge, review } = options;
 	const doc = bridge.doc;
 	const awareness = options.awareness ?? new Awareness( doc );
@@ -375,6 +376,9 @@ export function createDeRtcSessionCodec(
 	async function commitThroughSave( update: EngineUpdate ): Promise< void > {
 		try {
 			const response = await options.commit!( update );
+			// Rows landed through the autosave lane, which the polling manager
+			// never sees: tell the peers on the advisory channel to poll.
+			announceLocalWrite();
 			for ( const row of response.updates ?? [] ) {
 				processRow( row );
 			}
@@ -427,6 +431,12 @@ export function createDeRtcSessionCodec(
 	 */
 	let lastLocalEditAt = 0;
 	let deferredSnapshotRow: EngineUpdate | null = null;
+	// Set by onRoomRestart: the next snapshot is the NEW room's genesis.
+	// If the doc holds content that differs from it, that content is the
+	// person's unsaved work and is re-proposed against the new genesis
+	// (the server three-way-merges from that base) instead of being
+	// overwritten by it.
+	let restartPending = false;
 	let quietRetryTimer: ReturnType< typeof setTimeout > | null = null;
 
 	function typingQuiet(): boolean {
@@ -469,7 +479,7 @@ export function createDeRtcSessionCodec(
 		}
 
 		// Review-lane rows carry no canonical content; they feed the ledger.
-		if ( DE_RTC_PROPOSAL_PARKED_TYPE === update.type ) {
+		if ( DE_RTC_PARKED_TYPE === update.type ) {
 			if (
 				'string' === typeof decoded?.proposalId &&
 				'' !== decoded.proposalId &&
@@ -505,19 +515,12 @@ export function createDeRtcSessionCodec(
 				? ( decoded.properties as Record< string, unknown > )
 				: undefined;
 
-		// The revert-edit undo manager derives from canonical
-		// rows: feed it every row, tagging our own accepted proposals.
-		if (
-			DE_RTC_CONTENT_TYPE === update.type ||
-			DE_RTC_SNAPSHOT_TYPE === update.type
-		) {
-			if (
-				'string' === typeof decoded.version &&
-				'string' === typeof decoded.content
-			) {
-				// The descriptor builder's base-content ledger.
-				recordCanonicalContent( decoded.version, decoded.content );
-			}
+		// The revert-edit undo manager derives from canonical rows: feed
+		// it every snapshot (our own accepted proposals are fed from the
+		// announce path, where the hash confirms them).
+		if ( DE_RTC_SNAPSHOT_TYPE === update.type ) {
+			// The descriptor builder's base-content ledger.
+			recordCanonicalContent( decoded.version, decoded.content );
 			options.undoFeed?.noteRow( {
 				version: decoded.version,
 				baseVersion:
@@ -525,9 +528,7 @@ export function createDeRtcSessionCodec(
 						? decoded.baseVersion
 						: null,
 				content: decoded.content,
-				own:
-					DE_RTC_CONTENT_TYPE === update.type &&
-					decoded.authorClientId === doc.clientID,
+				own: false,
 				...( 'number' === typeof decoded.author
 					? { author: decoded.author }
 					: {} ),
@@ -612,6 +613,26 @@ export function createDeRtcSessionCodec(
 			}
 
 			case DE_RTC_SNAPSHOT_TYPE: {
+				if ( restartPending ) {
+					restartPending = false;
+					const localContent = bridge.buildContent();
+					recordCanonicalContent( decoded.version, decoded.content );
+					if (
+						hashDeRtcContent( localContent ) ===
+						hashDeRtcContent( decoded.content )
+					) {
+						bridge.applyCanonical(
+							decoded.version,
+							decoded.content,
+							rowProperties
+						);
+						return;
+					}
+					bridge.adoptVersion( decoded.version );
+					dirty = true;
+					maybePropose();
+					return;
+				}
 				if ( ! typingQuiet() ) {
 					// Mid-burst: stash (newest wins) and re-inject at quiet
 					// (see BURST_QUIET_MS above).
@@ -666,73 +687,7 @@ export function createDeRtcSessionCodec(
 				if ( ! inFlight ) {
 					settleQueued();
 				}
-				return;
 			}
-
-			case DE_RTC_CONTENT_TYPE:
-				if (
-					decoded.authorClientId === doc.clientID &&
-					decoded.proposalId === inFlightProposalId
-				) {
-					// The accepted row for OUR CURRENT proposal, merged by
-					// the server: the in-flight slot is free again
-					// (dispositions confirm the same thing when this row and
-					// they share a response). Rows for older proposals fall
-					// through to the generic path — settling on them would
-					// free the slot early and let a peer row clobber
-					// unproposed local edits.
-					inFlight = false;
-					inFlightProposalId = null;
-					if ( decoded.content === lastProposedContent ) {
-						// Round-tripped unchanged: the doc already holds this
-						// content (plus any NEWER local keystrokes, which an
-						// application would clobber). Advance the version
-						// only, so the next coalesced chunk proposes against
-						// it instead of colliding with our own accepted edit.
-						// Properties the server merged from peers (values we
-						// did not touch since proposing) still incorporate.
-						pendingCanonical = null;
-						if ( rowProperties ) {
-							bridge.incorporateProperties(
-								rowProperties,
-								lastProposedProperties
-							);
-						}
-						bridge.advanceVersion( decoded.version );
-						settleQueued();
-						return;
-					}
-					if (
-						null !== lastProposedContent &&
-						bridge.incorporateCanonicalPreservingLocalEdits(
-							decoded.version,
-							decoded.content,
-							lastProposedContent
-						)
-					) {
-						// The server merged peers' work into our proposal:
-						// adopt their blocks, keep the blocks we edited since
-						// proposing (the next proposal reconciles them), and
-						// rebase onto the new version.
-						pendingCanonical = null;
-						if ( rowProperties ) {
-							bridge.incorporateProperties(
-								rowProperties,
-								lastProposedProperties
-							);
-						}
-						settleQueued();
-						return;
-					}
-				}
-				applyOrDeferCanonical(
-					decoded.version,
-					decoded.content,
-					rowProperties
-				);
-				if ( ! inFlight ) {
-					settleQueued();
-				}
 		}
 	}
 
@@ -760,8 +715,8 @@ export function createDeRtcSessionCodec(
 		// ONLY the disposition for the CURRENT in-flight proposal
 		// settles the slot: a previous proposal's disposition arrives in
 		// the response that follows the one whose rows already settled
-		// it, after a NEWER proposal may have gone out. Applied rows
-		// have already been (or will be) received as content rows;
+		// it, after a NEWER proposal may have gone out. Applied
+		// proposals have already been (or will be) announced;
 		// escalated/voided proposals are abandoned — the canonical state
 		// wins locally when it applies.
 		const settlesCurrent = dispositions.some(
@@ -806,6 +761,13 @@ export function createDeRtcSessionCodec(
 				awareness,
 				DE_RTC_REMOTE_ORIGIN
 			),
+		/*
+		 * Exempt from the transport's solo hold: commits ride the autosave
+		 * lane and the undo stack is the session's own accepted rows, so
+		 * the advisory rows this codec queues (fetches, review decisions)
+		 * must flow while alone too.
+		 */
+		sendsWhileAlone: true,
 		clientId: doc.clientID,
 		engineSlug: DE_RTC_ENGINE_SLUG,
 		engineProtocol: DE_RTC_ENGINE_PROTOCOL,
@@ -848,7 +810,6 @@ export function createDeRtcSessionCodec(
 				cadenceTimer = null;
 			}
 			deferredSnapshotRow = null;
-			review?.setEmitter( null );
 			localUpdateListener = null;
 		},
 		// The server's snapshot row bootstraps a fresh client; nothing to
@@ -862,16 +823,30 @@ export function createDeRtcSessionCodec(
 				doc.on( 'update', onDocUpdate );
 				isDocListenerAttached = true;
 			}
-			// Resolutions ride the same outbound lane as proposals.
-			review?.setEmitter(
-				( update ) =>
-					localUpdateListener?.( update, update.data.length )
-			);
 			bridge.onBootstrap( () => maybePropose() );
 		},
 		receiveUpdate: ( update ) => processRow( update ),
 		receiveDispositions: ( dispositions: EngineDisposition[] ) =>
 			handleDispositions( dispositions ),
+		/*
+		 * Room restart: every version this session knows is gone. Drop the
+		 * lineage and every in-flight or deferred row; the new genesis
+		 * that follows either matches the doc (plain apply) or is the base
+		 * the doc's content is re-proposed against (see restartPending).
+		 */
+		onRoomRestart: () => {
+			bridge.resetLineage();
+			inFlight = false;
+			inFlightProposalId = null;
+			pendingCanonical = null;
+			deferredSnapshotRow = null;
+			behindSeq = 0;
+			fetchInFlightSeq = 0;
+			pendingOwnMergeSeq = 0;
+			canonicalContents.clear();
+			restartPending = true;
+			return 'rebootstrap';
+		},
 		/**
 		 * Prepares an editor SAVE: holds new commits and waits for the
 		 * in-flight one to settle, so the save can never self-conflict

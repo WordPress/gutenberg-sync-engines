@@ -1,26 +1,30 @@
 {
   "$schema": "./gutenberg/schemas/json/wp-env.json",
   "core": "WordPress/WordPress",
-  "plugins": [
-    "."
-  ],
-  "themes": [
-    "./gutenberg/test/emptytheme"
-  ],
+  "plugins": [ ".", "https://downloads.wordpress.org/plugin/redis-cache.3.0.0.zip" ],
+  "themes": [ "./gutenberg/test/emptytheme" ],
   "port": 8888,
   "autoPort": true,
   "testsEnvironment": false,
   "config": {
     "WP_DEBUG": true,
     "SCRIPT_DEBUG": true,
-    "WP_SYNC_WEBSOCKET_HOST": "localhost"
+    "WP_SYNC_SSE_REDIS_URL": "redis://sync-redis:6379",
+    "WP_REDIS_HOST": "sync-redis",
+    "WP_REDIS_CLIENT": "predis",
+    "WP_REDIS_DISABLE_BANNERS": true,
+    "WP_REDIS_DISABLE_METRICS": true,
+    "WP_SYNC_WEBSOCKET_HOST": "localhost",
+    "WP_SYNC_WEBSOCKET_ACCESS_TOKEN_SECRET": "wp-env-development-secret-not-for-production"
+  },
+  "lifecycleScripts": {
+    "afterStart": "(npm run redis:start || echo 'Redis did not start: the SSE transport runs on polling until it does (npm run doctor)') && (node tests/e2e/bin/rtc-dev.mjs --mode=daemon --detach || true)",
+    "afterDestroy": "npm run redis:destroy"
   },
   "mappings": {
     "wp-content/plugins/gutenberg-sync-engines": ".",
     "wp-content/plugins/gutenberg-test-plugins": "./gutenberg/packages/e2e-tests/plugins",
-    "wp-content/plugins/sync-engines-test-plugins": "./tests/e2e/plugins"
-  },
-  "lifecycleScripts": {
-    "afterStart": "node tests/e2e/bin/rtc-dev.mjs --mode=daemon --detach || true"
+    "wp-content/plugins/sync-engines-test-plugins": "./tests/e2e/plugins",
+    "wp-content/mu-plugins/gutenberg-sync-engines-bench-log.php": "./tests/benchmarks/host/mu-bench-log.php"
   }
 }

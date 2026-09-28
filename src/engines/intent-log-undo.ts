@@ -118,7 +118,7 @@ export function deriveInverse(
 ): { type: string; payload: Record< string, unknown > } | null {
 	const payload = entry.payload as Record< string, any >;
 	const blockBefore = ( id: string ): EngineBlock | null =>
-		getBlock( docBefore, id ) as EngineBlock | null;
+		getBlock( docBefore, id );
 	const textBefore = ( id: string, field: string ): string =>
 		( blockBefore( id )?.fields?.[ field ]?.text as string ) ?? '';
 	const attrVersionNow = ( id: string, key: string ): number => {
@@ -291,12 +291,7 @@ export function deriveInverse(
 			};
 
 		case 'remove_block': {
-			const location = locateBlock( docBefore, payload.syncId ) as {
-				block: EngineBlock;
-				siblings: EngineBlock[];
-				index: number;
-				parentId: string | null;
-			} | null;
+			const location = locateBlock( docBefore, payload.syncId );
 			if ( ! location ) {
 				return null;
 			}
@@ -317,11 +312,7 @@ export function deriveInverse(
 		}
 
 		case 'move_block': {
-			const location = locateBlock( docBefore, payload.syncId ) as {
-				siblings: EngineBlock[];
-				index: number;
-				parentId: string | null;
-			} | null;
+			const location = locateBlock( docBefore, payload.syncId );
 			if ( ! location ) {
 				return null;
 			}

@@ -25,6 +25,28 @@ const globalSetup = fileURLToPath(
 	new URL( './config/global-setup.ts', 'file:' + __filename ).href
 );
 
+// RTC_E2E_ENGINE runs one slice of the suite, so CI can run the slices
+// side by side. Specs that belong to an engine carry an `@engine-<slug>`
+// tag in their describe title. An engine slug runs only that engine's
+// specs; `none` runs every spec without an engine tag. Unset runs all.
+const ENGINES = [ 'intent-log', 'yjs-server', 'de-rtc' ];
+const engineSlice = process.env.RTC_E2E_ENGINE || '';
+if ( engineSlice && ! [ ...ENGINES, 'none' ].includes( engineSlice ) ) {
+	throw new Error(
+		`RTC_E2E_ENGINE must be one of ${ ENGINES.join(
+			', '
+		) }, or none (got "${ engineSlice }").`
+	);
+}
+const engineFilter: { grep?: RegExp; grepInvert: RegExp[] } = {
+	grepInvert: [ /-chromium/ ],
+};
+if ( 'none' === engineSlice ) {
+	engineFilter.grepInvert.push( /@engine-/ );
+} else if ( engineSlice ) {
+	engineFilter.grep = new RegExp( `@engine-${ engineSlice }\\b` );
+}
+
 export default defineConfig( {
 	...baseConfig,
 	testDir: './specs',
@@ -46,9 +68,10 @@ export default defineConfig( {
 		// failing call.
 		navigationTimeout: 30_000,
 	},
-	// WebSocket-transport specs need the test WS provider + sync server and
-	// run only under playwright.rtc-websocket.config.ts.
-	testIgnore: '**/specs/websocket-only/**',
+	// The transport-specific suites select their transport on the tests
+	// site themselves: websocket-only under playwright.rtc-websocket.config.ts
+	// (which also runs the daemon), sse-only under playwright.rtc-sse.config.ts.
+	testIgnore: [ '**/specs/websocket-only/**', '**/specs/sse-only/**' ],
 	webServer: {
 		...baseConfig.webServer,
 		// Start this plugin's TESTS wp-env (Gutenberg subtree + this
@@ -61,7 +84,7 @@ export default defineConfig( {
 		{
 			name: 'chromium',
 			use: { ...devices[ 'Desktop Chrome' ] },
-			grepInvert: /-chromium/,
+			...engineFilter,
 		},
 	],
 } );

@@ -32,12 +32,12 @@ import {
 import {
 	makeGenesisDoc,
 	runSimulation,
-} from '../../src/engines/intent-log/simulator.js';
+} from '../js/engines/intent-log/simulator.js';
 import {
 	createIntent,
 	IntentTypes,
 } from '../../src/engines/intent-log/intents.js';
-import { genesisSyncId } from '../../src/engines/intent-log/sync-id.js';
+import { genesisSyncId } from '../js/engines/intent-log/genesis-sync-id.js';
 
 const CASES = [];
 
@@ -360,6 +360,6 @@ process.stdout.write(
 			cases: CASES,
 		},
 		null,
-		'\t'
+		2
 	) + '\n'
 );

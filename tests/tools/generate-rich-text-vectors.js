@@ -103,6 +103,6 @@ process.stdout.write(
 			cases,
 		},
 		null,
-		'\t'
+		2
 	) + '\n'
 );
