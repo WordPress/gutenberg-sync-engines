@@ -3,7 +3,7 @@
  * The wait an SSE stream uses when no Redis is available.
  *
  * @package GutenbergSyncEngines
- * @since n.e.x.t
+ * @since 0.0.2
  */
 
 /**
@@ -14,7 +14,7 @@
  * with more than a few editors should configure Redis instead; the
  * stream itself is the same either way.
  *
- * @since n.e.x.t
+ * @since 0.0.2
  */
 class WP_Sync_Storage_Change_Waiter implements WP_Sync_Change_Waiter {
 	/**

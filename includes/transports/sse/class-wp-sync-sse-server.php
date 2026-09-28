@@ -3,7 +3,7 @@
  * SSE over ordinary authenticated WordPress REST requests.
  *
  * @package GutenbergSyncEngines
- * @since n.e.x.t
+ * @since 0.0.2
  */
 
 /**
@@ -12,7 +12,7 @@
  * and on half-second storage checks otherwise; everything else about the
  * stream is the same.
  *
- * @since n.e.x.t
+ * @since 0.0.2
  */
 class WP_Sync_SSE_Server extends WP_HTTP_Polling_Sync_Server {
 	/**
@@ -141,7 +141,7 @@ class WP_Sync_SSE_Server extends WP_HTTP_Polling_Sync_Server {
 				/**
 				 * Fires when a configured Redis could not be reached for a stream.
 				 *
-				 * @since n.e.x.t
+				 * @since 0.0.2
 				 * @param RuntimeException $error The failure.
 				 */
 				do_action( 'gutenberg_sync_engines_sse_redis_failed', $error );
