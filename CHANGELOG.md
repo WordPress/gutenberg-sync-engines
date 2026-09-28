@@ -33,6 +33,14 @@ release, which the release script generates from the commit history.
     it from the `wp_sync_awareness_backend` filter. The interface is per
     client rather than per room, so a backend can write one client's entry
     without rewriting anyone else's. The room array remains the default.
+-   The list of editor tabs open on a post, which the advisory channel
+    finds peers in, gained the same kind of seam: implement
+    `WP_Sync_Tab_List_Backend` and return it from the
+    `wp_sync_tab_list_backend` filter. On a site running the Presence API
+    plugin, each tab is now its own row in that plugin's table, so two
+    tabs checking in at once can no longer drop each other. One transient
+    per room remains the default
+    ([#113](https://github.com/Automattic/gutenberg-sync-engines/issues/113)).
 -   On a site running the Presence API feature plugin, that plugin's
     shared `wp_presence` table now holds awareness. Each client is one row
     upserted in place, so two clients polling in the same instant cannot

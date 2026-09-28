@@ -211,8 +211,11 @@ switch, [room-lifetime.md](room-lifetime.md).
 
 Server (`includes/class-gutenberg-sync-engines-advisory-presence.php`):
 
--   Per-tab presence tokens in a transient per room (never in sync
-    storage: presence reads must not create a room's storage post).
+-   Per-tab presence tokens in a transient per room, or in the backend
+    the `wp_sync_tab_list_backend` filter returns: with the Presence API
+    plugin installed, one `gsetab-` row per tab in its table
+    (`WP_Sync_Presence_API_Tab_List_Backend`). Never in sync storage:
+    presence reads must not create a room's storage post.
     Stamped at editor page render, refreshed on every heartbeat, removed
     by a leave beacon on `pagehide`, expired after 300 s (a hidden tab's
     heartbeat slows to 120 s, so the TTL must span two beats).
