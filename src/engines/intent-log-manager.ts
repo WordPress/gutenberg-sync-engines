@@ -41,7 +41,13 @@ import {
 	type IntentLogUndoManager,
 } from './intent-log-undo';
 import { getProviderCreators } from '../framework';
-import type { EngineDocument } from './intent-log/engine-types';
+import type { EngineBlock, EngineDocument } from './intent-log/engine-types';
+import type {
+	SyncConflict,
+	SyncConflictDecision,
+	SyncConflictSource,
+	SyncConflictTarget,
+} from '../review/types';
 import type {
 	CollectionHandlers,
 	ObjectData,
@@ -961,6 +967,78 @@ function chooseObservedBaseline(
  * @param debug Whether to log debug output.
  * @return Sync manager.
  */
+/**
+ * The conflict review lane (src/review/): one ledger entry per loaded
+ * entity, keyed like the manager's entity states, and the source the
+ * plugin registers with the conflict registry at module load. The ledger
+ * is module-level because the source must exist before any manager does
+ * (the registry takes it at load; managers are created per session).
+ */
+interface ConflictEntity {
+	list: () => SyncConflict[];
+	resolve: ( conflictId: string, decision: SyncConflictDecision ) => void;
+}
+
+const conflictEntities = new Map< string, ConflictEntity >();
+const conflictListeners = new Map< string, Set< () => void > >();
+const conflictKey = ( objectType: ObjectType, objectId: ObjectID | null ) =>
+	`${ objectType }_${ objectId }`;
+const notifyConflictListeners = ( key: string ) =>
+	conflictListeners.get( key )?.forEach( ( listener ) => listener() );
+
+/**
+ * The intent-log engine's conflict source: every parked proposal of a
+ * loaded entity as a SyncConflict record. Registered from src/index.ts.
+ */
+export const intentLogConflictSource: SyncConflictSource = {
+	getOpenConflicts: ( objectType, objectId ) =>
+		conflictEntities.get( conflictKey( objectType, objectId ) )?.list() ??
+		[],
+	subscribe: ( objectType, objectId, listener ) => {
+		const key = conflictKey( objectType, objectId );
+		if ( ! conflictListeners.has( key ) ) {
+			conflictListeners.set( key, new Set() );
+		}
+		conflictListeners.get( key )?.add( listener );
+		return () => {
+			conflictListeners.get( key )?.delete( listener );
+		};
+	},
+	resolveConflict: ( objectType, objectId, conflictId, decision ) => {
+		conflictEntities
+			.get( conflictKey( objectType, objectId ) )
+			?.resolve( conflictId, decision );
+	},
+};
+
+/**
+ * The block a parked intent targets, located in the session's document:
+ * its parent's durable id and its index among its siblings (the position
+ * side of a SyncConflict block target).
+ *
+ * @param blocks   The blocks to search (the root, then recursively).
+ * @param syncId   The block's durable id.
+ * @param parentId The id of the block whose children `blocks` are.
+ * @return The parent id and index, or null when the block is gone.
+ */
+function locateBlock(
+	blocks: EngineBlock[],
+	syncId: string,
+	parentId?: string
+): { parentId?: string; index: number } | null {
+	for ( let index = 0; index < blocks.length; index++ ) {
+		const block = blocks[ index ];
+		if ( block.syncId === syncId ) {
+			return { parentId, index };
+		}
+		const inChildren = locateBlock( block.children, syncId, block.syncId );
+		if ( inChildren ) {
+			return inChildren;
+		}
+	}
+	return null;
+}
+
 export function createIntentLogManager( debug = false ): SyncManager {
 	const entityStates = new Map< string, EntityState >();
 	const collectionStates = new Map< ObjectType, CollectionState >();
@@ -1575,7 +1653,6 @@ export function createIntentLogManager( debug = false ): SyncManager {
 		 * parked rows before their resolution rows, and notifying on raw
 		 * arrival would re-surface long-resolved conflicts on every reload.
 		 */
-		const notifiedProposalIds = new Set< string >();
 		let proposalsNotifyScheduled = false;
 		const summarizeProposal = ( proposal: {
 			intent: { type: string; payload: Record< string, unknown > };
@@ -1666,22 +1743,107 @@ export function createIntentLogManager( debug = false ): SyncManager {
 						: undefined,
 			};
 		};
-		const mapReviewItems = () =>
-			session.getOpenProposals().map( ( proposal ) => ( {
-				id: proposal.intent.intentId,
-				unitId: proposal.intent.txnId ?? proposal.intent.intentId,
-				isLocal: proposal.actorId === session.actorId,
-				actorId: proposal.actorId,
-				reason: proposal.reason,
-				intentType: proposal.intent.type,
-				summary: summarizeProposal( proposal ),
-				excerpt: proposal.context?.excerpt,
-				targetId:
-					typeof proposal.intent.payload.syncId === 'string'
-						? proposal.intent.payload.syncId
-						: undefined,
-				proposedInsertion: proposedInsertionFor( proposal ),
-			} ) );
+		/*
+		 * PROVISIONAL (plan Phase 2): one SyncConflict per parked
+		 * proposal, with its target located in the document and the three
+		 * sides left empty (the review dialogs still seed from their
+		 * mocks). Phase 3 reconstructs base/proposed/current from the
+		 * retained log, groups the members of a txn into one record, and
+		 * applies an accepted replacement as ordinary intents.
+		 */
+		type OpenProposal = ReturnType<
+			IntentLogSession[ 'getOpenProposals' ]
+		>[ number ];
+		const conflictFor = ( proposal: OpenProposal ): SyncConflict => {
+			const { intent, actorId, reason } = proposal;
+			const payload = intent.payload;
+			const doc = session.getDocument();
+			// The fallback is a target no block matches (an insertion
+			// nowhere): intents that address no block, or a block the
+			// document no longer holds.
+			let target: SyncConflictTarget = {
+				type: 'blocks',
+				index: 0,
+				count: 0,
+			};
+			let insertion: ReturnType< typeof proposedInsertionFor >;
+			if (
+				'set_property' === intent.type &&
+				typeof payload.name === 'string'
+			) {
+				target = { type: 'property', name: payload.name };
+			} else if ( 'insert_block' === intent.type ) {
+				insertion = proposedInsertionFor( proposal );
+				const sibling =
+					insertion?.afterSiblingId && doc
+						? locateBlock( doc.root, insertion.afterSiblingId )
+						: null;
+				target = {
+					type: 'blocks',
+					parentId: insertion?.parentId,
+					index: sibling ? sibling.index + 1 : 0,
+					count: 0,
+				};
+			} else if ( typeof payload.syncId === 'string' ) {
+				const located = doc
+					? locateBlock( doc.root, payload.syncId )
+					: null;
+				target = {
+					type: 'blocks',
+					ids: [ payload.syncId ],
+					parentId: located?.parentId,
+					index: located?.index ?? 0,
+					count: 1,
+				};
+			}
+			return {
+				id: intent.intentId,
+				kind:
+					'requires-approval' === reason ? 'sequestration' : 'merge',
+				authorId: Number( /^u(\d+)/.exec( actorId )?.[ 1 ] ?? 0 ),
+				target,
+				base: null,
+				// PROVISIONAL: an insertion's decoded markup, else the
+				// reviewer-facing summary, stands in for the serialized
+				// proposed side until Phase 3.
+				proposed:
+					insertion?.html ?? summarizeProposal( proposal ) ?? '',
+				current: '',
+			};
+		};
+		conflictEntities.set( key, {
+			list: () => session.getOpenProposals().map( conflictFor ),
+			resolve: ( conflictId, decision ) => {
+				const proposal = session
+					.getOpenProposals()
+					.find( ( open ) => open.intent.intentId === conflictId );
+				if ( ! proposal ) {
+					return;
+				}
+				if (
+					'accept' === decision.action &&
+					'requires-approval' === proposal.reason &&
+					'' !== decision.content
+				) {
+					// Approval: the restore lane re-authors the held
+					// markup as ordinary intents under the reviewer's
+					// account, then closes the proposal. PROVISIONAL: the
+					// reviewer's edited content is not honored yet (the
+					// held markup lands as parked); Phase 3 authors the
+					// replacement from `decision.content` instead.
+					manager.restoreProposal?.(
+						objectType,
+						objectId,
+						conflictId
+					);
+					return;
+				}
+				// PROVISIONAL: an accepted replacement of a merge conflict,
+				// and an accepted removal (empty content), only close the
+				// record until Phase 3 authors the replacement.
+				session.resolveProposal( conflictId, 'dismissed' );
+			},
+		} );
 		session.onProposalsChange( () => {
 			if ( proposalsNotifyScheduled ) {
 				return;
@@ -1692,30 +1854,7 @@ export function createIntentLogManager( debug = false ): SyncManager {
 				if ( state.unloaded ) {
 					return;
 				}
-				const items = mapReviewItems();
-				handlers.onProposalsChange?.( items );
-				for ( const item of items ) {
-					if ( notifiedProposalIds.has( item.id ) ) {
-						continue;
-					}
-					notifiedProposalIds.add( item.id );
-					if ( handlers.onEscalation ) {
-						handlers.onEscalation( {
-							reason: item.reason,
-							isLocal: item.isLocal,
-							proposalId: item.id,
-							summary: item.summary,
-							excerpt: item.excerpt,
-						} );
-					} else {
-						// eslint-disable-next-line no-console
-						console.warn(
-							'[IntentLog] An edit was escalated for review (%s): %s',
-							item.reason,
-							item.id
-						);
-					}
-				}
+				notifyConflictListeners( key );
 			} );
 		} );
 
@@ -2406,9 +2545,15 @@ export function createIntentLogManager( debug = false ): SyncManager {
 			state.awareness?.destroy();
 			state.session.destroy();
 			entityStates.delete( key );
+			conflictEntities.delete( key );
+			notifyConflictListeners( key );
 		},
 
 		unloadAll() {
+			for ( const key of entityStates.keys() ) {
+				conflictEntities.delete( key );
+				notifyConflictListeners( key );
+			}
 			for ( const [ , state ] of entityStates ) {
 				state.unloaded = true;
 				if ( state.syncTimer ) {

@@ -1,0 +1,174 @@
+// The conflict review dialogs' styles, loaded on the editor screen beside
+// the plugin bundle (build/sync-engines.css). The in-canvas cards render
+// inside the editor iframe, where this stylesheet does not load, so they
+// carry their own styles inline (CANVAS_CSS in the card components).
+
+@use "@wordpress/base-styles/colors" as *;
+@use "@wordpress/base-styles/variables" as *;
+
+.gse-review-merge-dialog {
+	.gse-review-merge-dialog__description {
+		color: $gray-700;
+		margin: 0 0 $grid-unit-15;
+	}
+
+	.gse-review-merge-dialog__panes {
+		display: grid;
+		gap: $grid-unit-15;
+		grid-template-columns: 1fr 1fr;
+		margin-bottom: $grid-unit-20;
+	}
+
+	.gse-review-merge-dialog__pane {
+		display: flex;
+		flex-direction: column;
+	}
+
+	.gse-review-merge-dialog__pane-label {
+		font-size: $helptext-font-size;
+		font-weight: 600;
+		margin: 0 0 $grid-unit-05;
+		text-transform: uppercase;
+	}
+
+	// Holds a pane's read-only block canvas (see block-diff-pane.js). The
+	// padding leaves room for the diff outlines drawn just outside the
+	// blocks' boxes.
+	.gse-review-merge-dialog__pane-content {
+		background: $gray-100;
+		border-radius: $radius-small;
+		flex-grow: 1;
+		margin-bottom: $grid-unit-10;
+		max-height: 16em;
+		overflow-y: auto;
+		padding: $grid-unit-15;
+	}
+
+	// Trim the canvas's outer margins so the pane hugs its blocks.
+	.gse-review-block-diff {
+		.block-editor-block-list__layout > :first-child {
+			margin-top: 0;
+		}
+
+		.block-editor-block-list__layout > :last-child {
+			margin-bottom: 0;
+		}
+	}
+
+	.gse-review-merge-dialog__pane .components-button {
+		align-self: flex-start;
+	}
+
+	// The table dialog's panes render each version as a plain table with
+	// per-cell diff highlighting (see table-diff-grid.js); the same
+	// classes are mirrored in the conflict card's canvas CSS. The wrapper
+	// scrolls horizontally when a wide table overflows its pane.
+	.gse-review-table-diff__wrapper {
+		overflow-x: auto;
+	}
+
+	.gse-review-table-diff {
+		border-collapse: collapse;
+		width: 100%;
+	}
+
+	.gse-review-table-diff__cell {
+		border: $border-width solid $gray-300;
+		padding: $grid-unit-05 $grid-unit-10;
+		text-align: left;
+		vertical-align: top;
+	}
+
+	.gse-review-table-diff__cell--added,
+	.gse-review-table-diff__cell--changed {
+		background: rgba(74, 184, 102, 0.25);
+	}
+
+	.gse-review-table-diff__cell--contested {
+		background: rgba(240, 184, 73, 0.4);
+	}
+
+	.gse-review-merge-dialog__merged-editor {
+		border: $border-width solid $gray-600;
+		border-radius: $radius-small;
+
+		.gse-review-merge-dialog__merged-toolbar {
+			border-bottom: $border-width solid $gray-200;
+			// Reserve the toolbar's height so it appearing with the block
+			// selection does not jump the layout.
+			min-height: $grid-unit-60;
+		}
+
+		.gse-review-merge-dialog__merged-canvas {
+			max-height: 16em;
+			overflow-y: auto;
+			padding: $grid-unit-10 $grid-unit-15;
+		}
+	}
+
+	.gse-review-merge-dialog__help {
+		color: $gray-700;
+		font-size: $helptext-font-size;
+		margin: $grid-unit-05 0 0;
+	}
+
+	.gse-review-merge-dialog__actions {
+		display: flex;
+		gap: $grid-unit-10;
+		justify-content: flex-end;
+		margin-top: $grid-unit-20;
+	}
+}
+
+.gse-review-kses-dialog {
+	.gse-review-kses-dialog__description {
+		color: $gray-700;
+		margin: 0 0 $grid-unit-15;
+	}
+
+	.gse-review-kses-dialog__pane {
+		display: flex;
+		flex-direction: column;
+	}
+
+	.gse-review-kses-dialog__pane-label {
+		font-size: $helptext-font-size;
+		font-weight: 600;
+		margin: 0 0 $grid-unit-05;
+		text-transform: uppercase;
+	}
+
+	// Wraps the revisions code diff showing the held markup (as inert
+	// text). The inner element is its own scroll container; cap its
+	// height here.
+	.gse-review-kses-dialog__code-diff {
+		border: $border-width solid $gray-200;
+		border-radius: $radius-small;
+		overflow: hidden;
+
+		.editor-revisions-code-diff {
+			max-height: 16em;
+		}
+	}
+
+	.gse-review-kses-dialog__editor {
+		margin-top: $grid-unit-15;
+	}
+
+	.gse-review-kses-dialog__editor-textarea {
+		border: $border-width solid $gray-600;
+		border-radius: $radius-small;
+		box-sizing: border-box;
+		font-family: monospace;
+		font-size: 13px;
+		padding: $grid-unit-10;
+		width: 100%;
+	}
+
+	.gse-review-kses-dialog__actions {
+		display: flex;
+		gap: $grid-unit-10;
+		justify-content: flex-end;
+		margin-top: $grid-unit-20;
+	}
+}

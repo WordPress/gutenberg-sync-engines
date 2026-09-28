@@ -53,7 +53,10 @@ jest.mock( '@wordpress/api-fetch', () => ( {
  * Internal dependencies
  */
 import { Awareness } from 'y-protocols/awareness';
-import { createIntentLogManager } from '../../../src/engines/intent-log-manager';
+import {
+	createIntentLogManager,
+	intentLogConflictSource,
+} from '../../../src/engines/intent-log-manager';
 import { createIntentLogEngineAdapter } from '../../../src/engines/intent-log-adapter';
 import {
 	INTENT_LOG_UPDATE_TYPES,
@@ -2120,12 +2123,14 @@ describe( 'intent-log manager', () => {
 		expect( refetchRecords ).not.toHaveBeenCalled();
 	} );
 
-	it( 'surfaces proposals through onEscalation with local/remote attribution', async () => {
-		const { handlers, transport } = await loadManagedEntity();
-		const onEscalation = jest.fn();
-		// The manager reads the handler at proposal time, so assigning to
-		// the same handlers object after load is sufficient.
-		handlers.onEscalation = onEscalation;
+	it( 'publishes parked proposals as conflict records with kind and author', async () => {
+		const { transport } = await loadManagedEntity();
+		const changed = jest.fn();
+		const unsubscribe = intentLogConflictSource.subscribe(
+			'postType/post',
+			'1',
+			changed
+		);
 
 		transport.captured.session!.receiveUpdate( snapshotRow( [] ) );
 
@@ -2147,38 +2152,48 @@ describe( 'intent-log manager', () => {
 		transport.captured.session!.receiveUpdate(
 			proposalRow( 'u999c999', 'frame-conflict' )
 		);
-		// Notices derive from the settled open list, one microtask later.
+		// Listeners hear about the settled open list one microtask later.
 		await Promise.resolve();
-		expect( onEscalation ).toHaveBeenCalledWith( {
-			reason: 'frame-conflict',
-			isLocal: false,
-			proposalId: 'i-frame-conflict',
-			summary: 'lost words',
-			excerpt: 'Around here',
-		} );
-
-		const ownActorId = ( transport.captured.session as IntentLogSession )
-			.actorId;
-		transport.captured.session!.receiveUpdate(
-			proposalRow( ownActorId, 'merge-dropped-field' )
-		);
-		await Promise.resolve();
-		expect( onEscalation ).toHaveBeenLastCalledWith(
+		expect( changed ).toHaveBeenCalledTimes( 1 );
+		expect(
+			intentLogConflictSource.getOpenConflicts( 'postType/post', '1' )
+		).toEqual( [
 			expect.objectContaining( {
-				reason: 'merge-dropped-field',
-				isLocal: true,
-				proposalId: 'i-merge-dropped-field',
-			} )
+				id: 'i-frame-conflict',
+				kind: 'merge',
+				authorId: 999,
+				proposed: 'lost words',
+			} ),
+		] );
+
+		// A security hold is a sequestration record.
+		transport.captured.session!.receiveUpdate(
+			proposalRow( 'u5c5', 'requires-approval' )
 		);
+		await Promise.resolve();
+		expect( changed ).toHaveBeenCalledTimes( 2 );
+		expect(
+			intentLogConflictSource.getOpenConflicts( 'postType/post', '1' )
+		).toEqual( [
+			expect.objectContaining( { id: 'i-frame-conflict' } ),
+			expect.objectContaining( {
+				id: 'i-requires-approval',
+				kind: 'sequestration',
+				authorId: 5,
+			} ),
+		] );
+		unsubscribe();
 	} );
 
-	it( 'review items carry the target block identity when the intent addresses one', async () => {
-		const { handlers, transport } = await loadManagedEntity();
-		const onProposalsChange = jest.fn();
-		handlers.onProposalsChange = onProposalsChange;
-		handlers.onEscalation = jest.fn();
+	it( 'conflict records carry the target block identity and position when the intent addresses one', async () => {
+		const { transport } = await loadManagedEntity();
 
-		transport.captured.session!.receiveUpdate( snapshotRow( [] ) );
+		transport.captured.session!.receiveUpdate(
+			snapshotRow( [
+				{ syncId: 'block-0', blockType: 'core/paragraph', text: 'A' },
+				{ syncId: 'block-a', blockType: 'core/paragraph', text: 'B' },
+			] )
+		);
 		transport.captured.session!.receiveUpdate( {
 			data: JSON.stringify( {
 				intent: {
@@ -2193,14 +2208,22 @@ describe( 'intent-log manager', () => {
 			type: INTENT_LOG_UPDATE_TYPES.PARKED,
 		} );
 		await Promise.resolve();
-		expect( onProposalsChange ).toHaveBeenLastCalledWith( [
+		expect(
+			intentLogConflictSource.getOpenConflicts( 'postType/post', '1' )
+		).toEqual( [
 			expect.objectContaining( {
 				id: 'p-anchored',
-				targetId: 'block-a',
+				target: {
+					type: 'blocks',
+					ids: [ 'block-a' ],
+					parentId: undefined,
+					index: 1,
+					count: 1,
+				},
 			} ),
 		] );
 
-		// Document-level intents (entity properties) have no block target.
+		// Document-level intents (entity properties) target the property.
 		transport.captured.session!.receiveUpdate( {
 			data: JSON.stringify( {
 				intent: {
@@ -2215,20 +2238,19 @@ describe( 'intent-log manager', () => {
 			type: INTENT_LOG_UPDATE_TYPES.PARKED,
 		} );
 		await Promise.resolve();
-		expect( onProposalsChange ).toHaveBeenLastCalledWith( [
+		expect(
+			intentLogConflictSource.getOpenConflicts( 'postType/post', '1' )
+		).toEqual( [
 			expect.objectContaining( { id: 'p-anchored' } ),
 			expect.objectContaining( {
 				id: 'p-property',
-				targetId: undefined,
+				target: { type: 'property', name: 'title' },
 			} ),
 		] );
 	} );
 
-	it( 'a parked insert_block proposal surfaces its position and decoded content for inline approval', async () => {
-		const { handlers, transport } = await loadManagedEntity();
-		const onProposalsChange = jest.fn();
-		handlers.onProposalsChange = onProposalsChange;
-		handlers.onEscalation = jest.fn();
+	it( 'a parked insert_block proposal targets the position after its anchor sibling', async () => {
+		const { transport } = await loadManagedEntity();
 
 		transport.captured.session!.receiveUpdate(
 			snapshotRow( [
@@ -2273,29 +2295,30 @@ describe( 'intent-log manager', () => {
 		} );
 		await Promise.resolve();
 
-		const [ item ] = onProposalsChange.mock.calls.at( -1 )![ 0 ] as Array< {
-			proposedInsertion?: {
-				blockType?: string;
-				html: string;
-				afterSiblingId?: string;
-			};
-		} >;
-		// The card can position itself after 'p1' and preview the DECODED
-		// markup (not the object-replacement char).
-		expect( item.proposedInsertion ).toEqual( {
-			blockType: 'core/html',
-			html: '<script>x</script>',
-			afterSiblingId: 'p1',
-			parentId: undefined,
-		} );
+		// An insertion targets the slot after 'p1' with a count of 0 (no
+		// block exists yet), and its summary carries the DECODED markup
+		// (not the object-replacement char).
+		expect(
+			intentLogConflictSource.getOpenConflicts( 'postType/post', '1' )
+		).toEqual( [
+			expect.objectContaining( {
+				id: 'ins-1',
+				kind: 'sequestration',
+				target: {
+					type: 'blocks',
+					parentId: undefined,
+					index: 1,
+					count: 0,
+				},
+				proposed: expect.stringContaining( '<script>x</script>' ),
+			} ),
+		] );
 	} );
 
-	it( 'a proposal resolved within the same delivery batch never notifies, and resolution round-trips', async () => {
-		const { manager, handlers, transport } = await loadManagedEntity();
-		const onEscalation = jest.fn();
-		const onProposalsChange = jest.fn();
-		handlers.onEscalation = onEscalation;
-		handlers.onProposalsChange = onProposalsChange;
+	it( 'a proposal resolved within the same delivery batch never opens, and a decision round-trips', async () => {
+		const { transport } = await loadManagedEntity();
+		const changed = jest.fn();
+		intentLogConflictSource.subscribe( 'postType/post', '1', changed );
 
 		transport.captured.session!.receiveUpdate( snapshotRow( [] ) );
 
@@ -2322,11 +2345,12 @@ describe( 'intent-log manager', () => {
 			type: INTENT_LOG_UPDATE_TYPES.RESOLVED,
 		} );
 		await Promise.resolve();
-		expect( onEscalation ).not.toHaveBeenCalled();
-		expect( onProposalsChange ).toHaveBeenLastCalledWith( [] );
+		expect(
+			intentLogConflictSource.getOpenConflicts( 'postType/post', '1' )
+		).toEqual( [] );
 
-		// A live open proposal notifies; resolving it emits the wire row
-		// and empties the review list.
+		// A live open proposal opens a record; dismissing it emits the
+		// wire row and empties the list.
 		transport.captured.session!.receiveUpdate( {
 			data: JSON.stringify( {
 				intent: {
@@ -2341,9 +2365,16 @@ describe( 'intent-log manager', () => {
 			type: INTENT_LOG_UPDATE_TYPES.PARKED,
 		} );
 		await Promise.resolve();
-		expect( onEscalation ).toHaveBeenCalledTimes( 1 );
+		expect(
+			intentLogConflictSource.getOpenConflicts( 'postType/post', '1' )
+		).toHaveLength( 1 );
 
-		manager.resolveProposal!( 'postType/post', '1', 'live-1', 'dismissed' );
+		intentLogConflictSource.resolveConflict(
+			'postType/post',
+			'1',
+			'live-1',
+			{ action: 'dismiss' }
+		);
 		const resolvedRows = transport.captured.sent.filter(
 			( update ) => INTENT_LOG_UPDATE_TYPES.RESOLVED === update.type
 		);
@@ -2353,12 +2384,13 @@ describe( 'intent-log manager', () => {
 			resolution: 'dismissed',
 		} );
 		await Promise.resolve();
-		expect( onProposalsChange ).toHaveBeenLastCalledWith( [] );
+		expect(
+			intentLogConflictSource.getOpenConflicts( 'postType/post', '1' )
+		).toEqual( [] );
 	} );
 
 	it( 'restoreProposal re-authors lost text at the current head, then resolves', async () => {
 		const { manager, handlers, transport } = await loadManagedEntity();
-		handlers.onEscalation = jest.fn();
 		transport.captured.session!.receiveUpdate(
 			snapshotRow( [
 				{
@@ -2424,8 +2456,7 @@ describe( 'intent-log manager', () => {
 	} );
 
 	it( 'restoreProposal re-inserts a parked block under fresh identity, then resolves', async () => {
-		const { manager, handlers, transport } = await loadManagedEntity();
-		handlers.onEscalation = jest.fn();
+		const { manager, transport } = await loadManagedEntity();
 		transport.captured.session!.receiveUpdate(
 			snapshotRow( [
 				{
@@ -2491,8 +2522,7 @@ describe( 'intent-log manager', () => {
 	} );
 
 	it( 'restoreProposal re-authors a parked format application, then resolves', async () => {
-		const { manager, handlers, transport } = await loadManagedEntity();
-		handlers.onEscalation = jest.fn();
+		const { manager, transport } = await loadManagedEntity();
 		// The kses lane's shape for a custom HTML block content change: the
 		// placeholder character landed as safe plain text, and only the
 		// format carrying the markup parked.
@@ -2991,10 +3021,11 @@ describe( 'intent-log manager', () => {
 		await Promise.resolve();
 		await Promise.resolve();
 
-		// The losing burst escalated (the scenario's premise).
-		(
-			expect( console ) as unknown as { toHaveWarned: () => void }
-		 ).toHaveWarned();
+		// The losing burst escalated (the scenario's premise): a parked
+		// proposal is open for review.
+		expect(
+			intentLogConflictSource.getOpenConflicts( 'postType/post', '1' )
+		).not.toHaveLength( 0 );
 
 		// Both canvases must show the server's canonical text — the
 		// escalated remainder is parked for review, not on the canvas.

@@ -396,12 +396,34 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Plugin' ) ) {
 					true
 				);
 
+				// The conflict review dialogs' stylesheet (the in-canvas
+				// cards carry their own styles inline).
+				$style = GUTENBERG_SYNC_ENGINES_PATH . 'build/style-sync-engines.css';
+				if ( file_exists( $style ) ) {
+					wp_enqueue_style(
+						'gutenberg-sync-engines',
+						GUTENBERG_SYNC_ENGINES_URL . 'build/style-sync-engines.css',
+						array( 'wp-components' ),
+						isset( $meta['version'] ) ? $meta['version'] : GUTENBERG_SYNC_ENGINES_VERSION
+					);
+				}
+
 				$settings = array(
 					'deRtcCommitIntervalMs' => max( 0, $commit_interval ) * 1000,
 					'httpPollingIntervalMs' => max( 0, min( 25, $polling_interval ) ) * 1000,
 					'awarenessIntervalMs'   => $awareness_interval * 1000,
 					'awarenessChannel'      => $awareness_channel,
 				);
+
+				/*
+				 * Whether the user may approve markup held for
+				 * unfiltered-HTML review (the review UI's hint; ingest
+				 * re-enforces per the authoring user regardless). The
+				 * framework prints the same flag as a global of its own; the
+				 * plugin reads this one so the UI outlives the framework's
+				 * globals.
+				 */
+				$settings['canUnfilteredHtml'] = current_user_can( 'unfiltered_html' );
 
 				// TEMPORARY: `currentUserId` feeds the demo sync tooling
 				// (src/temporary/); drop it with those modules.

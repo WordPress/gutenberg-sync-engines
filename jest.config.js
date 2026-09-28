@@ -86,7 +86,34 @@ module.exports = {
 			FRAMEWORK_MODULES,
 			'@wordpress/blocks'
 		),
+		// The conflict review UI's component tests (tests/js/review) render
+		// real editor packages in jsdom: the block editor, the core blocks,
+		// the editor's revisions differ. Every @wordpress package, React,
+		// and Testing Library must then resolve to ONE copy, the subtree's,
+		// or hooks and stores split across duplicates. These generic
+		// mappers come AFTER the specific ones above, so `@wordpress/sync`
+		// (the framework SOURCE) and the others keep winning.
+		// ES-module-only subtree packages (no `require` entry in their export
+		// map) are mapped to their module build by file, which babel-jest
+		// transforms like the rest of the subtree.
+		'^@wordpress/theme$': path.join(
+			FRAMEWORK_ROOT,
+			'packages/theme/build-module/index.mjs'
+		),
+		'^@wordpress/(.*)$': path.join( FRAMEWORK_MODULES, '@wordpress/$1' ),
+		'^react$': path.join( FRAMEWORK_MODULES, 'react' ),
+		'^react/(.*)$': path.join( FRAMEWORK_MODULES, 'react/$1' ),
+		'^react-dom$': path.join( FRAMEWORK_MODULES, 'react-dom' ),
+		'^react-dom/(.*)$': path.join( FRAMEWORK_MODULES, 'react-dom/$1' ),
+		'^@testing-library/(.*)$': path.join(
+			FRAMEWORK_MODULES,
+			'@testing-library/$1'
+		),
 	},
+	// `uuid` (a dependency of the subtree's components package) ships only
+	// ES modules; Jest runs CommonJS, so let babel-jest transform it. Every
+	// other node_modules package keeps the default (untransformed).
+	transformIgnorePatterns: [ '/node_modules/(?!(uuid|marked|parsel-js|client-zip)/)', '\\.pnp\\.[^\\/]+$' ],
 	setupFiles: [
 		...( defaultConfig.setupFiles || [] ),
 		path.join( __dirname, 'tests/js/jest-setup.js' ),

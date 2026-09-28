@@ -8,6 +8,8 @@
  *     `registerSyncEngine`
  *   - transport providers (http-polling, sse, websocket) via
  *     `registerSyncTransport`
+ *   - the conflict review UI (src/review/), fed by the engines' conflict
+ *     sources through the plugin-local registry
  *
  * With this plugin inactive the framework registers nothing, so a session
  * finds no engine/transport to negotiate and the editor falls back to the
@@ -34,7 +36,12 @@ import { privateApis } from '@wordpress/sync';
 import { unlock } from './lock-unlock';
 import { createIntentLogEngineAdapter } from './engines/intent-log-adapter';
 import { createYjsServerEngineAdapter } from './engines/yjs-server-adapter';
-import { createDeRtcEngineAdapter } from './engines/de-rtc-adapter';
+import {
+	createDeRtcEngineAdapter,
+	deRtcConflictSource,
+} from './engines/de-rtc-adapter';
+import { intentLogConflictSource } from './engines/intent-log-manager';
+import { registerConflictSource } from './review';
 import { createHttpPollingProvider } from './providers/http-polling/http-polling-provider';
 import { createWebSocketProvider } from './providers/websocket/websocket-provider';
 import { createSseProvider } from './providers/sse/sse-provider';
@@ -56,6 +63,12 @@ const { registerSyncEngine, registerSyncTransport } = unlock( privateApis );
 registerSyncEngine( createIntentLogEngineAdapter() );
 registerSyncEngine( createYjsServerEngineAdapter() );
 registerSyncEngine( createDeRtcEngineAdapter() );
+
+// Conflict review: the in-canvas cards and dialogs (src/review/) render
+// from the engines' conflict sources. yjs-server has no review lane by
+// design (a CRDT merge detects no conflicts to park).
+registerConflictSource( intentLogConflictSource );
+registerConflictSource( deRtcConflictSource );
 
 // Transports: how updates move. Each carries the slug + protocol the server
 // announces and negotiates against.

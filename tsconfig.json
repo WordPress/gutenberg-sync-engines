@@ -50,6 +50,10 @@
     // Node-only harness modules beside the specs (simulator,
     // genesis-sync-id) ARE checked, via checkJs and their JSDoc.
     "tests/js/**/*.test.js",
-    "tests/js/jest-setup*.js"
+    "tests/js/jest-setup*.js",
+    // The conflict review UI's component tests render the (untyped, moved
+    // as is) prototype components with Testing Library, which Jest resolves
+    // from the subtree; they are not part of the typed program either.
+    "tests/js/review/**/*"
   ]
 }

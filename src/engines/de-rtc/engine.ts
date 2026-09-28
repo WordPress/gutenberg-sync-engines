@@ -27,6 +27,7 @@ import { CRDT_RECORD_MAP_KEY } from '../yjs/constants';
 import { createYjsDoc, serializeCrdtDoc } from '../yjs/doc';
 import { docContainsSnapshot, encodeDocSnapshot } from '../yjs/snapshot';
 import { createDeRtcAuthorship, type DeRtcBlockAuthorship } from './authorship';
+import type { SyncConflict, SyncConflictSource } from '../../review/types';
 import {
 	createDeRtcRevertUndoManager,
 	createDeRtcUndoFeed,
@@ -163,6 +164,8 @@ function createInertDeRtcCollectionCodec(
  */
 export function createDeRtcEngine(): SyncEngine & {
 	review: SyncReviewSource;
+	/** The plugin's conflict review lane (src/review/), over `review`. */
+	conflicts: SyncConflictSource;
 	authorship: {
 		getBlockAuthorship: (
 			objectType: string,
@@ -178,6 +181,8 @@ export function createDeRtcEngine(): SyncEngine & {
 	interface EntityReviewHandle {
 		review: DeRtcReviewState;
 		getItems: () => ReturnType< SyncReviewSource[ 'getOpenItems' ] >;
+		/** The same open tasks as SyncConflict records. */
+		getConflicts: () => SyncConflict[];
 		restore: ( proposalId: string ) => void;
 		/** Adopt a contested block's latest canonical form. */
 		adoptContested: ( key: DeRtcContestKey ) => boolean;
@@ -263,6 +268,67 @@ export function createDeRtcEngine(): SyncEngine & {
 		},
 	};
 
+	/*
+	 * The conflict review lane: the same open tasks as SyncConflict
+	 * records, and the reviewer's decision mapped onto the review verbs.
+	 * PROVISIONAL (plan Phase 2): the sides are not reconstructed yet
+	 * (`base` null, `current` empty) and an accepted replacement only
+	 * restores or closes; Phase 3 carries `baseHtml` on parked rows,
+	 * reads `current` from the latest canonical content, and sends an
+	 * `accepted` resolution with the content.
+	 */
+	const conflictSource: SyncConflictSource = {
+		getOpenConflicts: ( objectType, objectId ) =>
+			entityReviews
+				.get( reviewKey( objectType, objectId ) )
+				?.getConflicts() ?? [],
+		subscribe: reviewSource.subscribe,
+		resolveConflict: ( objectType, objectId, conflictId, decision ) => {
+			const handle = entityReviews.get(
+				reviewKey( objectType, objectId )
+			);
+			if ( ! handle ) {
+				return;
+			}
+			const contestKey = contestedKeyOf( conflictId );
+			if ( null !== contestKey ) {
+				// A contested block: accept adopts the canonical form,
+				// dismiss keeps the local block.
+				if ( 'accept' === decision.action ) {
+					handle.adoptContested( contestKey );
+				} else {
+					handle.rejectContested( contestKey );
+				}
+				return;
+			}
+			const parked = handle.review
+				.getOpen()
+				.find( ( candidate ) => candidate.proposalId === conflictId );
+			if ( ! parked ) {
+				return;
+			}
+			const needsApproval =
+				'requires-approval' ===
+				( REVIEW_REASON_MAP[ parked.reason ] ?? parked.reason );
+			if (
+				'accept' === decision.action &&
+				needsApproval &&
+				'' !== decision.content
+			) {
+				// Approval: the restore lane overlays the parked blocks as
+				// an ordinary local edit under the reviewer's capability.
+				// PROVISIONAL: the reviewer's edited content is not
+				// honored yet (the parked markup lands as parked).
+				handle.restore( conflictId );
+				return;
+			}
+			// PROVISIONAL: an accepted replacement of a merge conflict,
+			// and an accepted removal (empty content), only close the
+			// task until Phase 3 sends the content.
+			handle.review.resolve( conflictId, 'dismissed' );
+		},
+	};
+
 	return {
 		slug: DE_RTC_ENGINE_SLUG,
 		protocolVersion: DE_RTC_ENGINE_PROTOCOL,
@@ -271,6 +337,7 @@ export function createDeRtcEngine(): SyncEngine & {
 		// rows, proposed like any other change.
 		createUndoManager: createDeRtcRevertUndoManager,
 		review: reviewSource,
+		conflicts: conflictSource,
 		authorship: {
 			getBlockAuthorship: ( objectType, objectId ) =>
 				entityAuthorship
@@ -510,6 +577,75 @@ export function createDeRtcEngine(): SyncEngine & {
 								? { targetId: contestKey }
 								: {} ),
 							targetIndex: item.index,
+						} )
+					),
+				],
+				getConflicts: () => [
+					...review.getOpen().map( ( parked ): SyncConflict => {
+						const blocks = parked.changedBlocks ?? [];
+						const ids = blocks
+							.map( ( block ) => block.syncId )
+							.filter(
+								( id ): id is string => 'string' === typeof id
+							);
+						const indexes = blocks.map( ( block ) => block.index );
+						const first = indexes.length
+							? Math.min( ...indexes )
+							: 0;
+						const last = indexes.length
+							? Math.max( ...indexes )
+							: -1;
+						return {
+							id: parked.proposalId,
+							kind:
+								'requires-approval' ===
+								( REVIEW_REASON_MAP[ parked.reason ] ??
+									parked.reason )
+									? 'sequestration'
+									: 'merge',
+							authorId: parked.author ?? 0,
+							target: parked.property
+								? {
+										type: 'property',
+										name: parked.property.name,
+								  }
+								: {
+										type: 'blocks',
+										// Identity wins when every changed
+										// block carries one; the span is
+										// the covering top-level run.
+										...( ids.length &&
+										ids.length === blocks.length
+											? { ids }
+											: {} ),
+										index: first,
+										count: last - first + 1,
+								  },
+							base: null,
+							proposed: parked.property
+								? String( parked.property.value ?? '' )
+								: blocks
+										.map( ( block ) => block.html )
+										.join( '\n\n' ),
+							current: '',
+						};
+					} ),
+					...Array.from( contested.entries() ).map(
+						( [ contestKey, item ] ): SyncConflict => ( {
+							id: `contested-${ contestKey }`,
+							kind: 'merge',
+							authorId: 0,
+							target: {
+								type: 'blocks',
+								...( 'string' === typeof contestKey
+									? { ids: [ contestKey ] }
+									: {} ),
+								index: item.index,
+								count: 1,
+							},
+							base: null,
+							proposed: item.html,
+							current: '',
 						} )
 					),
 				],
