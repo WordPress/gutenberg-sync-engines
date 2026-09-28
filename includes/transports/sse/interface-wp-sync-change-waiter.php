@@ -3,13 +3,13 @@
  * What an open SSE stream sleeps on between reads.
  *
  * @package GutenbergSyncEngines
- * @since n.e.x.t
+ * @since 0.0.2
  */
 
 /**
  * A wait that ends early when a room may have changed.
  *
- * @since n.e.x.t
+ * @since 0.0.2
  */
 interface WP_Sync_Change_Waiter {
 	/**

@@ -5,7 +5,7 @@
  * Description:       Pluggable real-time collaboration engines and transports for the Gutenberg collaborative-editing framework. Without this plugin active, real-time collaboration is effectively disabled.
  * Requires at least: 6.9
  * Requires PHP:      7.4
- * Version:           0.0.1
+ * Version:           0.0.2
  * Author:            WordPress Contributors
  * License:           GPL-2.0-or-later
  * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
@@ -146,7 +146,7 @@ if ( function_exists( 'gutenberg_sync_engines_bootstrap' ) ) {
 	return;
 }
 
-define( 'GUTENBERG_SYNC_ENGINES_VERSION', '0.0.1' );
+define( 'GUTENBERG_SYNC_ENGINES_VERSION', '0.0.2' );
 define( 'GUTENBERG_SYNC_ENGINES_PATH', plugin_dir_path( __FILE__ ) );
 define( 'GUTENBERG_SYNC_ENGINES_URL', plugin_dir_url( __FILE__ ) );
 define( 'GUTENBERG_SYNC_ENGINES_FILE', __FILE__ );
