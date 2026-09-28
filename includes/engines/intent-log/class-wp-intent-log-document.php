@@ -30,6 +30,39 @@ if ( ! class_exists( 'WP_Intent_Log_Document' ) ) {
 	 */
 	class WP_Intent_Log_Document {
 		/**
+		 * Expand one accepted text edit in right-to-left application order.
+		 *
+		 * @param array $intent Accepted intent.
+		 * @return array Plain intents sharing the envelope.
+		 */
+		public static function text_slice_intents( array $intent ): array {
+			if ( ! isset( $intent['textSlices'] ) ) {
+				return array( $intent );
+			}
+			$slices = $intent['textSlices'];
+			unset( $intent['textSlices'] );
+			$groups = array();
+			foreach ( $slices as $payload ) {
+				// Length-prefixing keeps arbitrary field names distinct.
+				$key              = strlen( $payload['syncId'] ) . ':' . $payload['syncId'] . $payload['field'];
+				$part             = $intent;
+				$part['payload']  = $payload;
+				$groups[ $key ][] = $part;
+			}
+			$result = array();
+			foreach ( $groups as $group ) {
+				usort(
+					$group,
+					static function ( $a, $b ) {
+						return $b['payload']['start'] <=> $a['payload']['start'];
+					}
+				);
+				$result = array_merge( $result, $group );
+			}
+			return $result;
+		}
+
+		/**
 		 * Field name used when a block spec does not name one.
 		 *
 		 * @since 7.2.0
@@ -473,6 +506,21 @@ if ( ! class_exists( 'WP_Intent_Log_Document' ) ) {
 		 * @return array array( 'doc' => array, 'disposition' => array{status: string, reason?: string} ).
 		 */
 		public static function apply_intent( array $doc, array $intent ): array {
+			if ( isset( $intent['textSlices'] ) ) {
+				$next = $doc;
+				foreach ( self::text_slice_intents( $intent ) as $part ) {
+					$result = self::apply_intent( $next, $part );
+					if ( 'applied' !== $result['disposition']['status'] ) {
+						$result['doc'] = $doc;
+						return $result;
+					}
+					$next = $result['doc'];
+				}
+				return array(
+					'doc'         => $next,
+					'disposition' => array( 'status' => 'applied' ),
+				);
+			}
 			$next    = $doc; // PHP arrays copy on assignment.
 			$payload = $intent['payload'];
 			$applied = static function ( $result_doc ) {

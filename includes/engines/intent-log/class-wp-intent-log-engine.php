@@ -73,7 +73,7 @@ if ( ! class_exists( 'WP_Intent_Log_Engine' ) ) {
 		 * @since 7.2.0
 		 * @var int
 		 */
-		const PROTOCOL_VERSION = 1;
+		const PROTOCOL_VERSION = 2;
 
 		/**
 		 * Update type: client-authored intent (stored transformed).
@@ -417,6 +417,7 @@ if ( ! class_exists( 'WP_Intent_Log_Engine' ) ) {
 				 * nothing could correlate their disposition anyway.
 				 */
 				$envelope_ok = null !== $intent_id &&
+					! array_key_exists( 'textSlices', $intent ) &&
 					is_int( $intent['baseSeq'] ?? null ) && $intent['baseSeq'] >= 0 &&
 					$intent['baseSeq'] <= $head_seq &&
 					is_string( $intent['type'] ?? null ) &&
