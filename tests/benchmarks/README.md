@@ -836,3 +836,12 @@ The comparison the decision turns on:
   surfaced it). Each edit is
   retried once; a second stale-base void parks it (never silently drops
   it), and score() flags any edit left unsettled.
+
+## Text across paragraph splits
+
+`npm run bench -- --suite=text-slices` measures a fixed 1,000-character
+selection after 0, 9, or 99 paragraph splits. It verifies every resulting
+format range, then reports JavaScript CPU and wall time, sampled heap growth,
+accepted row size, and document snapshot size. Heap growth is not peak PHP
+memory. This small core benchmark needs no WordPress site; the engine suite
+remains the source for server and storage costs.

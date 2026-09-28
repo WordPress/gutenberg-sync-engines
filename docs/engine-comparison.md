@@ -180,6 +180,42 @@ without it. It is an integrity check, which makes it really a P1 concern.
 | Materialize to post_content | Yes (server-side; block identity persists as `metadata.syncId` and round-trips genesis) | Yes (server-side, from the canonical doc) | Trivially — the canonical document IS post content |
 | Wire format | Small human-readable JSON intents | Opaque base64 binary (V2) + JSON snapshot rows | Human-readable JSON: whole-content commits up (via the autosave endpoint), constant-size announce advisories down, with on-demand synthesized snapshots for behind clients (upload bytes scale with document size; rows do not) |
 
+## Text moving between paragraphs
+
+Intent-log follows a selected range through repeated splits and joins.
+Formatting reaches every surviving part. A deletion can affect both halves
+without removing the paragraph break; if a peer inserts inside the selected
+text, the whole deletion goes to review. Replacements across a split still
+need review. Undo treats the affected parts as one user action.
+
+The two-browser comparison starts with `HelloWorld`. Alice splits it into
+`Hello` and `World` while Bob's update is delayed. Each row below is a separate
+test. These are observed results, including limitations of the other engines.
+
+| Bob's delayed edit | intent-log | yjs-server | de-rtc |
+| --- | --- | --- | --- |
+| Append `!` | `Hello` / `World!` | `Hello!` / `World` | `Hello!` / `World` |
+| Bold `loWo` | `Hel`**`lo`** / **`Wo`**`rld` | `Hel`**`lor`** / `World` | `Hello` / `World`; edit set aside for review |
+
+The browser tests assert these exact results in both editors. Intent-log also
+keeps its result after save and reload. See
+`tests/e2e/specs/collaboration-text-slices.spec.ts`.
+
+The editor must recognize the split. Empty new paragraphs and splits captured
+together with typing can be ambiguous; those retain the existing general-diff
+behavior. The engine cannot safely infer the action from equal strings alone.
+
+The retained edit log supplies the original text's identity and position at
+its authoring version. The accepted edit records its current ranges. This
+needs no new data in the stored document, and it does not extend recovery
+past the retained history or across a room reset. Protocol 2 understands old
+rows; protocol 1 clients are refused before receiving the new rows.
+
+Run `npm run bench -- --suite=text-slices` to measure the JavaScript core cost
+of one delayed formatting edit after repeated splits. This reports sampled
+heap growth, CPU time, row bytes, and snapshot bytes. It excludes WordPress
+and PHP; use the engine benchmark for those costs.
+
 ## Resource profile
 
 | Concern | intent-log | yjs-server | de-rtc |

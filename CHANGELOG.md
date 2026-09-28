@@ -55,6 +55,11 @@ release, which the release script generates from the commit history.
 
 ### Changed
 
+-   Intent-log now preserves formatting and safe deletions across concurrent
+    paragraph splits, including repeated splits and joins. Each edit keeps
+    one outcome, and undo covers all affected paragraphs. Protocol 2 requires
+    open editors using the previous version to reconnect with updated assets.
+
 -   Every awareness read and write in the plugin now goes through one
     `WP_Sync_Awareness` class, where the transports, the advisory channel
     and the rooms CLI each carried their own copy. Reads now exclude

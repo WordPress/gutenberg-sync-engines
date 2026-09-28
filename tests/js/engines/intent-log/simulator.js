@@ -653,6 +653,58 @@ const spliced = ( text, start, end, inserted ) =>
  * @return {string|null} A violation description, or null.
  */
 export function verifyEffect( before, after, entry ) {
+	if ( entry.textSlices ) {
+		if ( entry.type === IntentTypes.FORMAT_TEXT ) {
+			for ( const payload of entry.textSlices ) {
+				const violation = verifyEffect( before, after, {
+					...entry,
+					textSlices: undefined,
+					payload,
+				} );
+				if ( violation ) {
+					return violation;
+				}
+			}
+			return null;
+		}
+		// Compute the expected text directly from the selected intervals,
+		// independently of the reducer and its slice application helper.
+		/** @type {Map<string, { syncId: string, field: string, ranges: {start: number, end: number}[] }>} */
+		const targets = new Map();
+		for ( const payload of entry.textSlices ) {
+			const syncId = String( payload.syncId );
+			const field = String( payload.field );
+			const key = JSON.stringify( [ syncId, field ] );
+			const target = targets.get( key ) ?? { syncId, field, ranges: [] };
+			target.ranges.push( {
+				start: Number( payload.start ),
+				end: Number( payload.end ),
+			} );
+			targets.set( key, target );
+		}
+		for ( const { syncId, field, ranges } of targets.values() ) {
+			const source = getBlock( before, syncId )?.fields[ field ]?.text;
+			const actual = getBlock( after, syncId )?.fields[ field ]?.text;
+			if ( source === undefined || actual === undefined ) {
+				return `${ entry.intentId }: slice target missing`;
+			}
+			const expected = source
+				.split( '' )
+				.filter(
+					( _, offset ) =>
+						! ranges.some(
+							( range ) =>
+								range.start <= offset && offset < range.end
+						)
+				)
+				.join( '' );
+			if ( actual !== expected ) {
+				return `${ entry.intentId }: slice deletion mismatch`;
+			}
+		}
+		return null;
+	}
+
 	// Payload fields are read per intent type below; the envelope only
 	// promises an open record, so the checks index it loosely.
 	/** @type {{ type: string, payload: Record<string, any> }} */
