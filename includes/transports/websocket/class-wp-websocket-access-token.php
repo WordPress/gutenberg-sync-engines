@@ -23,12 +23,19 @@ if ( ! class_exists( 'WP_WebSocket_Access_Token' ) ) {
 	 * its own. The plugin's daemon accepts access tokens too, so one switch
 	 * serves both.
 	 *
-	 * Claims: `user_id`, `blog_id`, `rooms`, `iat`, `exp`. The claim
-	 * names follow the VIP real-time collaboration server's tokens so a
-	 * verifier written for those parses these; `rooms` (a list) is the
-	 * one addition. Each entry is an exact room name (`postType/post:12`)
+	 * Claims: `user_id`, `blog_id`, `iss`, `rooms`, `iat`, `exp`. The
+	 * claim names follow the VIP real-time collaboration server's tokens
+	 * so a verifier written for those parses these; `rooms` (a list) is
+	 * the one addition. Each entry is an exact room name (`postType/post:12`)
 	 * or `<kind>/*`, which allows every COLLECTION room of that kind
 	 * (a room name without an object id, e.g. `taxonomy/category`).
+	 *
+	 * `iss` names the install (see issuer()). Room names and `blog_id`
+	 * repeat across separate installs (every single site is blog 1), so
+	 * a relay that serves several installs sharing its secret keeps its
+	 * rosters apart by `iss`, `blog_id`, and room together. Installs that
+	 * share a secret trust each other: each can mint tokens naming the
+	 * other.
 	 *
 	 * Access-token mode is on when a secret is configured: the
 	 * `WP_SYNC_WEBSOCKET_ACCESS_TOKEN_SECRET` constant, else the environment
@@ -130,6 +137,35 @@ if ( ! class_exists( 'WP_WebSocket_Access_Token' ) ) {
 		}
 
 		/**
+		 * The name of this install in its access tokens (the `iss` claim):
+		 * the network's site URL without its scheme or trailing slash, in
+		 * lowercase (`example.com`, `example.com/blog`). It keeps two
+		 * installs that share a relay apart; it is not a secret. A database
+		 * copy (a staging site) gets its own URL, where a stored random id
+		 * would be copied with it.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @return string The issuer.
+		 */
+		public static function issuer(): string {
+			$issuer = strtolower( untrailingslashit( (string) preg_replace( '#^[a-z][a-z0-9+.-]*://#i', '', network_site_url() ) ) );
+
+			/**
+			 * Filters the name of this install in WebSocket access tokens.
+			 * Set a fixed value when one install answers on several host
+			 * names, so its tabs share one roster on a relay.
+			 *
+			 * @since n.e.x.t
+			 *
+			 * @param string $issuer The issuer.
+			 */
+			$issuer = apply_filters( 'wp_sync_websocket_access_token_issuer', $issuer );
+
+			return is_string( $issuer ) ? $issuer : '';
+		}
+
+		/**
 		 * Whether access-token mode is on.
 		 *
 		 * @since 0.0.1
@@ -221,6 +257,7 @@ if ( ! class_exists( 'WP_WebSocket_Access_Token' ) ) {
 					array(
 						'user_id' => $user_id,
 						'blog_id' => get_current_blog_id(),
+						'iss'     => self::issuer(),
 						'rooms'   => array_values( array_slice( $rooms, 0, self::MAX_ROOMS ) ),
 						'iat'     => $now,
 						'exp'     => $now + self::TTL,
@@ -234,11 +271,16 @@ if ( ! class_exists( 'WP_WebSocket_Access_Token' ) ) {
 		 * Verifies an access token: the signature (HS256 only), the expiry with
 		 * leeway, the blog, and the claim shapes.
 		 *
+		 * The install (`iss`) is NOT compared with issuer(): the daemon
+		 * serves one install, and in its command-line process the site URL
+		 * can differ from the web request's that minted the token (a
+		 * `WP_SITEURL` built from the request's host). `iss` is for relays.
+		 *
 		 * @since 0.0.1
 		 *
 		 * @param string   $access_token The access token.
 		 * @param int|null $now    The current time, for tests.
-		 * @return array{user_id: int, blog_id: int, rooms: string[], iat: int, exp: int}|WP_Error
+		 * @return array{user_id: int, blog_id: int, iss: string, rooms: string[], iat: int, exp: int}|WP_Error
 		 *         The claims, or why the access token was refused.
 		 */
 		public static function verify( string $access_token, ?int $now = null ) {
@@ -264,6 +306,7 @@ if ( ! class_exists( 'WP_WebSocket_Access_Token' ) ) {
 				! is_array( $claims )
 				|| ! is_int( $claims['user_id'] ?? null ) || $claims['user_id'] < 1
 				|| ! is_int( $claims['blog_id'] ?? null )
+				|| ! is_string( $claims['iss'] ?? '' )
 				|| ! is_int( $claims['iat'] ?? null )
 				|| ! is_int( $claims['exp'] ?? null )
 				|| ! is_array( $claims['rooms'] ?? null )
@@ -291,6 +334,7 @@ if ( ! class_exists( 'WP_WebSocket_Access_Token' ) ) {
 			return array(
 				'user_id' => $claims['user_id'],
 				'blog_id' => $claims['blog_id'],
+				'iss'     => $claims['iss'] ?? '',
 				'rooms'   => array_values( $claims['rooms'] ),
 				'iat'     => $claims['iat'],
 				'exp'     => $claims['exp'],

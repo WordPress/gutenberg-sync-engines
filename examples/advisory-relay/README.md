@@ -53,10 +53,22 @@ one).
 Environment: `WP_SYNC_WEBSOCKET_ACCESS_TOKEN_SECRET` (required),
 `HOST` (`'localhost'`), and `PORT` (8790).
 
-One relay can serve several WordPress sites (a multisite network, or
-separate installs sharing the secret): rosters are kept per site and
-room, using the site id in each access token, so tabs from different sites
-never see each other even when their posts share an id.
+## One relay for several WordPress installs
+
+One relay can serve several WordPress installs that share its secret.
+Each access token names its install (the `iss` claim: the network's
+site address, such as `example.com`) and its site within a multisite
+network (`blog_id`). The relay keeps a separate list of editors for each
+install, site, and room, so tabs from different installs never see each
+other, even when their posts have the same id.
+
+Every install that holds the secret can make tokens the relay accepts,
+including tokens that name another install. Share the relay and its
+secret only between installs that trust each other.
+
+If one install answers on several addresses, give it one fixed name
+with the `wp_sync_websocket_access_token_issuer` filter, so all its tabs
+share the same lists.
 
 ## Trying it locally
 

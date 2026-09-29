@@ -10,6 +10,12 @@ release, which the release script generates from the commit history.
 
 ## Unreleased
 
+### Added
+
+- WebSocket access tokens name their install (`iss`), so the example
+  advisory relay keeps separate installs that share it apart
+  ([#126](https://github.com/WordPress/gutenberg-sync-engines/issues/126)).
+
 ### Changed
 
 - The bundled Gutenberg includes the entity sync interface from

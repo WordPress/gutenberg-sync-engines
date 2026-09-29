@@ -102,10 +102,13 @@ This plugin provides:
   daemon: with a `WP_SYNC_WEBSOCKET_ACCESS_TOKEN_SECRET` configured
   (constant, env, or the `wp_sync_websocket_access_token_secret` filter),
   the token route mints a signed two-minute access token (JWT HS256, claims
-  `user_id`/`blog_id`/`rooms`/`iat`/`exp`, `WP_WebSocket_Access_Token`)
+  `user_id`/`blog_id`/`iss`/`rooms`/`iat`/`exp`, `WP_WebSocket_Access_Token`)
   that a relay verifies with the secret alone; the daemon accepts
-  access tokens too. The relay's address goes in the "WebSocket
-  advisory server" setting (`gutenberg_sync_engines_advisory_websocket_url`;
+  access tokens too. `iss` is the network site URL without its scheme;
+  a relay shared by several installs (one secret) keys rosters by
+  `iss`, `blog_id`, and room (issue #126). The daemon does not check
+  `iss`.
+  The relay's address goes in the "WebSocket advisory server" setting (`gutenberg_sync_engines_advisory_websocket_url`;
   empty = the transport server, `gutenberg_sync_engines_websocket_url`,
   itself empty = the HOST/PORT constants; the `wp_sync_websocket_url`
   filter wins for the transport). The screen shows ONE "Transport"

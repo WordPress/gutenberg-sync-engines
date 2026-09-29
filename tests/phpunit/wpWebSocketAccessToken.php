@@ -82,6 +82,7 @@ class Tests_Collaboration_WpWebSocketAccessToken extends WP_UnitTestCase {
 		return array(
 			'user_id' => self::$editor_id,
 			'blog_id' => get_current_blog_id(),
+			'iss'     => WP_WebSocket_Access_Token::issuer(),
 			'rooms'   => WP_WebSocket_Access_Token::grants( $this->room() ),
 			'iat'     => $now,
 			'exp'     => $now + WP_WebSocket_Access_Token::TTL,
@@ -123,6 +124,7 @@ class Tests_Collaboration_WpWebSocketAccessToken extends WP_UnitTestCase {
 			array(
 				'user_id' => self::$editor_id,
 				'blog_id' => get_current_blog_id(),
+				'iss'     => WP_WebSocket_Access_Token::issuer(),
 				'rooms'   => $rooms,
 				'iat'     => $now,
 				'exp'     => $now + 120,
@@ -154,6 +156,7 @@ class Tests_Collaboration_WpWebSocketAccessToken extends WP_UnitTestCase {
 			'alg none'           => $this->forge( $claims, array( 'alg' => 'none' ) ),
 			'alg HS512'          => $this->forge( $claims, array( 'alg' => 'HS512' ) ),
 			'other site'         => $this->forge( array_merge( $claims, array( 'blog_id' => 99 ) ) ),
+			'install not a text' => $this->forge( array_merge( $claims, array( 'iss' => 7 ) ) ),
 			'no user'            => $this->forge( array_merge( $claims, array( 'user_id' => 0 ) ) ),
 			'rooms not a list'   => $this->forge( array_merge( $claims, array( 'rooms' => 'postType/post:1' ) ) ),
 			'from the future'    => $this->forge( array_merge( $claims, array( 'iat' => $now + 3600 ) ) ),
@@ -174,6 +177,34 @@ class Tests_Collaboration_WpWebSocketAccessToken extends WP_UnitTestCase {
 		$flipped                              = substr( $payload, 0, 5 ) . ( 'A' === $payload[5] ? 'B' : 'A' ) . substr( $payload, 6 );
 		$this->assertWPError( WP_WebSocket_Access_Token::verify( $header . '.' . $flipped . '.' . $signature, $now ) );
 		$this->assertIsArray( WP_WebSocket_Access_Token::verify( $good, $now ) );
+
+		// The install name is for relays: the daemon's command-line process
+		// may compute another site URL than the web request that minted
+		// the token, so verify() does not compare it.
+		$this->assertIsArray( WP_WebSocket_Access_Token::verify( $this->forge( array_merge( $claims, array( 'iss' => 'another-address.example' ) ) ), $now ) );
+		$this->assertIsArray( WP_WebSocket_Access_Token::verify( $this->forge( array_diff_key( $claims, array( 'iss' => true ) ) ), $now ) );
+	}
+
+	public function test_the_issuer_is_the_network_site_url_without_its_scheme() {
+		$expected = strtolower( untrailingslashit( preg_replace( '#^https?://#', '', network_site_url() ) ) );
+		$this->assertSame( $expected, WP_WebSocket_Access_Token::issuer() );
+		$this->assertStringNotContainsString( '://', WP_WebSocket_Access_Token::issuer() );
+
+		$filter = static function () {
+			return 'HTTPS://Example.COM/blog/';
+		};
+		// On a single site network_site_url() is site_url().
+		$hook = is_multisite() ? 'network_site_url' : 'site_url';
+		add_filter( $hook, $filter );
+		$this->assertSame( 'example.com/blog', WP_WebSocket_Access_Token::issuer() );
+		remove_filter( $hook, $filter );
+
+		$fixed = static function () {
+			return 'one-install';
+		};
+		add_filter( 'wp_sync_websocket_access_token_issuer', $fixed );
+		$this->assertSame( 'one-install', WP_WebSocket_Access_Token::issuer() );
+		remove_filter( 'wp_sync_websocket_access_token_issuer', $fixed );
 	}
 
 	public function test_the_rooms_claim_names_the_post_room_and_the_collection_rooms() {

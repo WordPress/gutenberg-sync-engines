@@ -344,6 +344,7 @@ shared secret — the shape every JWT library parses. Claims:
 {
   "user_id": 4,
   "blog_id": 1,
+  "iss": "example.com",
   "rooms": [ "postType/post:12", "postType/*", "taxonomy/*", "root/*" ],
   "iat": 1757300000,
   "exp": 1757300120
@@ -352,14 +353,23 @@ shared secret — the shape every JWT library parses. Claims:
 
 -   `user_id`, `blog_id`: the signed-in user and the site (multisite
     blog id; 1 on a single site). The names match the VIP real-time
-    collaboration server's tokens on purpose. A relay keys its rosters
-    by `blog_id` AND room, never by room alone: room names are not
-    site-qualified, so one relay (and one secret) serving several
-    WordPress sites would otherwise put two sites' tabs in one roster
-    and send each site's presence to the other. The access token refusal
-    already keeps a tab's presence away from a server without the
-    secret; this keeps it away from the wrong site behind a shared
-    one.
+    collaboration server's tokens on purpose.
+-   `iss`: the install, the network's site URL without its scheme or
+    trailing slash, in lowercase (`example.com`, `example.com/blog`;
+    the `wp_sync_websocket_access_token_issuer` filter can fix it). A
+    stored random id would be copied into a staging copy of the
+    database; the address is not.
+
+    A relay keys its rosters by `iss`, `blog_id`, AND room, never by
+    room alone. Room names are not site-qualified and every single site
+    is blog 1, so without the others one relay serving several installs
+    would put their tabs in one roster and send each install's presence
+    and save notices to the other (issue #126). Installs that share a
+    relay share its secret, so they must trust each other: each can
+    sign a token naming another. The plugin's daemon does not check
+    `iss`: it serves one install, and its command-line process can
+    compute a different site URL than the web request that made the
+    token.
 -   `rooms`: what the tab may follow. An entry is an exact room name,
     or `<kind>/*`, which allows every **collection** room of that kind
     — a room name without an object id, such as `taxonomy/category`
@@ -396,7 +406,8 @@ JSON text frames. Tab → relay:
 
 -   The first frame for a `room` **follows** it: check the access token's
     `rooms`, then bind this socket to that `client_id` for the room
-    (the roster is the access token's site's, see `blog_id` above). A
+    (the roster is the access token's install and site, see `iss`
+    above). A
     later frame with a different `client_id` for the same room is a
     protocol violation: close with `1008` (it could impersonate another
     tab). `client_id` is a positive integer; `room` matches
