@@ -1,13 +1,14 @@
 import { describe, expect, it } from '@jest/globals';
 import {
 	diffGridAgainstBase,
+	gridFromTableAttributes,
 	gridToTableAttributes,
 	mergedGridFromModel,
 	mergeTableGrids,
 } from '../../../src/review/components/merge-table-grids';
-import { MOCK_TABLE_CONFLICT } from '../../../src/review/components/mock-table-conflict';
+import { TABLE_GRIDS } from './fixtures';
 
-const { base, yours, current } = MOCK_TABLE_CONFLICT;
+const { base, yours, current } = TABLE_GRIDS;
 
 // A minimal grid for the targeted cases: one header label column ("Item")
 // plus one data column, one row.
@@ -234,6 +235,32 @@ describe( 'gridToTableAttributes', () => {
 					],
 				},
 			],
+		} );
+	} );
+} );
+
+describe( 'gridFromTableAttributes', () => {
+	it( 'reads the grid back out of the core/table attribute shape', () => {
+		const grid = {
+			head: [ 'Plan', 'Free' ],
+			rows: [
+				[ 'Price', '$0' ],
+				[ 'Storage', '1 GB' ],
+			],
+		};
+		expect(
+			gridFromTableAttributes( gridToTableAttributes( grid ) )
+		).toEqual( grid );
+	} );
+
+	it( 'reads a table without a header or a body as an empty grid', () => {
+		expect( gridFromTableAttributes( {} ) ).toEqual( {
+			head: [],
+			rows: [],
+		} );
+		expect( gridFromTableAttributes( undefined ) ).toEqual( {
+			head: [],
+			rows: [],
 		} );
 	} );
 } );

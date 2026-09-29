@@ -3,11 +3,7 @@ import { useState } from '@wordpress/element';
 import { useSelect } from '@wordpress/data';
 import { __ } from '@wordpress/i18n';
 import { Button } from '@wordpress/components';
-import { getBlockContent } from '@wordpress/blocks';
-import {
-	store as blockEditorStore,
-	useBlockProps,
-} from '@wordpress/block-editor';
+import { useBlockProps } from '@wordpress/block-editor';
 import { useOpenConflicts, useResolveConflict } from '../conflicts';
 import KsesReviewDialog from './kses-review-dialog';
 import {
@@ -44,7 +40,7 @@ const CANVAS_CSS = `
  * The open SECURITY-HOLD conflicts targeting a block: the records of kind
  * `sequestration`, the kind every engine maps a wp_kses rejection to.
  * Empty for an ordinary block. Merge conflicts present as the conflict
- * card instead (see useConflictGroup).
+ * card instead (see useBlockConflicts).
  *
  * @param {string} clientId The block's client id.
  * @return {Array} The block's open security-hold records.
@@ -76,49 +72,25 @@ export function useBlockSequestrations( clientId ) {
 }
 
 /**
- * Whether a held block reads as a brand-new proposal rather than an
- * update to prior content. The engines park the risky markup and leave
- * the block at its last approved state, so a held block with no remaining
- * content has no meaningful original to compare against: present it as a
- * new proposal. A held block that kept prior content presents as an
- * update.
+ * A security hold as the review card and dialog present it: the held
+ * markup, and what it would replace. A record with no base content (a
+ * block the base did not hold, or held nothing in) reads as a brand-new
+ * proposal; one with base content as an update to it.
  *
- * Content is judged from the `content` attribute when the block has one
- * (paragraphs, legacy core/html), and from the block's inner markup
- * otherwise (raw-content blocks like core/html keep their markup in
- * innerContent, not in an attribute). Markup tags and the sync engines'
- * object placeholder character do not count as content.
- *
- * @param {string} clientId The block's client id.
- * @return {boolean} Whether to present the new-proposal scenario.
+ * @param {Object} conflict The conflict record.
+ * @return {Object} `{ kind, original, proposed }`.
  */
-export function useIsNewBlockProposal( clientId ) {
-	return useSelect(
-		( select ) => {
-			const block = select( blockEditorStore ).getBlock( clientId );
+export function sequestrationOf( conflict ) {
+	const original = conflict.base ?? '';
+	const hasOriginal =
+		'' !==
+		original.replace( /<!--[\s\S]*?-->/g, ' ' ).replace( /\s+/g, '' );
 
-			if ( ! block ) {
-				return true;
-			}
-
-			if ( undefined !== block.attributes?.content ) {
-				return ! String( block.attributes.content ).trim();
-			}
-
-			let inner = '';
-			try {
-				inner = getBlockContent( block );
-			} catch {
-				inner = '';
-			}
-
-			return ! inner
-				.replace( /<[^>]*>/g, ' ' )
-				.replace( /￼/g, '' )
-				.trim();
-		},
-		[ clientId ]
-	);
+	return {
+		kind: hasOriginal ? 'update' : 'new',
+		original,
+		proposed: conflict.proposed,
+	};
 }
 
 /**
@@ -126,14 +98,12 @@ export function useIsNewBlockProposal( clientId ) {
  * review, styled like block recovery: one warning box holding the message,
  * the "Review changes" action for users allowed to approve, and, below
  * them, the held content as inert text. NEVER live DOM, since the point of
- * the approval gate is that this markup has not been trusted. PROTOTYPE:
- * the content shown is the fabricated mock scenario, not the block's real
- * held markup.
+ * the approval gate is that this markup has not been trusted.
  *
  * Position-independent so it can be unit-tested without the block editor.
  *
  * @param {Object}   props
- * @param {Object}   props.sequestration The held scenario (see mock-kses).
+ * @param {Object}   props.sequestration The hold (see sequestrationOf).
  * @param {boolean}  props.canReview     Whether the user may review it.
  * @param {Function} props.onReview      Open the review dialog.
  */
@@ -180,31 +150,24 @@ export function SequesteredBlockBody( { sequestration, canReview, onReview } ) {
  * itself: a canvas write dispatched right before resolving is silently
  * lost to the sync push the resolution triggers.
  *
+ * When several records hold the block, the card presents the first;
+ * the next one takes its place once it is decided.
+ *
  * @param {Object} props
- * @param {string} props.clientId      The block's client id.
- * @param {Array}  props.conflicts     The block's held records.
- * @param {Object} props.sequestration The held scenario (see mock-kses).
+ * @param {Array}  props.conflicts The block's held records.
  */
-export default function SequesteredBlock( {
-	clientId,
-	conflicts,
-	sequestration,
-} ) {
+export default function SequesteredBlock( { conflicts } ) {
 	const blockProps = useBlockProps();
 	const { postType, postId } = useCurrentPost();
 	const resolve = useResolveConflict( postType, postId );
 	const [ isReviewing, setIsReviewing ] = useState( false );
+	const [ conflict ] = conflicts;
+	const sequestration = sequestrationOf( conflict );
 
 	const accept = ( content ) => {
-		for ( const conflict of conflicts ) {
-			resolve( conflict.id, { action: 'accept', content } );
-		}
+		resolve( conflict.id, { action: 'accept', content } );
 		setIsReviewing( false );
 	};
-
-	// The clientId is the card's anchor for the engine-supplied contents
-	// (plan Phase 3); it keeps the prop surface stable until then.
-	void clientId;
 
 	return (
 		<div { ...blockProps }>

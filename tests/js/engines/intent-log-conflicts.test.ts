@@ -75,10 +75,18 @@ const render = ( block: EngineBlock ): string =>
 
 const depsFor = (
 	current: EngineDocument,
-	history: Record< number, EngineDocument > = {}
+	history: Record< number, EngineDocument > = {},
+	log: IntentEnvelope[] = []
 ): ConflictDeps => ( {
 	getDocument: () => current,
 	getDocumentAt: ( seq ) => history[ seq ] ?? null,
+	getLogSince: ( seq ) =>
+		log
+			.map( ( envelope, index ) => ( {
+				seq: index + 1,
+				intent: envelope,
+			} ) )
+			.filter( ( entry ) => entry.seq > seq ),
 	serializeBlocks: ( doc, ids ) =>
 		ids
 			.map( ( id ) => findBlock( doc.root, id ) )
@@ -170,6 +178,101 @@ describe( 'intent-log conflict records', () => {
 		expect( records[ 0 ].conflict.id ).toBe( keystrokes[ 0 ].intentId );
 		// Applied in authoring order, the burst reads as the author typed it.
 		expect( records[ 0 ].conflict.proposed ).toBe( 'p1:Hello ab' );
+	} );
+
+	it( 'applies what the author got accepted from the same frame before what was held', () => {
+		// A typing burst: the first keystrokes went through, the later
+		// ones parked. The parked offsets sit behind the accepted text.
+		// The log holds it as the server rebased it, shifted past the
+		// other author's character.
+		const accepted = intent( 'insert_text', {
+			syncId: 'p1',
+			field: 'content',
+			offset: 6,
+			text: ' my',
+		} );
+		const held = intent( 'insert_text', {
+			syncId: 'p1',
+			field: 'content',
+			offset: 8,
+			text: ' friend',
+		} );
+		// Someone else's accepted edit, and the author's edit of another
+		// block, are not part of this record's proposed side.
+		const foreign = intent(
+			'insert_text',
+			{ syncId: 'p1', field: 'content', offset: 0, text: 'X' },
+			{ actorId: 'u9c9' }
+		);
+		const elsewhere = intent( 'insert_text', {
+			syncId: 'p2',
+			field: 'content',
+			offset: 0,
+			text: 'Y',
+		} );
+		const log = [ foreign, accepted, elsewhere ];
+		const current = log.reduce(
+			( doc, envelope ) => applyIntent( doc, envelope ).doc,
+			BASE
+		);
+
+		const [ record ] = buildConflictRecords(
+			[ parked( held ) ],
+			depsFor( current, { 0: BASE }, log )
+		);
+		expect( record.conflict.base ).toBe( 'p1:Hello' );
+		expect( record.conflict.proposed ).toBe( 'p1:Hello my friend' );
+		expect( record.conflict.current ).toBe( 'p1:XHello my' );
+	} );
+
+	it( 'rebuilds held markup whose placeholder was accepted', () => {
+		// Custom HTML: the placeholder character is an ordinary insertion
+		// (accepted), the markup a format over it (held for approval).
+		const doc = createDocument( [
+			{ syncId: 'h1', blockType: 'core/html', text: '' },
+		] );
+		const placeholder = intent( 'insert_text', {
+			syncId: 'h1',
+			field: 'content',
+			offset: 0,
+			text: '\uFFFC',
+		} );
+		const markup = intent( 'format_text', {
+			syncId: 'h1',
+			field: 'content',
+			start: 0,
+			end: 1,
+			format: 'obj|{"html":"<script>x</script>"}',
+			on: true,
+		} );
+		const current = applyIntent( doc, placeholder ).doc;
+		const [ record ] = buildConflictRecords(
+			[ parked( markup, 'requires-approval' ) ],
+			{
+				...depsFor( current, { 0: doc }, [ placeholder ] ),
+				serializeBlocks: ( from, ids ) =>
+					ids
+						.map( ( id ) => findBlock( from.root, id ) )
+						.map( ( block ) =>
+							JSON.stringify( block?.fields.content )
+						)
+						.join( '|' ),
+			}
+		);
+		expect( JSON.parse( record.conflict.base ?? '' ) ).toEqual( {
+			text: '',
+			formats: [],
+		} );
+		expect( JSON.parse( record.conflict.proposed ) ).toEqual( {
+			text: '\uFFFC',
+			formats: [
+				{
+					start: 0,
+					end: 1,
+					format: 'obj|{"html":"<script>x</script>"}',
+				},
+			],
+		} );
 	} );
 
 	it( 'groups the members of one txn into one record whose target is their union', () => {

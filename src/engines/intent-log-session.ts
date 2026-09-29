@@ -194,6 +194,16 @@ export interface IntentLogSession extends EngineSessionCodec {
 	 */
 	getDocumentAt: ( seq: number ) => EngineDocument | null;
 
+	/**
+	 * The retained log entries above a position, oldest first, each with
+	 * the seq the document has once it applied. Empty when the position
+	 * is no longer retained. Conflict review reads the author's own
+	 * accepted edits out of it (see intent-log-conflicts.ts).
+	 */
+	getLogSince: (
+		seq: number
+	) => Array< { seq: number; intent: IntentEnvelope } >;
+
 	/** The lowest absolute seq the replica's log copy is sliceable from. */
 	getRetainedFloor: () => number;
 
@@ -878,6 +888,19 @@ export function createIntentLogSession(
 				replica as never,
 				seq
 			) as EngineDocument | null;
+		},
+
+		getLogSince: ( seq ) => {
+			if ( ! replica || seq < replica.firstSeq ) {
+				return [];
+			}
+			const { firstSeq } = replica;
+			return replica.log
+				.slice( seq - firstSeq )
+				.map( ( intent, offset ) => ( {
+					seq: seq + offset + 1,
+					intent: intent as IntentEnvelope,
+				} ) );
 		},
 
 		getRetainedFloor: () => replica?.firstSeq ?? 0,

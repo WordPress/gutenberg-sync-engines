@@ -2,10 +2,7 @@ import { describe, expect, it, jest } from '@jest/globals';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { KsesReviewDialogBody } from '../../../src/review/components/kses-review-dialog';
-import {
-	MOCK_KSES_NEW,
-	MOCK_KSES_UPDATE,
-} from '../../../src/review/components/mock-kses';
+import { KSES_NEW, KSES_UPDATE } from './fixtures';
 
 const noop = () => {};
 
@@ -19,7 +16,7 @@ describe( 'KsesReviewDialogBody', () => {
 		it( 'shows the proposed markup as a code diff with every line added', () => {
 			render(
 				<KsesReviewDialogBody
-					sequestration={ MOCK_KSES_NEW }
+					sequestration={ KSES_NEW }
 					onApprove={ noop }
 					onRemove={ noop }
 				/>
@@ -45,7 +42,7 @@ describe( 'KsesReviewDialogBody', () => {
 			const onApprove = jest.fn();
 			render(
 				<KsesReviewDialogBody
-					sequestration={ MOCK_KSES_NEW }
+					sequestration={ KSES_NEW }
 					onApprove={ onApprove }
 					onRemove={ noop }
 				/>
@@ -54,7 +51,7 @@ describe( 'KsesReviewDialogBody', () => {
 			await user.click(
 				screen.getByRole( 'button', { name: 'Approve' } )
 			);
-			expect( onApprove ).toHaveBeenCalledWith( MOCK_KSES_NEW.proposed );
+			expect( onApprove ).toHaveBeenCalledWith( KSES_NEW.proposed );
 		} );
 
 		it( 'Edit opens the markup as plain text, and Approve hands back the edited markup', async () => {
@@ -62,7 +59,7 @@ describe( 'KsesReviewDialogBody', () => {
 			const onApprove = jest.fn();
 			render(
 				<KsesReviewDialogBody
-					sequestration={ MOCK_KSES_NEW }
+					sequestration={ KSES_NEW }
 					onApprove={ onApprove }
 					onRemove={ noop }
 				/>
@@ -73,7 +70,7 @@ describe( 'KsesReviewDialogBody', () => {
 			const textarea = screen.getByRole( 'textbox', {
 				name: 'Proposed block HTML',
 			} );
-			expect( textarea ).toHaveValue( MOCK_KSES_NEW.proposed );
+			expect( textarea ).toHaveValue( KSES_NEW.proposed );
 
 			await user.clear( textarea );
 			await user.type( textarea, '<p>safe</p>' );
@@ -88,7 +85,7 @@ describe( 'KsesReviewDialogBody', () => {
 			const onRemove = jest.fn();
 			render(
 				<KsesReviewDialogBody
-					sequestration={ MOCK_KSES_NEW }
+					sequestration={ KSES_NEW }
 					onApprove={ noop }
 					onRemove={ onRemove }
 				/>
@@ -105,7 +102,7 @@ describe( 'KsesReviewDialogBody', () => {
 		it( 'shows one unified line diff from the original to the proposal', () => {
 			render(
 				<KsesReviewDialogBody
-					sequestration={ MOCK_KSES_UPDATE }
+					sequestration={ KSES_UPDATE }
 					onApprove={ noop }
 					onRemove={ noop }
 				/>
@@ -132,7 +129,7 @@ describe( 'KsesReviewDialogBody', () => {
 			const user = userEvent.setup();
 			render(
 				<KsesReviewDialogBody
-					sequestration={ MOCK_KSES_UPDATE }
+					sequestration={ KSES_UPDATE }
 					onApprove={ noop }
 					onRemove={ noop }
 				/>
@@ -160,7 +157,7 @@ describe( 'KsesReviewDialogBody', () => {
 			const onApprove = jest.fn();
 			render(
 				<KsesReviewDialogBody
-					sequestration={ MOCK_KSES_UPDATE }
+					sequestration={ KSES_UPDATE }
 					onApprove={ onApprove }
 					onRemove={ noop }
 				/>
@@ -169,9 +166,7 @@ describe( 'KsesReviewDialogBody', () => {
 			await user.click(
 				screen.getByRole( 'button', { name: 'Approve' } )
 			);
-			expect( onApprove ).toHaveBeenCalledWith(
-				MOCK_KSES_UPDATE.proposed
-			);
+			expect( onApprove ).toHaveBeenCalledWith( KSES_UPDATE.proposed );
 		} );
 	} );
 } );

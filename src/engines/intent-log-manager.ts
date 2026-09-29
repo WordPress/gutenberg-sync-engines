@@ -17,6 +17,7 @@ import {
 	getSaveContent,
 	parse,
 	serialize,
+	serializeRawBlock,
 } from '@wordpress/blocks';
 
 /**
@@ -1076,11 +1077,23 @@ function pickBlocksById( blocks: BridgeBlock[], ids: string[] ): BridgeBlock[] {
 function toBridgeBlocks( blocks: ReturnType< typeof parse > ): BridgeBlock[] {
 	return blocks
 		.filter( ( block ) => !! block.name )
-		.map( ( block ) => ( {
-			name: block.name,
-			attributes: { ...( block.attributes ?? {} ) },
-			innerBlocks: toBridgeBlocks( block.innerBlocks ?? [] ),
-		} ) );
+		.map( ( block ) => {
+			const { innerContent } = block as { innerContent?: unknown };
+			return {
+				name: block.name,
+				attributes: { ...( block.attributes ?? {} ) },
+				innerBlocks: toBridgeBlocks( block.innerBlocks ?? [] ),
+				// Raw-content blocks (custom HTML) carry their markup in
+				// inner fragments.
+				...( Array.isArray( innerContent )
+					? {
+							innerContent: innerContent as Array<
+								string | null
+							>,
+					  }
+					: {} ),
+			};
+		} );
 }
 
 /**
@@ -1781,20 +1794,39 @@ export function createIntentLogManager( debug = false ): SyncManager {
 			buildConflictRecords( session.getOpenProposals(), {
 				getDocument: () => session.getDocument(),
 				getDocumentAt: ( seq ) => session.getDocumentAt( seq ),
-				serializeBlocks: ( doc, ids ) => {
-					try {
-						return serialize(
-							pickBlocksById(
-								documentBlocks( state, doc ),
-								ids
-							).map( toSerializableBlock ) as Parameters<
-								typeof serialize
-							>[ 0 ]
-						);
-					} catch {
-						return '';
-					}
-				},
+				getLogSince: ( seq ) => session.getLogSince( seq ),
+				serializeBlocks: ( doc, ids ) =>
+					pickBlocksById( documentBlocks( state, doc ), ids )
+						.map( ( block ) => {
+							try {
+								/*
+								 * A raw-content block (custom HTML) keeps
+								 * its markup in inner fragments, not in an
+								 * attribute its save function reads, so it
+								 * is written out by hand: the comment
+								 * delimiters around the markup itself.
+								 */
+								if ( state.rawContent?.is( block.name ) ) {
+									const markup = `\n${ state.rawContent.serialize(
+										block
+									) }\n`;
+									return serializeRawBlock( {
+										blockName: block.name,
+										attrs: block.attributes,
+										innerBlocks: [],
+										innerHTML: markup,
+										innerContent: [ markup ],
+									} );
+								}
+								return serialize( [
+									toSerializableBlock( block ),
+								] as Parameters< typeof serialize >[ 0 ] );
+							} catch {
+								return '';
+							}
+						} )
+						.filter( ( markup ) => '' !== markup )
+						.join( '\n\n' ),
 			} );
 		/**
 		 * Authors a record's accepted replacement as ordinary intents under

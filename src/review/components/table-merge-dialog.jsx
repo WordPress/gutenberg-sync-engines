@@ -2,15 +2,16 @@
 import { useMemo, useState } from '@wordpress/element';
 import { __ } from '@wordpress/i18n';
 import { Button, Modal } from '@wordpress/components';
-import { createBlock } from '@wordpress/blocks';
+import { createBlock, parse, serialize } from '@wordpress/blocks';
 import TableDiffGrid from './table-diff-grid';
 import MergedResultEditor from './merged-result-editor';
 import {
+	gridFromTableAttributes,
 	gridToTableAttributes,
 	mergedGridFromModel,
 	mergeTableGrids,
 } from './merge-table-grids';
-import { MOCK_TABLE_CONFLICT } from './mock-table-conflict';
+import { useIsOwnProposal } from './merge-dialog';
 
 /**
  * The merged result as blocks, seeded from a grid.
@@ -73,16 +74,18 @@ function GridPane( { label, grid, baseGrid, onRestore } ) {
  * Position-independent so it can be unit-tested without the modal.
  *
  * @param {Object}   props
- * @param {Object}   props.base     The grid both versions started from.
- * @param {Object}   props.yours    The author's version of the grid.
- * @param {Object}   props.current  The document's current version.
- * @param {Function} props.onAccept ( { head, body } ) => void.
- * @param {Function} props.onCancel Close without resolving.
+ * @param {Object}   props.base          The grid both versions started from.
+ * @param {Object}   props.yours         The author's version of the grid.
+ * @param {string}   props.proposedLabel The author's pane heading.
+ * @param {Object}   props.current       The document's current version.
+ * @param {Function} props.onAccept      ( { head, body } ) => void.
+ * @param {Function} props.onCancel      Close without resolving.
  */
 export function TableMergeDialogBody( {
 	base,
 	yours,
 	current,
+	proposedLabel = __( 'Your version' ),
 	onAccept,
 	onCancel,
 } ) {
@@ -110,7 +113,7 @@ export function TableMergeDialogBody( {
 			</p>
 			<div className="gse-review-merge-dialog__panes">
 				<GridPane
-					label={ __( 'Your version' ) }
+					label={ proposedLabel }
 					grid={ yours }
 					baseGrid={ base }
 					onRestore={ () => restoreGrid( yours ) }
@@ -157,17 +160,79 @@ export function TableMergeDialogBody( {
 }
 
 /**
- * The collaboration table merge dialog, opened from a conflicted table
- * block's "Review conflict" card. PROTOTYPE: the compared grids are the
- * fabricated mock table conflict, not the block's real cells; real
- * conflicts open it, but its contents are pre-set while the UI design
- * settles.
+ * The first table block of a side, parsed.
+ *
+ * @param {?string} content A side, as serialized blocks.
+ * @return {?Object} The table block, or null.
+ */
+function tableBlockOf( content ) {
+	if ( ! content ) {
+		return null;
+	}
+
+	return (
+		parse( content ).find( ( block ) => 'core/table' === block.name ) ??
+		null
+	);
+}
+
+/**
+ * A conflict record's three sides as table grids. Without a base (the
+ * engine could no longer recover it) the current version stands in, so
+ * the proposed side shows every difference and the current side none.
+ *
+ * @param {Object} conflict The conflict record.
+ * @return {Object} `{ base, yours, current }` grids.
+ */
+export function tableGridsOf( conflict ) {
+	const current = tableBlockOf( conflict.current );
+	const base = tableBlockOf( conflict.base ) ?? current;
+	const proposed = tableBlockOf( conflict.proposed );
+
+	return {
+		base: gridFromTableAttributes( base?.attributes ),
+		yours: gridFromTableAttributes( proposed?.attributes ),
+		current: gridFromTableAttributes( current?.attributes ),
+	};
+}
+
+/**
+ * The in-card preview of a table conflict: the compact union view of
+ * both sides' changes, contested cells marked.
+ *
+ * @param {Object} props
+ * @param {Object} props.conflict The conflict record.
+ */
+export function TableConflictPreview( { conflict } ) {
+	const model = useMemo( () => {
+		const { base, yours, current } = tableGridsOf( conflict );
+
+		return mergeTableGrids( base, yours, current );
+	}, [ conflict ] );
+
+	return <TableDiffGrid model={ model } compact />;
+}
+
+/**
+ * The table block's review view (see src/review/views.ts): the record's
+ * sides as grids, the merged result as a table, and the decision handed
+ * back as the serialized table. The merged table keeps the current
+ * block's other attributes (the caption, the layout) and its identity;
+ * only the head and the body come from the merge.
  *
  * @param {Object}   props
- * @param {Function} props.onAccept ( { head, body } ) => void.
+ * @param {Object}   props.conflict The conflict record.
+ * @param {Function} props.onDecide ( decision ) => void.
  * @param {Function} props.onClose  Close without resolving.
  */
-export default function CollaborationTableMergeDialog( { onAccept, onClose } ) {
+export function TableConflictView( { conflict, onDecide, onClose } ) {
+	const isOwn = useIsOwnProposal( conflict.authorId );
+	const grids = useMemo( () => tableGridsOf( conflict ), [ conflict ] );
+	let proposedLabel = __( 'Proposed version' );
+	if ( isOwn ) {
+		proposedLabel = __( 'Your version' );
+	}
+
 	return (
 		<Modal
 			title={ __( 'Review conflicting edits' ) }
@@ -176,10 +241,25 @@ export default function CollaborationTableMergeDialog( { onAccept, onClose } ) {
 			size="large"
 		>
 			<TableMergeDialogBody
-				base={ MOCK_TABLE_CONFLICT.base }
-				yours={ MOCK_TABLE_CONFLICT.yours }
-				current={ MOCK_TABLE_CONFLICT.current }
-				onAccept={ onAccept }
+				base={ grids.base }
+				yours={ grids.yours }
+				current={ grids.current }
+				proposedLabel={ proposedLabel }
+				onAccept={ ( { head, body } ) => {
+					const live =
+						tableBlockOf( conflict.current ) ??
+						tableBlockOf( conflict.proposed );
+					onDecide( {
+						action: 'accept',
+						content: serialize( [
+							createBlock( 'core/table', {
+								...( live?.attributes ?? {} ),
+								head,
+								body,
+							} ),
+						] ),
+					} );
+				} }
 				onCancel={ onClose }
 			/>
 		</Modal>

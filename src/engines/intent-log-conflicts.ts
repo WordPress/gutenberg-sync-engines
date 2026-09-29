@@ -17,13 +17,18 @@
  *   baseSeq, the state the author started from. Null when the replica no
  *   longer holds that seq (a proposal older than the session, replayed on
  *   join); the review UI then compares proposed against current.
- * - `proposed`: that base document with every member applied in authoring
- *   order, then the same blocks. Members of one capture batch are
- *   expressed against the base plus the batch's earlier members, and a
- *   later batch at the same frame against the base plus the earlier
- *   batches (the editor's own view of its text), so applying them in
- *   order rebuilds what the author saw. A member that no longer applies
- *   is skipped.
+ * - `proposed`: that base document with the author's edits applied, then
+ *   the same blocks. The author's edits are, first, what the author got
+ *   ACCEPTED from the same frames (read back out of the retained log),
+ *   then every member in authoring order. The accepted ones matter
+ *   because a parked edit is expressed against the author's own view,
+ *   which held them: custom HTML parks as a format over a placeholder
+ *   character whose insertion was accepted, and the keystrokes a typing
+ *   burst parks sit behind the ones it got through. Members of one
+ *   capture batch are expressed against the base plus the batch's earlier
+ *   members, and a later batch at the same frame against the base plus
+ *   the earlier batches, so applying them in order rebuilds what the
+ *   author saw. An edit that no longer applies is skipped.
  * - `current`: the target blocks in this client's optimistic document.
  *
  * Pure: the documents and the serializer come in through `deps`, so the
@@ -47,6 +52,13 @@ export interface ConflictDeps {
 	getDocument: () => EngineDocument | null;
 	/** The document at a log position, or null when it is not retained. */
 	getDocumentAt: ( seq: number ) => EngineDocument | null;
+	/**
+	 * The retained log entries above a position, oldest first (empty when
+	 * the position is not retained).
+	 */
+	getLogSince?: (
+		seq: number
+	) => Array< { seq: number; intent: IntentEnvelope } >;
 	/**
 	 * Serializes blocks of a document, by id, in the order given. The ids
 	 * are top-most (no id is a descendant of another) and present.
@@ -253,28 +265,69 @@ function groupProposals( open: IntentLogProposal[] ): Draft[] {
 }
 
 /**
- * The document with a record's members applied in authoring order.
+ * A document with intents applied in order.
  *
- * @param start   The document the members start from.
- * @param members The record's members.
- * @return The author's intended document.
+ * @param start   The document the intents start from.
+ * @param intents The intents.
+ * @return The resulting document.
  */
-function applyMembers(
+function applyIntents(
 	start: EngineDocument,
-	members: IntentLogProposal[]
+	intents: IntentEnvelope[]
 ): EngineDocument {
 	let doc = start;
-	for ( const member of members ) {
+	for ( const intent of intents ) {
 		try {
-			const result = applyIntent( doc, member.intent );
+			const result = applyIntent( doc, intent );
 			if ( 'applied' === result.disposition.status ) {
 				doc = result.doc;
 			}
 		} catch {
-			// A member the document cannot take is skipped.
+			// An intent the document cannot take is skipped.
 		}
 	}
 	return doc;
+}
+
+/**
+ * The edits the record's author got accepted from the frames the members
+ * were authored at, touching the record's blocks: the part of the
+ * author's own view the parked members are expressed against.
+ *
+ * @param draft The record draft.
+ * @param deps  The documents and the log.
+ * @return The accepted intents, oldest first.
+ */
+function acceptedSiblings(
+	draft: Draft,
+	deps: ConflictDeps
+): IntentEnvelope[] {
+	if ( ! deps.getLogSince ) {
+		return [];
+	}
+	const baseSeqs = draft.members.map( ( member ) => member.intent.baseSeq );
+	const from = Math.min( ...baseSeqs );
+	if ( ! Number.isFinite( from ) ) {
+		return [];
+	}
+	const until = Math.max( ...baseSeqs );
+	const actorId = draft.members[ 0 ].actorId;
+	const memberIds = new Set(
+		draft.members.map( ( member ) => member.intent.intentId )
+	);
+	return deps
+		.getLogSince( from )
+		.map( ( entry ) => entry.intent )
+		.filter(
+			( intent ) =>
+				intent.actorId === actorId &&
+				! memberIds.has( intent.intentId ) &&
+				intent.baseSeq >= from &&
+				intent.baseSeq <= until &&
+				blockIdsOf( intent ).some( ( id ) =>
+					draft.blockIds.includes( id )
+				)
+		);
 }
 
 /**
@@ -342,9 +395,18 @@ export function buildConflictRecords(
 		const baseDoc = Number.isFinite( baseSeq )
 			? deps.getDocumentAt( baseSeq )
 			: null;
-		// Without the base, the members apply onto the current document:
-		// the closest reading of the author's intent still available.
-		const proposedDoc = applyMembers( baseDoc ?? current, draft.members );
+		// Without the base, the members apply onto the current document
+		// (which holds the author's accepted edits already): the closest
+		// reading of the author's intent still available.
+		const proposedDoc = baseDoc
+			? applyIntents( baseDoc, [
+					...acceptedSiblings( draft, deps ),
+					...draft.members.map( ( member ) => member.intent ),
+			  ] )
+			: applyIntents(
+					current,
+					draft.members.map( ( member ) => member.intent )
+			  );
 
 		let base: string | null = null;
 		let proposed = '';

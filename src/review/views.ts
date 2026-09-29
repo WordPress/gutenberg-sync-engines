@@ -28,6 +28,8 @@ export interface SyncConflictView {
 	kind: SyncConflict[ 'kind' ];
 	/** The dialog component. */
 	render: ( props: SyncConflictViewProps ) => JSX.Element | null;
+	/** The in-card preview, when the word diff of the sides is not it. */
+	renderPreview?: ( props: { conflict: SyncConflict } ) => JSX.Element | null;
 }
 
 const views = new Map< string, SyncConflictView >();

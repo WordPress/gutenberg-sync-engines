@@ -1,34 +1,20 @@
 // @ts-nocheck -- Prototype JavaScript moved as is from the bundled Gutenberg fork; typing it (TSX) is a later pass.
+import { diffWords } from 'diff';
 import { useMemo, useState } from '@wordpress/element';
 import { useSelect } from '@wordpress/data';
 import { __ } from '@wordpress/i18n';
 import { Button } from '@wordpress/components';
-import { createBlock, serialize } from '@wordpress/blocks';
 import {
 	store as blockEditorStore,
 	useBlockProps,
 } from '@wordpress/block-editor';
 import { useOpenConflicts, useResolveConflict } from '../conflicts';
+import { getSyncConflictView } from '../views';
 import DiffText from './diff-text';
-import { mockConflictParts } from './mock-conflict';
-import { mockSectionConflictParts } from './mock-section-conflict';
 import CollaborationMergeDialog from './merge-dialog';
-import CollaborationSectionMergeDialog from './section-merge-dialog';
-import CollaborationTableMergeDialog from './table-merge-dialog';
-import TableDiffGrid from './table-diff-grid';
-import { mergeTableGrids } from './merge-table-grids';
-import { MOCK_TABLE_CONFLICT } from './mock-table-conflict';
 import { conflictsTargetingBlock, useCurrentPost } from './review-data';
 
 const EMPTY_CONFLICTS = [];
-
-// Stable empty result for useConflictGroup, so unconflicted blocks (the
-// overwhelmingly common case) never re-render from a fresh object.
-const NO_GROUP = {
-	conflicts: EMPTY_CONFLICTS,
-	isPresenter: false,
-	sectionClientId: null,
-};
 
 /*
  * The replacement renders inside the editor canvas, where the admin
@@ -83,131 +69,53 @@ const CANVAS_CSS = `
 `;
 
 /**
- * The open MERGE conflicts targeting one block. Security holds (kind
- * `sequestration`) are excluded: those present as the sequestered-block
- * card instead (see the sequestered-block editor hook).
+ * A side's readable text, for the card preview: block delimiters and tags
+ * stripped, whitespace collapsed.
  *
- * @param {Function} select    Registry select.
- * @param {Array}    conflicts The entity's open conflict records.
- * @param {string}   clientId  The block's client id.
- * @return {Array} The block's open merge conflicts.
+ * @param {?string} content Serialized block content.
+ * @return {string} The plain text.
  */
-function blockConflicts( select, conflicts, clientId ) {
-	return conflictsTargetingBlock( select, conflicts, clientId ).filter(
-		( conflict ) => 'merge' === conflict.kind
-	);
+export function plainText( content ) {
+	return String( content ?? '' )
+		.replace( /<!--[\s\S]*?-->/g, ' ' )
+		.replace( /<[^>]+>/g, ' ' )
+		.replace( /\s+/g, ' ' )
+		.trim();
 }
 
 /**
- * The conflict GROUP a block belongs to, and whether this block is the
- * group's PRESENTER (the one block that renders the card and dialog).
- *
- * The principled grouping signal is the contract's "one record per parked
- * unit": an engine publishes the edits it set aside together as ONE
- * record whose target is their union. intent-log does not stamp txns onto
- * captured intents yet, so each escalated intent arrives as its own
- * single-block record; until it does (plan Phase 3), this hook applies
- * the DEMO stand-in on top: all merge conflicts landing inside one
- * SECTION (the block itself when it is a group, else its nearest group
- * ancestor) combine into one group, presented once and resolved together.
- * A block outside any group keeps the one-block-one-conflict behavior, so
- * the paragraph and table demos are unaffected.
- *
- * The presenter is the section's first conflicted block in document
- * order (the section block itself first, then its descendants). Other
- * conflicted blocks in the section render their NORMAL edit UI, so the
- * section reads as a single conflict rather than a wall of cards.
+ * The open MERGE conflicts targeting one block. One record is one
+ * conflict (the engine publishes the edits it set aside together as one
+ * record, and never two records over the same block by one author), and
+ * a record covering several blocks targets its first block, so a section
+ * presents once. Security holds (kind `sequestration`) are excluded:
+ * those present as the sequestered-block card instead (see the
+ * sequestered-block editor hook).
  *
  * @param {string} clientId The block's client id.
- * @return {Object} { conflicts, isPresenter, sectionClientId }: the
- *                  group's open merge conflicts (empty when the block
- *                  presents nothing), whether this block presents the
- *                  group, and the section block's client id (null
- *                  outside a group).
+ * @return {Array} The block's open merge conflicts.
  */
-export function useConflictGroup( clientId ) {
+export function useBlockConflicts( clientId ) {
 	const { postType, postId } = useCurrentPost();
 	const open = useOpenConflicts( postType, postId );
 
 	return useSelect(
 		( select ) => {
 			if ( ! open.length ) {
-				return NO_GROUP;
+				return EMPTY_CONFLICTS;
 			}
 
-			const { getBlockName, getBlockParents, getClientIdsOfDescendants } =
-				select( blockEditorStore );
+			const matches = conflictsTargetingBlock(
+				select,
+				open,
+				clientId
+			).filter( ( conflict ) => 'merge' === conflict.kind );
 
-			// The block's section: itself when it is a group (de-rtc
-			// parks by top-level index, so a conflict anywhere inside a
-			// group lands on the group), else the nearest group ancestor
-			// (intent-log parks on the inner block whose syncId the
-			// escalated edit targeted). Ascending order, root first; the
-			// nearest group wins.
-			let sectionClientId = null;
-			if ( 'core/group' === getBlockName( clientId ) ) {
-				sectionClientId = clientId;
-			} else {
-				const parents = getBlockParents( clientId );
-				for ( let i = parents.length - 1; i >= 0; i-- ) {
-					if ( 'core/group' === getBlockName( parents[ i ] ) ) {
-						sectionClientId = parents[ i ];
-						break;
-					}
-				}
+			if ( ! matches.length ) {
+				return EMPTY_CONFLICTS;
 			}
 
-			if ( ! sectionClientId ) {
-				const matches = blockConflicts( select, open, clientId );
-				if ( ! matches.length ) {
-					return NO_GROUP;
-				}
-
-				return {
-					conflicts: matches,
-					isPresenter: true,
-					sectionClientId: null,
-				};
-			}
-
-			// Gather the section's whole group in document order; the
-			// first conflicted block presents. De-duplicate by record id:
-			// a record carrying both ids and a position could match two
-			// candidates.
-			const candidates = [
-				sectionClientId,
-				...getClientIdsOfDescendants( sectionClientId ),
-			];
-			const group = [];
-			const seen = new Set();
-			let presenter = null;
-			for ( const candidate of candidates ) {
-				const matches = blockConflicts( select, open, candidate );
-				if ( ! matches.length ) {
-					continue;
-				}
-
-				if ( ! presenter ) {
-					presenter = candidate;
-				}
-
-				for ( const conflict of matches ) {
-					if ( ! seen.has( conflict.id ) ) {
-						seen.add( conflict.id );
-						group.push( conflict );
-					}
-				}
-			}
-
-			if ( ! group.length ) {
-				return NO_GROUP;
-			}
-
-			return {
-				conflicts: group,
-				isPresenter: presenter === clientId,
-				sectionClientId,
-			};
+			return matches;
 		},
 		[ clientId, open ]
 	);
@@ -216,14 +124,15 @@ export function useConflictGroup( clientId ) {
 /**
  * The body of the in-place conflict replacement, styled like block
  * recovery: one warning box holding the message, the "Review conflict"
- * action, and, below them, a preview of the conflict. For most blocks the
- * preview is the word diff with add/remove highlighting; for a table
- * block it is a compact table showing both sides' changes, contested
- * cells marked; for a block in a group section it is the word diff of
- * the whole section's text. A table's presentation wins over the
- * section's: the table preview is the more specific view of the block
- * that actually conflicted. PROTOTYPE: the preview shows the fabricated
- * mock conflict, not the block's real contents.
+ * action, and, below them, a preview of the conflict. The preview is the
+ * word diff from the current version to the proposed one, unless the
+ * block type registered its own (a table previews as a compact table
+ * showing both sides' changes).
+ *
+ * The preview diff is deliberately whitespace-INSENSITIVE and runs
+ * version to version: against the base, two versions of one sentence
+ * degrade into an unreadable word-by-word interleave. The dialog's panes
+ * diff each version against the shared base instead.
  *
  * The block-recovery Warning component keeps everything but its actions
  * inside the message paragraph, so the box is rendered directly with the
@@ -233,33 +142,41 @@ export function useConflictGroup( clientId ) {
  * Position-independent so it can be unit-tested without the block editor.
  *
  * @param {Object}   props
+ * @param {Object}   props.conflict  The conflict record.
  * @param {string}   props.blockName The conflicted block's name.
- * @param {boolean}  props.isSection Whether the block is, or sits
- *                                   inside, a group section.
+ * @param {boolean}  props.isSection Whether the record covers a section
+ *                                   (several blocks, or a container).
  * @param {Function} props.onReview  Open the merge dialog.
  */
-export function ConflictBlockBody( { blockName, isSection, onReview } ) {
-	const isTable = 'core/table' === blockName;
-	const tableModel = useMemo( () => {
-		if ( ! isTable ) {
-			return null;
-		}
-
-		return mergeTableGrids(
-			MOCK_TABLE_CONFLICT.base,
-			MOCK_TABLE_CONFLICT.yours,
-			MOCK_TABLE_CONFLICT.current
-		);
-	}, [ isTable ] );
+export function ConflictBlockBody( {
+	conflict,
+	blockName,
+	isSection,
+	onReview,
+} ) {
+	const view = isSection
+		? undefined
+		: getSyncConflictView( blockName, 'merge' );
+	const parts = useMemo(
+		() =>
+			diffWords(
+				plainText( conflict.current ),
+				plainText( conflict.proposed )
+			),
+		[ conflict ]
+	);
 
 	let message = __( 'This block has conflicting edits.' );
-	let preview = <DiffText parts={ mockConflictParts() } />;
-	if ( isTable ) {
-		message = __( 'This table has conflicting edits.' );
-		preview = <TableDiffGrid model={ tableModel } compact />;
-	} else if ( isSection ) {
+	if ( isSection ) {
 		message = __( 'This section has conflicting edits.' );
-		preview = <DiffText parts={ mockSectionConflictParts() } />;
+	} else if ( 'core/table' === blockName ) {
+		message = __( 'This table has conflicting edits.' );
+	}
+
+	let preview = <DiffText parts={ parts } />;
+	if ( view?.renderPreview ) {
+		const Preview = view.renderPreview;
+		preview = <Preview conflict={ conflict } />;
 	}
 
 	return (
@@ -291,13 +208,11 @@ export function ConflictBlockBody( { blockName, isSection, onReview } ) {
 /**
  * The in-place replacement for a conflicted block: rendered INSTEAD of the
  * block's edit UI (see the conflict-block editor hook), so the content is
- * read-only until the conflict is reviewed. The merge dialog opens from
- * here; its modal renders outside the canvas. A table block opens the
- * table-shaped dialog; a block that is, or sits inside, a group opens the
- * section dialog, which compares and resolves the whole section (needed
- * for conflicts with no per-block answer, like a paragraph split on one
- * side and edited on the other); every other block opens the paragraph
- * one.
+ * read-only until the conflict is reviewed. The dialog opens from here;
+ * its modal renders outside the canvas. A single block whose type
+ * registered a review view (a table) opens that view; everything else
+ * opens the built-in dialog, with its structure unlocked when the record
+ * covers a section.
  *
  * The reviewer's decision goes to the ENGINE as content
  * (`resolveConflict` with `accept` plus serialized blocks): the engine
@@ -307,83 +222,65 @@ export function ConflictBlockBody( { blockName, isSection, onReview } ) {
  * push the resolution triggers (see AGENTS.md on pushes from inside
  * update()).
  *
- * @param {Object}  props
- * @param {string}  props.clientId        The block's client id.
- * @param {string}  props.blockName       The block's name.
- * @param {Array}   props.conflicts       The conflict group's open records
- *                                        (the whole section's when the
- *                                        block presents a section).
- * @param {?string} props.sectionClientId The section block's client id,
- *                                        or null outside a group (from
- *                                        useConflictGroup).
+ * When several records target the block (parked edits by different
+ * authors), the card presents the first; the next one takes its place
+ * once it is decided.
+ *
+ * @param {Object} props
+ * @param {string} props.clientId  The block's client id.
+ * @param {string} props.blockName The block's name.
+ * @param {Array}  props.conflicts The block's open merge conflicts.
  */
-export default function ConflictBlock( {
-	clientId,
-	blockName,
-	conflicts,
-	sectionClientId,
-} ) {
+export default function ConflictBlock( { clientId, blockName, conflicts } ) {
 	const blockProps = useBlockProps();
 	const { postType, postId } = useCurrentPost();
 	const resolve = useResolveConflict( postType, postId );
 	const [ isReviewing, setIsReviewing ] = useState( false );
+	const [ conflict ] = conflicts;
+	const isContainer = useSelect(
+		( select ) => select( blockEditorStore ).getBlockCount( clientId ) > 0,
+		[ clientId ]
+	);
+	const isSection =
+		isContainer ||
+		( 'blocks' === conflict.target.type && conflict.target.count > 1 );
+	const view = isSection
+		? undefined
+		: getSyncConflictView( blockName, 'merge' );
 
-	// Accept: every record in the group takes the same replacement (the
-	// group is one conflict to the reviewer), as serialized blocks.
-	const accept = ( content ) => {
-		for ( const conflict of conflicts ) {
-			resolve( conflict.id, { action: 'accept', content } );
-		}
+	const onClose = () => setIsReviewing( false );
+	const onDecide = ( decision ) => {
+		resolve( conflict.id, decision );
 		setIsReviewing( false );
 	};
 
 	let dialog = null;
-	if ( isReviewing && 'core/table' === blockName ) {
+	if ( isReviewing && view ) {
+		const View = view.render;
 		dialog = (
-			<CollaborationTableMergeDialog
-				onClose={ () => setIsReviewing( false ) }
-				onAccept={ ( { head, body } ) =>
-					accept(
-						serialize( [
-							createBlock( 'core/table', { head, body } ),
-						] )
-					)
-				}
-			/>
-		);
-	} else if ( isReviewing && sectionClientId ) {
-		dialog = (
-			<CollaborationSectionMergeDialog
-				onClose={ () => setIsReviewing( false ) }
-				onAccept={ accept }
+			<View
+				conflict={ conflict }
+				onDecide={ onDecide }
+				onClose={ onClose }
 			/>
 		);
 	} else if ( isReviewing ) {
 		dialog = (
 			<CollaborationMergeDialog
-				onClose={ () => setIsReviewing( false ) }
-				onAccept={ ( mergedText ) =>
-					accept(
-						serialize( [
-							createBlock( 'core/paragraph', {
-								content: mergedText,
-							} ),
-						] )
-					)
-				}
+				conflict={ conflict }
+				isSection={ isSection }
+				onDecide={ onDecide }
+				onClose={ onClose }
 			/>
 		);
 	}
 
-	// The clientId is the card's anchor for the engine-supplied contents
-	// (plan Phase 3); it keeps the prop surface stable until then.
-	void clientId;
-
 	return (
 		<div { ...blockProps }>
 			<ConflictBlockBody
+				conflict={ conflict }
 				blockName={ blockName }
-				isSection={ !! sectionClientId }
+				isSection={ isSection }
 				onReview={ () => setIsReviewing( true ) }
 			/>
 			{ dialog }

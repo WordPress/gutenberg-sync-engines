@@ -1,14 +1,17 @@
 import { describe, expect, it, jest } from '@jest/globals';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { SequesteredBlockBody } from '../../../src/review/components/sequestered-block';
-import { MOCK_KSES_NEW } from '../../../src/review/components/mock-kses';
+import {
+	SequesteredBlockBody,
+	sequestrationOf,
+} from '../../../src/review/components/sequestered-block';
+import { KSES_NEW } from './fixtures';
 
 describe( 'SequesteredBlockBody', () => {
 	it( 'shows the message and the held content as inert text, without actions, when the user cannot approve', () => {
 		render(
 			<SequesteredBlockBody
-				sequestration={ MOCK_KSES_NEW }
+				sequestration={ KSES_NEW }
 				canReview={ false }
 				onReview={ () => {} }
 			/>
@@ -32,7 +35,7 @@ describe( 'SequesteredBlockBody', () => {
 		const onReview = jest.fn();
 		render(
 			<SequesteredBlockBody
-				sequestration={ MOCK_KSES_NEW }
+				sequestration={ KSES_NEW }
 				canReview
 				onReview={ onReview }
 			/>
@@ -42,5 +45,36 @@ describe( 'SequesteredBlockBody', () => {
 			screen.getByRole( 'button', { name: 'Review changes' } )
 		);
 		expect( onReview ).toHaveBeenCalled();
+	} );
+} );
+
+describe( 'sequestrationOf', () => {
+	const hold = ( base ) => ( {
+		id: 'c1',
+		kind: 'sequestration',
+		authorId: 3,
+		target: { type: 'blocks', ids: [ 'h1' ], index: 1, count: 1 },
+		base,
+		proposed: KSES_NEW.proposed,
+		current: '',
+	} );
+
+	it( 'reads a hold with no base content as a new proposal', () => {
+		expect( sequestrationOf( hold( '' ) ).kind ).toBe( 'new' );
+		expect( sequestrationOf( hold( null ) ).kind ).toBe( 'new' );
+		// An empty block is markup with no content.
+		expect(
+			sequestrationOf( hold( '<!-- wp:html -->\n\n<!-- /wp:html -->' ) )
+				.kind
+		).toBe( 'new' );
+	} );
+
+	it( 'reads a hold over existing content as an update to it', () => {
+		const base = '<!-- wp:html -->\n<p>approved</p>\n<!-- /wp:html -->';
+		expect( sequestrationOf( hold( base ) ) ).toEqual( {
+			kind: 'update',
+			original: base,
+			proposed: KSES_NEW.proposed,
+		} );
 	} );
 } );

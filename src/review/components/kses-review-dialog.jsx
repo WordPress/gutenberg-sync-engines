@@ -22,7 +22,7 @@ import { RevisionsCodeDiff } from '../revisions-diff';
  * Position-independent so it can be unit-tested without the modal.
  *
  * @param {Object}   props
- * @param {Object}   props.sequestration The held scenario (see mock-kses).
+ * @param {Object}   props.sequestration The hold (see sequestrationOf).
  * @param {Function} props.onApprove     ( proposedHtml ) => void.
  * @param {Function} props.onRemove      Remove the held block.
  */
@@ -114,11 +114,11 @@ export function KsesReviewDialogBody( { sequestration, onApprove, onRemove } ) {
 
 /**
  * The security review dialog, opened from a held block's "Review changes"
- * card. PROTOTYPE: the reviewed contents are the fabricated mock scenario
- * carried by the card, not the block's real held markup.
+ * card. It shows the record's own held markup, and Approve hands back the
+ * markup as reviewed (edited or not) for the engine to land.
  *
  * @param {Object}   props
- * @param {Object}   props.sequestration The held scenario (see mock-kses).
+ * @param {Object}   props.sequestration The hold (see sequestrationOf).
  * @param {Function} props.onApprove     ( proposedHtml ) => void.
  * @param {Function} props.onRemove      Remove the held block.
  * @param {Function} props.onClose       Close without resolving.

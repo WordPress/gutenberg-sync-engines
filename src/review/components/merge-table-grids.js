@@ -272,3 +272,22 @@ export function gridToTableAttributes( grid ) {
 		} ) ),
 	};
 }
+
+/**
+ * A core/table block's attributes as a plain grid, the inverse of
+ * gridToTableAttributes: the first header row's cells as the head, every
+ * body row's cells as the rows. Cell contents may be strings or rich-text
+ * values; both stringify to their markup.
+ *
+ * @param {Object} attributes The table block's attributes.
+ * @return {Object} The `{ head, rows }` grid.
+ */
+export function gridFromTableAttributes( attributes ) {
+	const cellsOf = ( row ) =>
+		( row?.cells ?? [] ).map( ( cell ) => String( cell?.content ?? '' ) );
+
+	return {
+		head: cellsOf( attributes?.head?.[ 0 ] ),
+		rows: ( attributes?.body ?? [] ).map( cellsOf ),
+	};
+}

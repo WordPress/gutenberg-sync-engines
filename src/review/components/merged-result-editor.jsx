@@ -9,6 +9,7 @@ import {
 	WritingFlow,
 	store as blockEditorStore,
 } from '@wordpress/block-editor';
+import { ReviewSurface } from './review-surface';
 
 /**
  * Keeps the merged block selected, so the formatting toolbar is available
@@ -66,25 +67,27 @@ export default function MergedResultEditor( {
 
 	return (
 		<div className="gse-review-merge-dialog__merged-editor">
-			<SlotFillProvider>
-				<BlockEditorProvider
-					value={ blocks }
-					onInput={ onChange }
-					onChange={ onChange }
-					settings={ settings }
-				>
-					<SelectMergedBlock clientId={ blocks[ 0 ]?.clientId } />
-					<div className="gse-review-merge-dialog__merged-toolbar">
-						<BlockToolbar hideDragHandle />
-					</div>
-					<div className="gse-review-merge-dialog__merged-canvas">
-						<WritingFlow>
-							<BlockList />
-						</WritingFlow>
-					</div>
-					<Popover.Slot />
-				</BlockEditorProvider>
-			</SlotFillProvider>
+			<ReviewSurface>
+				<SlotFillProvider>
+					<BlockEditorProvider
+						value={ blocks }
+						onInput={ onChange }
+						onChange={ onChange }
+						settings={ settings }
+					>
+						<SelectMergedBlock clientId={ blocks[ 0 ]?.clientId } />
+						<div className="gse-review-merge-dialog__merged-toolbar">
+							<BlockToolbar hideDragHandle />
+						</div>
+						<div className="gse-review-merge-dialog__merged-canvas">
+							<WritingFlow>
+								<BlockList />
+							</WritingFlow>
+						</div>
+						<Popover.Slot />
+					</BlockEditorProvider>
+				</SlotFillProvider>
+			</ReviewSurface>
 		</div>
 	);
 }

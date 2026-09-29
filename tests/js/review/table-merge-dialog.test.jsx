@@ -3,10 +3,13 @@ import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { getBlockTypes, unregisterBlockType } from '@wordpress/blocks';
 import { registerCoreBlocks } from '@wordpress/block-library';
-import { TableMergeDialogBody } from '../../../src/review/components/table-merge-dialog';
-import { MOCK_TABLE_CONFLICT } from '../../../src/review/components/mock-table-conflict';
+import {
+	TableMergeDialogBody,
+	tableGridsOf,
+} from '../../../src/review/components/table-merge-dialog';
+import { TABLE_CONFLICT, TABLE_GRIDS } from './fixtures';
 
-const props = MOCK_TABLE_CONFLICT;
+const props = TABLE_GRIDS;
 
 // The merged result is a real table block in the dialog's own block
 // editor, so the block types must be registered.
@@ -187,5 +190,17 @@ describe( 'TableMergeDialogBody', () => {
 		await user.click( screen.getByRole( 'button', { name: 'Cancel' } ) );
 		expect( onCancel ).toHaveBeenCalled();
 		expect( onAccept ).not.toHaveBeenCalled();
+	} );
+} );
+
+describe( 'tableGridsOf', () => {
+	it( "reads the three grids out of a record's serialized sides", () => {
+		expect( tableGridsOf( TABLE_CONFLICT ) ).toEqual( TABLE_GRIDS );
+	} );
+
+	it( 'stands the current version in for a missing base', () => {
+		const grids = tableGridsOf( { ...TABLE_CONFLICT, base: null } );
+		expect( grids.base ).toEqual( TABLE_GRIDS.current );
+		expect( grids.yours ).toEqual( TABLE_GRIDS.yours );
 	} );
 } );

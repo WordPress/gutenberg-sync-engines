@@ -1,60 +1,23 @@
 // @ts-nocheck -- Prototype JavaScript moved as is from the bundled Gutenberg fork; typing it (TSX) is a later pass.
 import { useState } from '@wordpress/element';
+import { useSelect } from '@wordpress/data';
 import { __ } from '@wordpress/i18n';
 import { Button, Modal } from '@wordpress/components';
-import { createBlock } from '@wordpress/blocks';
+import { parse, serialize } from '@wordpress/blocks';
+import { store as coreStore } from '@wordpress/core-data';
 import BlockDiffPane, { BlockDiffResources } from './block-diff-pane';
 import MergedResultEditor from './merged-result-editor';
-import { MOCK_CONFLICT } from './mock-conflict';
 
 /**
- * A version's text as serialized paragraph markup, the input shape the
- * block differ compares. The prototype's conflict texts are plain
- * strings; the eventual engine-supplied versions arrive serialized
- * already, and this wrapper disappears with them.
- *
- * @param {string} text The version's text.
- * @return {string} The text as one serialized paragraph block.
- */
-function paragraphContent( text ) {
-	return `<!-- wp:paragraph -->\n<p>${ text }</p>\n<!-- /wp:paragraph -->`;
-}
-
-/**
- * The merged result as blocks, seeded from one version's text.
- *
- * @param {string} text The version's text.
- * @return {Array} A single paragraph block holding the text.
- */
-function mergedBlocksFrom( text ) {
-	return [ createBlock( 'core/paragraph', { content: text } ) ];
-}
-
-/**
- * The merged result's rich-text content as an HTML string, the shape the
- * resolution writes back into the conflicted block. The paragraph's
- * content attribute stringifies to its inner HTML whether it is still the
- * seeded string or a rich-text value produced by editing.
- *
- * @param {Array} blocks The merged editor's blocks.
- * @return {string} The merged content.
- */
-function mergedHtmlFrom( blocks ) {
-	return blocks
-		.map( ( block ) => String( block.attributes?.content ?? '' ) )
-		.join( '\n\n' );
-}
-
-/**
- * One version pane: a heading, this version rendered as read-only blocks
+ * One version pane: a heading, this version's blocks rendered read-only
  * with the revisions diff highlighting against the base version, and a
  * button copying this version into the merged result.
  *
  * @param {Object}   props
  * @param {string}   props.label       Pane heading.
  * @param {string}   props.content     This version as serialized blocks.
- * @param {string}   props.baseContent The shared base as serialized
- *                                     blocks.
+ * @param {string}   props.baseContent The version the diff is computed
+ *                                     against, as serialized blocks.
  * @param {Function} props.onRestore   Copy this version into the merged
  *                                     result.
  */
@@ -81,43 +44,66 @@ function Pane( { label, content, baseContent, onRestore } ) {
 }
 
 /**
- * The merge dialog's content: your version and the current version side by
- * side, each rendered as read-only blocks diffed against the SHARED BASE
- * both started from with the revisions diff system (so each pane
- * highlights only that side's own changes), and each restorable into the
- * merged result below them. The merged result is a paragraph edited in
- * its own small block editor (text and formatting only), so the paragraph
- * block type must be registered. Accept hands the merged result's HTML
- * back; Cancel closes without changing anything.
+ * The merge dialog's content: the proposed version and the current
+ * version side by side, each rendered as read-only blocks diffed against
+ * the SHARED BASE both started from with the revisions diff system, so
+ * each pane highlights only its own changes at both grains: block-level
+ * added/removed/modified markers and inline ins/del inside rich text.
+ * Every side is serialized block content, one block or several, so the
+ * same dialog serves a paragraph and a whole section (a conflict with no
+ * per-block answer, like a paragraph split on one side and edited on the
+ * other).
  *
- * The merged editor deliberately stays free of the diff highlighting: the
- * inline diff marks are rich-text formats living in the content, and they
- * would serialize into the accepted result.
+ * Without a base (the engine could no longer recover it) the proposed
+ * version is compared against the current one, which then shows no
+ * changes of its own.
+ *
+ * The merged result below the panes is a real block editor seeded from
+ * the current version. Either pane's "Restore this version" reseeds it
+ * wholly. Accept hands the merged result back as serialized block
+ * content; Cancel closes without changing anything.
+ *
+ * The merged editor deliberately stays free of the diff highlighting:
+ * the inline diff marks are rich-text formats living in the content,
+ * and they would serialize into the accepted result.
  *
  * Position-independent so it can be unit-tested without the modal.
  *
- * @param {Object}   props
- * @param {string}   props.baseText    The text both versions started from.
- * @param {string}   props.yourText    The author's version of the text.
- * @param {string}   props.currentText The document's current version.
- * @param {Function} props.onAccept    ( mergedText ) => void.
- * @param {Function} props.onCancel    Close without resolving.
+ * @param {Object}         props
+ * @param {?string}        props.base          Serialized blocks both
+ *                                             versions started from, or
+ *                                             null when unknown.
+ * @param {string}         props.proposed      The author's version.
+ * @param {string}         props.current       The document's current
+ *                                             version.
+ * @param {string}         props.proposedLabel The proposed pane's heading.
+ * @param {string|boolean} props.templateLock  The merged editor's lock:
+ *                                             'all' keeps the structure
+ *                                             (text and formatting only),
+ *                                             false lets blocks be added,
+ *                                             removed, and split.
+ * @param {string}         props.help          The line under the merged
+ *                                             editor.
+ * @param {Function}       props.onAccept      ( mergedContent ) => void,
+ *                                             with the merged result as
+ *                                             serialized blocks.
+ * @param {Function}       props.onCancel      Close without resolving.
  */
 export function MergeDialogBody( {
-	baseText,
-	yourText,
-	currentText,
+	base,
+	proposed,
+	current,
+	proposedLabel = __( 'Your version' ),
+	templateLock = false,
+	help = __( 'These blocks replace the conflicted content when you accept.' ),
 	onAccept,
 	onCancel,
 } ) {
-	// The merged result starts as the current version. Either pane's
-	// "Restore this version" reseeds it, and it stays hand-editable in
-	// the merged block editor below the panes.
-	const [ merged, setMerged ] = useState( () =>
-		mergedBlocksFrom( currentText )
-	);
-
-	const baseContent = paragraphContent( baseText );
+	// The merged result starts as the current version's blocks. Either
+	// pane's "Restore this version" reseeds it, and it stays
+	// hand-editable in the merged block editor below the panes.
+	const [ merged, setMerged ] = useState( () => parse( current ) );
+	const baseContent = base ?? current;
 
 	return (
 		<div className="gse-review-merge-dialog__body">
@@ -129,32 +115,28 @@ export function MergeDialogBody( {
 			</p>
 			<div className="gse-review-merge-dialog__panes">
 				<Pane
-					label={ __( 'Your version' ) }
-					content={ paragraphContent( yourText ) }
+					label={ proposedLabel }
+					content={ proposed }
 					baseContent={ baseContent }
-					onRestore={ () =>
-						setMerged( mergedBlocksFrom( yourText ) )
-					}
+					onRestore={ () => setMerged( parse( proposed ) ) }
 				/>
 				<Pane
 					label={ __( 'Current version' ) }
-					content={ paragraphContent( currentText ) }
+					content={ current }
 					baseContent={ baseContent }
-					onRestore={ () =>
-						setMerged( mergedBlocksFrom( currentText ) )
-					}
+					onRestore={ () => setMerged( parse( current ) ) }
 				/>
 			</div>
 			<div className="gse-review-merge-dialog__merged">
 				<h3 className="gse-review-merge-dialog__pane-label">
 					{ __( 'Merged result' ) }
 				</h3>
-				<MergedResultEditor blocks={ merged } onChange={ setMerged } />
-				<p className="gse-review-merge-dialog__help">
-					{ __(
-						'This text replaces the conflicted content when you accept.'
-					) }
-				</p>
+				<MergedResultEditor
+					blocks={ merged }
+					onChange={ setMerged }
+					templateLock={ templateLock }
+				/>
+				<p className="gse-review-merge-dialog__help">{ help }</p>
 			</div>
 			<div className="gse-review-merge-dialog__actions">
 				<Button
@@ -167,7 +149,7 @@ export function MergeDialogBody( {
 				<Button
 					__next40pxDefaultSize
 					variant="primary"
-					onClick={ () => onAccept( mergedHtmlFrom( merged ) ) }
+					onClick={ () => onAccept( serialize( merged ) ) }
 				>
 					{ __( 'Accept' ) }
 				</Button>
@@ -177,28 +159,77 @@ export function MergeDialogBody( {
 }
 
 /**
- * The collaboration merge dialog, opened from a conflicted block's
- * "Review conflict" card. PROTOTYPE: the compared versions are the
- * fabricated mock conflict, not the block's real texts; real conflicts
- * open it, but its contents are pre-set while the UI design settles.
+ * Whether the person reviewing authored the proposed side, which decides
+ * how its pane is named.
+ *
+ * @param {number} authorId The proposed side's author.
+ * @return {boolean} Whether the current user is the author.
+ */
+export function useIsOwnProposal( authorId ) {
+	return useSelect(
+		( select ) => select( coreStore ).getCurrentUser()?.id === authorId,
+		[ authorId ]
+	);
+}
+
+/**
+ * The built-in merge dialog, opened from a conflicted block's "Review
+ * conflict" card. It presents the engine's record as it is: the three
+ * sides are the engine's, and the decision goes back to the engine as
+ * content.
  *
  * @param {Object}   props
- * @param {Function} props.onAccept ( mergedText ) => void.
- * @param {Function} props.onClose  Close without resolving.
+ * @param {Object}   props.conflict  The conflict record.
+ * @param {boolean}  props.isSection Whether the record covers a section
+ *                                   (several blocks, or a container):
+ *                                   the merged editor's structure is
+ *                                   then unlocked.
+ * @param {Function} props.onDecide  ( decision ) => void.
+ * @param {Function} props.onClose   Close without resolving.
  */
-export default function CollaborationMergeDialog( { onAccept, onClose } ) {
+export default function CollaborationMergeDialog( {
+	conflict,
+	isSection,
+	onDecide,
+	onClose,
+} ) {
+	const isOwn = useIsOwnProposal( conflict.authorId );
+	let className = 'gse-review-merge-dialog';
+	if ( isSection ) {
+		className += ' gse-review-merge-dialog--section';
+	}
+	let templateLock = 'all';
+	let help = __(
+		'This block replaces the conflicted content when you accept.'
+	);
+	if ( isSection ) {
+		templateLock = false;
+		help = __(
+			'These blocks replace the conflicted section when you accept.'
+		);
+	}
+	let proposedLabel = __( 'Proposed version' );
+	if ( isOwn ) {
+		proposedLabel = __( 'Your version' );
+	}
+
 	return (
 		<Modal
 			title={ __( 'Review conflicting edits' ) }
 			onRequestClose={ onClose }
-			className="gse-review-merge-dialog"
+			className={ className }
 			size="large"
 		>
 			<MergeDialogBody
-				baseText={ MOCK_CONFLICT.baseText }
-				yourText={ MOCK_CONFLICT.yourText }
-				currentText={ MOCK_CONFLICT.currentText }
-				onAccept={ onAccept }
+				base={ conflict.base }
+				proposed={ conflict.proposed }
+				current={ conflict.current }
+				proposedLabel={ proposedLabel }
+				templateLock={ templateLock }
+				help={ help }
+				onAccept={ ( content ) =>
+					onDecide( { action: 'accept', content } )
+				}
 				onCancel={ onClose }
 			/>
 		</Modal>

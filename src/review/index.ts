@@ -11,6 +11,7 @@
  */
 import './hooks/conflict-block';
 import './hooks/sequestered-block';
+import './register-views';
 import './style.scss';
 
 export {

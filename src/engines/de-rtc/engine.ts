@@ -203,6 +203,11 @@ export function createDeRtcEngine(): SyncEngine & {
 		getItems: () => ReturnType< SyncReviewSource[ 'getOpenItems' ] >;
 		/** The same open tasks as SyncConflict records. */
 		getConflicts: () => SyncConflict[];
+		/**
+		 * Replaces a contested block with the reviewer's content, as an
+		 * ordinary local edit.
+		 */
+		writeContested: ( key: DeRtcContestKey, content: string ) => void;
 		restore: ( proposalId: string ) => void;
 		/** Adopt a contested block's latest canonical form. */
 		adoptContested: ( key: DeRtcContestKey ) => boolean;
@@ -310,13 +315,28 @@ export function createDeRtcEngine(): SyncEngine & {
 			}
 			const contestKey = contestedKeyOf( conflictId );
 			if ( null !== contestKey ) {
-				// A contested block: accept adopts the canonical form,
-				// dismiss keeps the local block.
-				if ( 'accept' === decision.action ) {
-					handle.adoptContested( contestKey );
-				} else {
+				/*
+				 * A contested block. Accepting the canonical form as it
+				 * is adopts it. Accepting anything else (this client's
+				 * own block, or a hand-merged result) keeps the block
+				 * local and writes the content as an ordinary local
+				 * edit, which the next proposal carries. Dismiss keeps
+				 * the local block as it is.
+				 */
+				if ( 'accept' !== decision.action ) {
 					handle.rejectContested( contestKey );
+					return;
 				}
+				const canonical = handle
+					.getConflicts()
+					.find( ( conflict ) => conflict.id === conflictId )
+					?.proposed;
+				if ( decision.content.trim() === ( canonical ?? '' ).trim() ) {
+					handle.adoptContested( contestKey );
+					return;
+				}
+				handle.writeContested( contestKey, decision.content );
+				handle.rejectContested( contestKey );
 				return;
 			}
 			if ( 'accept' === decision.action ) {
@@ -670,25 +690,55 @@ export function createDeRtcEngine(): SyncEngine & {
 							current,
 						};
 					} ),
+					/*
+					 * A contested block: this client edited a block a
+					 * newer canonical version also changed. `proposed` is
+					 * the canonical form, `current` this client's own
+					 * block; the version both started from is not kept.
+					 */
 					...Array.from( contested.entries() ).map(
-						( [ contestKey, item ] ): SyncConflict => ( {
-							id: `contested-${ contestKey }`,
-							kind: 'merge',
-							authorId: 0,
-							target: {
-								type: 'blocks',
-								...( 'string' === typeof contestKey
-									? { ids: [ contestKey ] }
-									: {} ),
-								index: item.index,
-								count: 1,
-							},
-							base: null,
-							proposed: item.html,
-							current: '',
-						} )
+						( [ contestKey, item ] ): SyncConflict => {
+							const local = localBlocks();
+							const own =
+								'string' === typeof contestKey
+									? findBlockBySyncId( local, contestKey )
+									: local[ contestKey ];
+							return {
+								id: `contested-${ contestKey }`,
+								kind: 'merge',
+								authorId: 0,
+								target: {
+									type: 'blocks',
+									...( 'string' === typeof contestKey
+										? { ids: [ contestKey ] }
+										: {} ),
+									index: item.index,
+									count: 1,
+								},
+								base: null,
+								proposed: item.html,
+								current: own ? serializeBlock( own ) : '',
+							};
+						}
 					),
 				],
+				writeContested: ( contestKey, content ) => {
+					const index = contested.get( contestKey )?.index ?? 0;
+					overlayParkedBlocks( {
+						proposalId: `contested-${ contestKey }`,
+						reason: 'contested',
+						authorClientId: ydoc.clientID,
+						changedBlocks: [
+							{
+								index,
+								html: content,
+								...( 'string' === typeof contestKey
+									? { syncId: contestKey }
+									: {} ),
+							},
+						],
+					} );
+				},
 				restore: ( proposalId ) => {
 					const parked = review
 						.getOpen()

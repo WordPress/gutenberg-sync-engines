@@ -632,6 +632,68 @@ describe( 'de-rtc review lane (client)', () => {
 			expect( changed ).toHaveBeenCalled();
 		} );
 
+		it( 'a contest is a conflict record: the canonical form proposed, the local block current', () => {
+			raiseContest();
+
+			expect(
+				engine.conflicts.getOpenConflicts( 'postType/book', '1' )
+			).toEqual( [
+				{
+					id: 'contested-0',
+					kind: 'merge',
+					authorId: 0,
+					target: { type: 'blocks', index: 0, count: 1 },
+					base: null,
+					proposed: contentOf( A_PEER ),
+					current: contentOf( A_NEWER ),
+				},
+			] );
+		} );
+
+		it( 'accepting the canonical form adopts it; accepting anything else writes it locally', () => {
+			const adopted = raiseContest();
+			engine.conflicts.resolveConflict(
+				'postType/book',
+				'1',
+				'contested-0',
+				{ action: 'accept', content: contentOf( A_PEER ) }
+			);
+			expect(
+				(
+					adopted.entity.getEditorChanges( {
+						blocks: [],
+					} as any ) as any
+				 ).blocks
+			).toEqual( [ A_PEER ] );
+			expect(
+				engine.conflicts.getOpenConflicts( 'postType/book', '1' )
+			).toEqual( [] );
+
+			// A fresh engine: the reviewer hand-merges the two.
+			engine = createDeRtcEngine();
+			const merged = raiseContest();
+			const A_MERGED = {
+				name: 'core/paragraph',
+				attributes: { content: 'Alpha merged by hand' },
+			};
+			engine.conflicts.resolveConflict(
+				'postType/book',
+				'1',
+				'contested-0',
+				{ action: 'accept', content: contentOf( A_MERGED ) }
+			);
+			expect(
+				(
+					merged.entity.getEditorChanges( {
+						blocks: [],
+					} as any ) as any
+				 ).blocks
+			).toEqual( [ A_MERGED ] );
+			expect(
+				engine.conflicts.getOpenConflicts( 'postType/book', '1' )
+			).toEqual( [] );
+		} );
+
 		it( 'dismiss routes to REJECT: the local block survives, the item closes', () => {
 			const { entity } = raiseContest();
 

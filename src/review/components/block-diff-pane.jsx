@@ -10,6 +10,7 @@ import {
 	REVISION_DIFF_STYLES,
 	REVISION_REMOVED_FILTER_SVG,
 } from '../revisions-diff';
+import { ReviewSurface } from './review-surface';
 
 const PANE_EDITOR_SETTINGS = {
 	// Read-only rendering: no appenders or inserters.
@@ -110,14 +111,16 @@ export default function BlockDiffPane( { content, baseContent } ) {
 
 	return (
 		<div className="gse-review-block-diff">
-			<BlockEditorProvider
-				value={ blocks }
-				settings={ PANE_EDITOR_SETTINGS }
-			>
-				<Disabled>
-					<BlockList renderAppender={ false } />
-				</Disabled>
-			</BlockEditorProvider>
+			<ReviewSurface>
+				<BlockEditorProvider
+					value={ blocks }
+					settings={ PANE_EDITOR_SETTINGS }
+				>
+					<Disabled>
+						<BlockList renderAppender={ false } />
+					</Disabled>
+				</BlockEditorProvider>
+			</ReviewSurface>
 		</div>
 	);
 }

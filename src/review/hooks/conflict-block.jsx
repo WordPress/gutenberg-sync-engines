@@ -1,17 +1,16 @@
 // @ts-nocheck -- Prototype JavaScript moved as is from the bundled Gutenberg fork; typing it (TSX) is a later pass.
 import { addFilter } from '@wordpress/hooks';
 import { createHigherOrderComponent } from '@wordpress/compose';
-import ConflictBlock, { useConflictGroup } from '../components/conflict-block';
+import { useIsInsideReviewSurface } from '../components/review-surface';
+import ConflictBlock, { useBlockConflicts } from '../components/conflict-block';
 
 /**
- * Replace the edit UI of a conflict group's PRESENTER block with the
- * in-place conflict card, the way block recovery replaces an invalid
- * block. The presenter's content is read-only until the conflict is
- * reviewed, since its editable UI is not rendered at all. A block
- * outside any group presents its own conflicts; inside a group the
- * whole section's conflicts present once, on the section's first
- * conflicted block, and the section's other conflicted blocks keep
- * their normal edit UI (see useConflictGroup).
+ * Replace the edit UI of a conflicted block with the in-place conflict
+ * card, the way block recovery replaces an invalid block. The block's
+ * content is read-only until the conflict is reviewed, since its editable
+ * UI is not rendered at all. A record covering several blocks presents on
+ * its first block; the others keep their normal edit UI, so a section
+ * reads as a single conflict rather than a wall of cards.
  *
  * @param {Component} BlockEdit Original component.
  *
@@ -19,11 +18,11 @@ import ConflictBlock, { useConflictGroup } from '../components/conflict-block';
  */
 const withConflictReview = createHigherOrderComponent(
 	( BlockEdit ) => ( props ) => {
-		const { conflicts, isPresenter, sectionClientId } = useConflictGroup(
-			props.clientId
-		);
+		const conflicts = useBlockConflicts( props.clientId );
+		// The dialogs' own editors show the record's sides, never cards.
+		const isInsideReview = useIsInsideReviewSurface();
 
-		if ( ! conflicts.length || ! isPresenter ) {
+		if ( ! conflicts.length || isInsideReview ) {
 			return <BlockEdit { ...props } />;
 		}
 
@@ -32,7 +31,6 @@ const withConflictReview = createHigherOrderComponent(
 				clientId={ props.clientId }
 				blockName={ props.name }
 				conflicts={ conflicts }
-				sectionClientId={ sectionClientId }
 			/>
 		);
 	},

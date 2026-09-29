@@ -36,6 +36,16 @@ jest.mock( '@wordpress/blocks', () => {
 				: undefined,
 		serialize: ( blocks: unknown[] ) =>
 			JSON.stringify( blocks.map( strip ) ),
+		serializeRawBlock: ( block: {
+			blockName: string;
+			innerContent: string[];
+		} ) =>
+			JSON.stringify( [
+				{
+					name: block.blockName,
+					markup: block.innerContent.join( '' ).trim(),
+				},
+			] ),
 		parse: ( content: string ) => ( content ? JSON.parse( content ) : [] ),
 	};
 } );
