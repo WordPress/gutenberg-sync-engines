@@ -13,7 +13,6 @@ module.exports = {
 	// y-utilities is vendored third-party code (from the Yjs ecosystem) with
 	// its own eslint-disable directives targeting a different config.
 	ignorePatterns: [
-		'_trash/**',
 		'gutenberg/**',
 		'build/**',
 		'vendor/**',

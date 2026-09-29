@@ -30,6 +30,3 @@ includes/lib/automerge-php
 
 # Playwright e2e output.
 artifacts
-
-# Local recovery copies.
-_trash

@@ -14,12 +14,6 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-if [ ! -f gutenberg/gutenberg.php ]; then
-	echo "error: the bundled Gutenberg source is missing." >&2
-	echo "  Restore gutenberg/ from this plugin revision before building." >&2
-	exit 1
-fi
-
 if [ ! -d gutenberg/build ]; then
 	echo "error: gutenberg/build is missing. Build the subtree first:" >&2
 	echo "  cd gutenberg && npm ci --ignore-scripts && npm run build" >&2
@@ -30,16 +24,7 @@ echo "Building the plugin bundle..."
 npm run build
 
 DIST=dist/gutenberg-sync-engines
-if [ -e dist ] || [ -e gutenberg-sync-engines.zip ]; then
-	mkdir -p _trash
-	archive_dir=$(mktemp -d "$PWD/_trash/release.XXXXXX")
-	for output in dist gutenberg-sync-engines.zip; do
-		if [ -e "$output" ]; then
-			mv "$output" "$archive_dir/"
-		fi
-	done
-	echo "Previous release outputs moved to $archive_dir"
-fi
+rm -rf dist gutenberg-sync-engines.zip
 mkdir -p "$DIST"
 
 echo "Staging plugin files..."
@@ -70,5 +55,6 @@ cp gutenberg/packages/icons/src/library/*.svg "$DIST/gutenberg/packages/icons/sr
 
 echo "Creating gutenberg-sync-engines.zip..."
 ( cd dist && zip -rq ../gutenberg-sync-engines.zip gutenberg-sync-engines )
+rm -rf dist
 
 du -h gutenberg-sync-engines.zip
