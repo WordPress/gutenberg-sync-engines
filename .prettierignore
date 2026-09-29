@@ -20,7 +20,7 @@ tests/js/engines/de-rtc/test-vectors
 tests/phpunit/test-vectors
 
 # Vendored third-party code from the Yjs ecosystem.
-src/shared/yjs/y-utilities
+src/engines/yjs-server/y-utilities
 
 # Vendored y-php and automerge-php libraries (imported verbatim; they
 # carry their own style and configs, and must stay byte-identical to

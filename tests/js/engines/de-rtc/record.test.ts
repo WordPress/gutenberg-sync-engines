@@ -272,7 +272,7 @@ describe( 'de-rtc sources', () => {
 			const source = readFileSync( file, 'utf8' );
 			expect( [
 				file,
-				/from '(yjs|[^']*shared\/yjs\/[^']*)'/.test( source ),
+				/from '(yjs|[^']*yjs-server\/[^']*)'/.test( source ),
 			] ).toEqual( [ file, false ] );
 		}
 	} );
