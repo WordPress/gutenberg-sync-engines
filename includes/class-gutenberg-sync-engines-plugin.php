@@ -123,10 +123,12 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Plugin' ) ) {
 			require_once GUTENBERG_SYNC_ENGINES_PATH . 'includes/class-wp-sync-room-lock.php';
 			require_once GUTENBERG_SYNC_ENGINES_PATH . 'includes/class-wp-sync-atomic-option.php';
 
-			// Awareness, behind the same kind of drop-in seam as the lock.
+			// Awareness and the tab list, behind the same kind of drop-in seam as the lock.
 			require_once GUTENBERG_SYNC_ENGINES_PATH . 'includes/interface-wp-sync-awareness-backend.php';
 			require_once GUTENBERG_SYNC_ENGINES_PATH . 'includes/class-wp-sync-awareness.php';
 			require_once GUTENBERG_SYNC_ENGINES_PATH . 'includes/class-wp-sync-presence-api-awareness-backend.php';
+			require_once GUTENBERG_SYNC_ENGINES_PATH . 'includes/interface-wp-sync-tab-list-backend.php';
+			require_once GUTENBERG_SYNC_ENGINES_PATH . 'includes/class-wp-sync-presence-api-tab-list-backend.php';
 
 			$engines = GUTENBERG_SYNC_ENGINES_PATH . 'includes/engines/';
 			require_once $engines . 'class-wp-sync-post-genesis-props.php';
@@ -206,6 +208,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Plugin' ) ) {
 		private function register(): void {
 			add_filter( '__unstable_wp_sync_storage', array( $this, 'filter_sync_storage' ) );
 			add_filter( 'wp_sync_awareness_backend', array( $this, 'filter_awareness_backend' ) );
+			add_filter( 'wp_sync_tab_list_backend', array( $this, 'filter_tab_list_backend' ) );
 			add_filter( 'wp_sync_engines', array( $this, 'register_engines' ), 10, 2 );
 			WP_De_RTC_Sync_Meta_Colocation::register();
 			WP_De_RTC_Base_Version_Preflight::register();
@@ -259,6 +262,21 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Plugin' ) ) {
 		public function filter_awareness_backend( $backend ) {
 			if ( null === $backend && WP_Sync_Presence_API_Awareness_Backend::is_available() ) {
 				return new WP_Sync_Presence_API_Awareness_Backend();
+			}
+			return $backend;
+		}
+
+		/**
+		 * Hands the tab list to the Presence API when it is available.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param WP_Sync_Tab_List_Backend|null $backend The backend so far.
+		 * @return WP_Sync_Tab_List_Backend|null Backend to use.
+		 */
+		public function filter_tab_list_backend( $backend ) {
+			if ( null === $backend && WP_Sync_Presence_API_Tab_List_Backend::is_available() ) {
+				return new WP_Sync_Presence_API_Tab_List_Backend();
 			}
 			return $backend;
 		}

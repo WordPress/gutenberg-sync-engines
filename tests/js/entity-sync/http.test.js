@@ -35,7 +35,7 @@ describe( 'local adapter with its HTTP provider', () => {
 		window.__experimentalEnableRealTimeCollaboration = true;
 		window._wpCollaborationSync = {
 			engine: 'intent-log',
-			engineProtocol: 1,
+			engineProtocol: 2,
 			transports: [ 'http-polling' ],
 			transportProtocol: 1,
 		};
@@ -114,7 +114,7 @@ describe( 'local adapter with its HTTP provider', () => {
 			expect.objectContaining( {
 				room: 'postType/post:1',
 				engine: 'intent-log',
-				engine_protocol: 1,
+				engine_protocol: 2,
 				updates: expect.arrayContaining( [
 					expect.objectContaining( { type: TYPES.INTENT } ),
 				] ),

@@ -3,13 +3,13 @@
  * Small RESP2 client for collaboration change notices. No PHP extension needed.
  *
  * @package GutenbergSyncEngines
- * @since n.e.x.t
+ * @since 0.0.2
  */
 
 /**
  * Redis socket for short notices.
  *
- * @since n.e.x.t
+ * @since 0.0.2
  */
 class WP_Sync_Redis implements WP_Sync_Change_Waiter {
 	/**

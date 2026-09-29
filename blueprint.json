@@ -6,6 +6,16 @@
     {
       "step": "installPlugin",
       "pluginData": {
+        "resource": "wordpress.org/plugins",
+        "slug": "presence-api"
+      },
+      "options": {
+        "activate": true
+      }
+    },
+    {
+      "step": "installPlugin",
+      "pluginData": {
         "resource": "url",
         "url": "https://github.com/Automattic/gutenberg-sync-engines/releases/latest/download/gutenberg-sync-engines.zip",
         "caption": "Downloading Gutenberg Sync Engines (latest release, bundles Gutenberg)"

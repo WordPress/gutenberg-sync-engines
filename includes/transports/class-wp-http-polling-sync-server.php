@@ -108,7 +108,7 @@ if ( ! class_exists( 'WP_HTTP_Polling_Sync_Server' ) ) {
 		 * The cursor a request whose rows arrive separately reads from: past every row,
 		 * so the read returns no stored rows but still reports the head.
 		 *
-		 * @since n.e.x.t
+		 * @since 0.0.2
 		 */
 		const READ_FROM_HEAD = PHP_INT_MAX;
 
