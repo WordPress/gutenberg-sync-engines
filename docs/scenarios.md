@@ -131,7 +131,7 @@ spread.
 ## E. An author without `unfiltered_html` pastes risky markup (P1)
 
 - **intent-log**: The intent escalates at ingest as requiring approval
-  and parks; a privileged reviewer's restore IS the approval.
+  and parks; a privileged reviewer's accept IS the approval.
 - **yjs-server**: The offending blocks are replaced with their
   kses-sanitized form and the compensating delta broadcasts. WordPress's
   filter-on-save semantics at per-update grain. The markup that was

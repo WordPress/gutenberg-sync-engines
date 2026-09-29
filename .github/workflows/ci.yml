@@ -53,7 +53,7 @@ jobs:
 
       # The vendored subtree carries one delta on top of its pin, the
       # revisions differ exported for the plugin's conflict review UI
-      # (docs/plan/upstream-revisions-differ-pr.md); run its own suite, plus
+      # (see "The gutenberg/ subtree" in AGENTS.md); run its own suite, plus
       # the fork's review panel, so the delta stays certified. The review
       # UI itself lives in the plugin and runs under `npm run test:js`.
       - name: Subtree component tests (revisions differ, review panel)

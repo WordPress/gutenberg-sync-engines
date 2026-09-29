@@ -553,7 +553,7 @@ global-setup REST call dying with
 All suites are green at head; CI (`.github/workflows/ci.yml`) is the
 source of truth for exact test counts — it certifies every suite
 (including `composer lint`, the websocket e2e lane, and the subtree's
-collaboration-review-panel component Jest) on pushes to `main` and
+revision comparison and review panel component Jest) on pushes to `main` and
 PRs. The v1 integration tree passed the full default e2e suite three
 consecutive times with retries disabled; the old login
 flake is closed by the plugin-local hardened fixtures

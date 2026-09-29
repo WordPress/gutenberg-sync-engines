@@ -657,17 +657,9 @@ function scheduleNext( delay: number | null ): void {
 /**
  * Polls now: a stopped loop restarts, a scheduled poll is brought forward,
  * an in-flight poll is followed by another as soon as it returns.
- *
- * @param options
- * @param options.force Poll even while parked in manual sync mode (an
- *                      explicit ask: syncNow() or a manual retry).
  */
-function pollNow( { force = false }: { force?: boolean } = {} ): void {
+function pollNow(): void {
 	if ( 0 === roomStates.size ) {
-		return;
-	}
-	if ( manualSyncMode && ! force ) {
-		// Parked (demo tooling): wakes wait for syncNow() or a manual retry.
 		return;
 	}
 	if ( pollingTimeoutId ) {
@@ -1029,123 +1021,6 @@ const STREAM_REISSUE_MS = 50;
 // which follows a hide on reload/close, cancels it).
 const HIDDEN_FLUSH_DELAY_MS = 1500;
 
-/*
- * Manual sync mode (demo tooling): while enabled, the poll loop PARKS after
- * each cycle instead of scheduling the next one, so nothing moves over the
- * wire until syncNow() runs (the editor's Sync button). The initial poll made
- * when the first room registers still runs, so joining a session and
- * receiving genesis work normally.
- */
-let manualSyncMode = false;
-let isRequestInFlight = false;
-const manualSyncListeners = new Set< () => void >();
-
-function notifyManualSyncListeners(): void {
-	manualSyncListeners.forEach( ( listener ) => listener() );
-}
-
-/*
- * Clock-aligned polling (demo tooling): while set, every AUTOMATIC poll is
- * scheduled for the next wall-clock moment that falls on the alignment's
- * grid (every `periodMs`, at each of the `offsetsMs` within the period),
- * instead of after the computed interval. Two windows on the same clock
- * with different offsets then sync in a fixed, visible order, which is what
- * makes a recorded two-browser demo predictable. The initial poll made when
- * the first room registers, manual retries, and syncNow() still run
- * immediately. Ignored in long-poll mode, where the server sets the cadence.
- */
-export interface ClockAlignment {
-	periodMs: number;
-	offsetsMs: number[];
-}
-
-let clockAlignment: ClockAlignment | null = null;
-
-/**
- * Milliseconds from `now` until the next grid moment of an alignment: the
- * soonest of the offsets within the period. A moment exactly on the grid
- * counts as already passed, so the result is always in (0, periodMs].
- *
- * @param now       Wall-clock time in milliseconds (Date.now()).
- * @param alignment The grid to align to.
- * @return Delay in milliseconds until the next grid moment.
- */
-export function getDelayToNextAlignedPoll(
-	now: number,
-	alignment: ClockAlignment
-): number {
-	const { periodMs, offsetsMs } = alignment;
-	const delays = offsetsMs.map( ( offsetMs ) => {
-		const phase =
-			( ( ( now - offsetMs ) % periodMs ) + periodMs ) % periodMs;
-
-		return periodMs - phase;
-	} );
-
-	return Math.min( ...delays );
-}
-
-/**
- * Delay before the next automatic poll: the delay the cadence rules chose
- * (null for "stay quiet"), or the time to the next grid moment while clock
- * alignment is on. The grid wins even over "quiet": every automatic poll
- * lands on it while the demo tooling has it set.
- *
- * @param delay The delay the cadence rules chose, or null to stay quiet.
- */
-function getNextPollDelay( delay: number | null ): number | null {
-	if ( clockAlignment ) {
-		return getDelayToNextAlignedPoll( Date.now(), clockAlignment );
-	}
-
-	return delay;
-}
-
-/**
- * Turn clock-aligned polling on (with a grid) or off (null). A poll already
- * waiting on a timer is rescheduled to the new cadence right away.
- *
- * @param alignment The grid to align automatic polls to, or null to stop.
- */
-export function setClockAlignedPolling(
-	alignment: ClockAlignment | null
-): void {
-	if (
-		alignment &&
-		( ! Number.isFinite( alignment.periodMs ) || alignment.periodMs <= 0 )
-	) {
-		throw new Error( 'Clock alignment needs a positive period' );
-	}
-
-	if ( alignment && 0 === alignment.offsetsMs.length ) {
-		throw new Error( 'Clock alignment needs at least one offset' );
-	}
-
-	clockAlignment = alignment;
-
-	if ( pollingTimeoutId ) {
-		clearTimeout( pollingTimeoutId );
-		pollingTimeoutId = setTimeout(
-			poll,
-			alignment
-				? getDelayToNextAlignedPoll( Date.now(), alignment )
-				: pollInterval
-		);
-	} else if (
-		alignment &&
-		! isPolling &&
-		! manualSyncMode &&
-		roomStates.size > 0
-	) {
-		// A quiet loop (alone, or every peer reachable) joins the grid.
-		isPolling = true;
-		pollingTimeoutId = setTimeout(
-			poll,
-			getDelayToNextAlignedPoll( Date.now(), alignment )
-		);
-	}
-}
-
 // When more rooms are registered than the server allows per request
 // (MAX_ROOMS_PER_REQUEST), the primary room is sent every poll and the
 // remaining "overflow" rooms are rotated across polls. This offset
@@ -1253,16 +1128,12 @@ function handleVisibilityChange() {
 		 * was idle between cycles. If no timeout is pending, a poll request
 		 * is already in-flight and will pick up the updated isActiveBrowser
 		 * value when it schedules the next cycle.
-		 *
-		 * Under clock-aligned polling the pending timeout already points
-		 * at the next grid moment (the background cadence is never used),
-		 * so it is left alone to keep the order of syncs predictable.
 		 */
-		if ( pollingTimeoutId && ! clockAlignment ) {
+		if ( pollingTimeoutId ) {
 			clearTimeout( pollingTimeoutId );
 			pollingTimeoutId = null;
 			poll();
-		} else if ( ! isPolling && ! manualSyncMode && 0 < roomStates.size ) {
+		} else if ( ! isPolling && 0 < roomStates.size ) {
 			// A stopped loop: poll once now (company may have arrived while
 			// hidden, and the discovery window just reopened).
 			poll();
@@ -2132,8 +2003,6 @@ async function sendNow(): Promise< void > {
 function poll(): void {
 	isPolling = true;
 	pollingTimeoutId = null;
-	isRequestInFlight = true;
-	notifyManualSyncListeners();
 
 	async function start(): Promise< void > {
 		if ( 0 === roomStates.size ) {
@@ -2270,12 +2139,6 @@ function poll(): void {
 			pollInFlightCounted = false;
 			finishSend();
 		}
-		if ( manualSyncMode ) {
-			// Manual sync mode: park instead of scheduling. The next cycle
-			// runs when syncNow() fires (or when the mode turns off).
-			scheduleNext( null );
-			return;
-		}
 		if ( repollImmediately ) {
 			// A room restarted under us during this poll: the next poll
 			// must follow at once (cursor 0) instead of waiting out the
@@ -2284,22 +2147,11 @@ function poll(): void {
 			scheduleNext( 0 );
 			return;
 		}
-		scheduleNext(
-			getNextPollDelay( succeeded ? nextDelay : pollInterval )
-		);
+		scheduleNext( succeeded ? nextDelay : pollInterval );
 	}
 
 	// Start polling.
-	void start().finally( () => {
-		isRequestInFlight = false;
-		// A parked loop (manual sync mode) has no scheduled poll left to
-		// notice an empty room list; reset so the next room registration
-		// restarts the loop.
-		if ( 0 === roomStates.size && ! pollingTimeoutId ) {
-			isPolling = false;
-		}
-		notifyManualSyncListeners();
-	} );
+	void start();
 }
 
 /**
@@ -2451,7 +2303,6 @@ function registerRoom( {
 		}
 
 		updateQueue.add( update );
-		notifyManualSyncListeners();
 
 		// A held queue (alone, holdable codec) waits for company or a
 		// flush; see wakeForLocalWork for when a wake is needed.
@@ -2526,8 +2377,6 @@ function registerRoom( {
 	if ( ! isPolling ) {
 		poll();
 	} else {
-		// The new room's initial updates changed the queued count.
-		notifyManualSyncListeners();
 		// A room that arrives mid-session (an entity loaded later) needs
 		// its bootstrap promptly, whatever the cadence rules have the timer
 		// at (the 25 s safety poll under coverage or alone).
@@ -2655,14 +2504,6 @@ function dropRoom( room: string ): void {
 		}
 		stopAdvisoryChannel();
 	}
-
-	// A parked loop (manual sync mode) has no scheduled poll left to notice
-	// the empty room list; reset so the next room registration restarts it.
-	if ( 0 === roomStates.size && ! isRequestInFlight && ! pollingTimeoutId ) {
-		isPolling = false;
-	}
-
-	notifyManualSyncListeners();
 }
 
 /**
@@ -2673,120 +2514,7 @@ function dropRoom( room: string ): void {
  */
 function retryNow(): void {
 	isManualRetry = true;
-	// An explicit ask to poll now, so it releases a parked loop (manual
-	// sync mode) as well.
-	pollNow( { force: true } );
-}
-
-/**
- * Enable or disable manual sync mode. While enabled, no polls are scheduled;
- * each cycle runs only when syncNow() is called. Disabling resumes the
- * automatic loop immediately.
- *
- * @param enabled Whether polls should only run on demand.
- */
-export function setManualSyncMode( enabled: boolean ): void {
-	if ( manualSyncMode === enabled ) {
-		return;
-	}
-
-	manualSyncMode = enabled;
-
-	if ( enabled ) {
-		// Cancel the scheduled auto-poll and stop the loop (isPolling is
-		// true only while a poll is scheduled or in flight). An in-flight
-		// request finishes its cycle and then parks.
-		if ( pollingTimeoutId ) {
-			clearTimeout( pollingTimeoutId );
-			pollingTimeoutId = null;
-			isPolling = false;
-		}
-	} else if ( ! isRequestInFlight ) {
-		// Resume the automatic loop from the parked state.
-		pollNow();
-	}
-
-	notifyManualSyncListeners();
-}
-
-/**
- * Run one poll cycle now: send everything queued and receive what the server
- * holds. No-op while a request is already in flight or no rooms are
- * registered.
- */
-export function syncNow(): void {
-	if ( isRequestInFlight ) {
-		return;
-	}
-
-	pollNow( { force: true } );
-}
-
-/**
- * Presence-only round trip (demo tooling for manual sync mode): sends every
- * room's awareness with NO queued updates and applies only the awareness
- * that comes back. The cursor does not move and received rows are dropped,
- * so nothing in the document changes; the server just sees this client as
- * still here (its awareness entry expires after 30 quiet seconds) and the
- * collaborator avatars stay put between manual syncs. Errors are ignored.
- */
-export async function sendKeepalive(): Promise< void > {
-	const states = Array.from( roomStates.values() );
-	if ( 0 === states.length ) {
-		return;
-	}
-
-	const payload: SyncPayload = {
-		rooms: states.map( ( state ) => createPayloadRoom( state ) ),
-	};
-
-	try {
-		const { rooms } = await postSyncUpdate( payload );
-		for ( const room of rooms ) {
-			const state = roomStates.get( room.room );
-			if ( state ) {
-				state.session.applyRemoteAwareness( room.awareness );
-			}
-		}
-	} catch {
-		// Presence only; the next real sync reports any real problem.
-	}
-}
-
-/**
- * Whether a sync request is currently in flight. UI state for the Sync
- * button.
- */
-export function isSyncInFlight(): boolean {
-	return isRequestInFlight;
-}
-
-/**
- * Number of local updates queued across all rooms, waiting for the next poll
- * cycle. UI state for the Sync button.
- */
-export function getQueuedUpdateCount(): number {
-	let count = 0;
-	roomStates.forEach( ( state ) => {
-		count += state.updateQueue.size();
-	} );
-
-	return count;
-}
-
-/**
- * Subscribe to manual-sync state changes (mode, in-flight request, queued
- * updates).
- *
- * @param listener Called on every state change.
- * @return Unsubscribe function.
- */
-export function subscribeManualSync( listener: () => void ): () => void {
-	manualSyncListeners.add( listener );
-
-	return () => {
-		manualSyncListeners.delete( listener );
-	};
+	pollNow();
 }
 
 export const pollingManager: PollingManager = {

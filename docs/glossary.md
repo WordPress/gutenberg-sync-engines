@@ -54,7 +54,8 @@ use these terms freely; none of them is standard outside this project
   the history it was written against is gone. The client is expected to
   redo the work from a fresher state.
 - **Park / parked** — set an edit aside, saved but not applied, for a
-  person to decide about later (on a review card). Both engines with
+  person to decide about later (on a review card, or in the sidebar
+  panel when there is no block to show a card on). Both engines with
   a review lane (intent-log and de-rtc) store a parked edit in the room
   log as a `parked` row and close it with a `resolved` row.
 - **Escalate** — refuse to merge automatically and park the edit

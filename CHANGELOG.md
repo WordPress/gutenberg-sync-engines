@@ -12,16 +12,6 @@ release, which the release script generates from the commit history.
 
 ### Added
 
--   A manual "Sync" button for demos on the short-polling transport. When
-    that transport is active, automatic polling is held and nothing moves
-    over the wire until the button (in the editor header, left of the
-    settings toggle) is clicked; each click runs one send-and-receive
-    cycle. This makes conflict timing reproducible: edit in two windows,
-    then sync each window in the order the demo needs. Joining a session
-    still syncs once automatically so documents open normally. The button
-    is currently switched off (its registration in `src/index.ts` is
-    commented out); short polling behaves normally until it is re-enabled.
-
 -   Conflict review in the editor, owned by this plugin. A block whose
     edit was set aside shows a card in its place with a "Review
     conflict" action. The action opens a dialog that compares the
@@ -40,8 +30,7 @@ release, which the release script generates from the commit history.
 
 -   The review cards and dialogs show real contents. Each engine
     supplies what was proposed, what the document has now, and the
-    version both started from. A plugin can register its own review
-    dialog for a block type with `registerSyncConflictView`.
+    version both started from.
 
 -   intent-log: accepting a review writes the reviewer's merged result
     as a new change under the reviewer's account.
@@ -70,25 +59,6 @@ release, which the release script generates from the commit history.
     under the restorer's account. It previously closed the proposal
     without re-authoring anything, so approving such a hold never
     brought the content back.
-
-### Changed
-
--   TEMPORARY: the editor no longer shows the "There is an autosave of this
-    post that is more recent than the version below" notice (the plugin
-    drops the `autosave` editor setting that triggers it) or the "The
-    backup of this post in your browser is different from the version
-    below" notice, or the "X has joined the post" and "X has left the post"
-    toasts (the client bundle removes those as soon as they are created).
-
--   TEMPORARY: demo sync shortcut. Automatic short polling is held, and
-    Cmd+Shift+S (Ctrl+Shift+S elsewhere) in either editor window runs one
-    sync round (user ID 1's window, then user ID 2's, then each once more,
-    with short pauses) through a small server-side trigger route the
-    windows poll. A presence-only
-    keepalive keeps collaborator avatars visible between syncs. The plugin
-    passes the current user's ID to the client for this. (A wall-clock
-    grid variant, user 1 at :00 and :02 and user 2 at :01 of every ten
-    seconds, is in the tree but switched off.)
 
 ## 0.0.2 — September 2026
 

@@ -15,12 +15,6 @@
       "@wordpress/plugins": [
         "./gutenberg/node_modules/@wordpress/plugins/build-types"
       ],
-      "@wordpress/data": [
-        "./gutenberg/node_modules/@wordpress/data/build-types"
-      ],
-      "@wordpress/notices": [
-        "./gutenberg/node_modules/@wordpress/notices/build-types"
-      ],
       "@wordpress/block-serialization-default-parser": [
         "./gutenberg/node_modules/@wordpress/block-serialization-default-parser"
       ],
