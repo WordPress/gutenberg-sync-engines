@@ -13,7 +13,10 @@ import type {
 	EngineSessionCodec,
 	EngineUpdate,
 } from '@wordpress/sync';
-import { applyServerAwarenessStates } from '../../shared/awareness-sync';
+import {
+	applyServerAwarenessStates,
+	createAwarenessDoc,
+} from '../../shared/awareness-sync';
 import { announceLocalWrite } from '../../providers/advisory/announce';
 import type { TransportSessionExtensions } from '../../providers/session-extensions';
 import type { DeRtcCommitAdapter } from './commit';
@@ -164,11 +167,13 @@ export function createDeRtcSessionCodec(
 		sendsWhileAlone: true;
 	} {
 	const { bridge, review } = options;
-	const doc = bridge.doc;
-	const awareness = options.awareness ?? new Awareness( doc );
+	const clientId = bridge.record.clientId;
+	const awareness =
+		options.awareness ??
+		new Awareness( createAwarenessDoc( clientId ) as never );
 
 	let localUpdateListener: EngineLocalUpdateListener | null = null;
-	let isDocListenerAttached = false;
+	let unsubscribeRecord: ( () => void ) | null = null;
 	let dirty = false;
 	let inFlight = false;
 	let inFlightProposalId: string | null = null;
@@ -243,7 +248,7 @@ export function createDeRtcSessionCodec(
 		proposalCounter += 1;
 		lastProposedContent = bridge.buildContent();
 		lastProposedProperties = bridge.buildProperties();
-		inFlightProposalId = `p-${ doc.clientID }-${ proposalCounter }`;
+		inFlightProposalId = `p-${ clientId }-${ proposalCounter }`;
 		// Per-block base honesty: blocks kept through colliding
 		// incorporations declare the version their text was really
 		// written against, so the server merges them from THEIR base
@@ -264,7 +269,7 @@ export function createDeRtcSessionCodec(
 				clientUpdate = buildDeRtcClientUpdate(
 					baseContent,
 					lastProposedContent,
-					`client-${ doc.clientID }`
+					`client-${ clientId }`
 				);
 			} catch {
 				clientUpdate = null; // Evidence is optional; never block the save.
@@ -461,7 +466,7 @@ export function createDeRtcSessionCodec(
 		}, burstQuietMs );
 	}
 
-	function onDocUpdate( _update: Uint8Array, origin: unknown ): void {
+	function onRecordChange( origin: unknown ): void {
 		if ( DE_RTC_REMOTE_ORIGIN === origin ) {
 			return;
 		}
@@ -545,7 +550,7 @@ export function createDeRtcSessionCodec(
 				}
 				const announcedSeq = versionSeq( decoded.version );
 				if (
-					decoded.authorClientId === doc.clientID &&
+					decoded.authorClientId === clientId &&
 					decoded.proposalId === inFlightProposalId
 				) {
 					// The announcement for OUR CURRENT proposal: the slot
@@ -588,7 +593,7 @@ export function createDeRtcSessionCodec(
 							...( 'number' === typeof decoded.author
 								? { author: decoded.author }
 								: {} ),
-							authorClientId: doc.clientID,
+							authorClientId: clientId,
 						} );
 						bridge.advanceVersion( decoded.version );
 						if ( announcedSeq >= behindSeq ) {
@@ -768,7 +773,7 @@ export function createDeRtcSessionCodec(
 		 * must flow while alone too.
 		 */
 		sendsWhileAlone: true,
-		clientId: doc.clientID,
+		clientId,
 		engineSlug: DE_RTC_ENGINE_SLUG,
 		engineProtocol: DE_RTC_ENGINE_PROTOCOL,
 		// The server compacts by itself (no client-side compaction), and
@@ -793,10 +798,8 @@ export function createDeRtcSessionCodec(
 			? {}
 			: { createRecoveryUpdate: () => buildProposal() } ),
 		destroy() {
-			if ( isDocListenerAttached ) {
-				doc.off( 'update', onDocUpdate );
-				isDocListenerAttached = false;
-			}
+			unsubscribeRecord?.();
+			unsubscribeRecord = null;
 			if ( null !== commitRetryTimer ) {
 				clearTimeout( commitRetryTimer );
 				commitRetryTimer = null;
@@ -819,9 +822,8 @@ export function createDeRtcSessionCodec(
 		getLocalAwareness: () => awareness.getLocalState() ?? {},
 		onLocalUpdate( listener ) {
 			localUpdateListener = listener;
-			if ( ! isDocListenerAttached ) {
-				doc.on( 'update', onDocUpdate );
-				isDocListenerAttached = true;
+			if ( ! unsubscribeRecord ) {
+				unsubscribeRecord = bridge.record.subscribe( onRecordChange );
 			}
 			bridge.onBootstrap( () => maybePropose() );
 		},

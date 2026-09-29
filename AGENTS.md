@@ -288,8 +288,9 @@ The framework/plugin split is complete: the framework ships **neither** engines
     (no engine folder imports another engine's folder):
     `shared/yjs/` — the Yjs client modules (CRDT doc schema, snapshot
     helpers, `undo.ts`, vendored `y-utilities/` — the latter ignored by
-    eslint), inherited from the retired yjs-relay engine and used by
-    yjs-server and de-rtc; `shared/awareness-sync.ts` — presence
+    eslint), inherited from the retired yjs-relay engine and now used
+    only by yjs-server (de-rtc keeps a plain record instead, see
+    `engines/de-rtc/record.ts`); `shared/awareness-sync.ts` — presence
     bridging used by all three engines.
   - `providers/{http-polling,sse,websocket}/` — transports (sse reuses the
     polling manager, swapping only its receive half for the stream).

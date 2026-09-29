@@ -1,9 +1,4 @@
 /**
- * External dependencies
- */
-import type * as Y from 'yjs';
-
-/**
  * WordPress dependencies
  */
 // eslint-disable-next-line @wordpress/no-unsafe-wp-apis -- The exact serializer the doc bridge and core-data use; sharing it keeps revert content byte-consistent.
@@ -29,7 +24,7 @@ import {
  * The vision: "Undo and Redo never undo, but rather apply revert edits
  * that return the document to an earlier state by means of adding a new
  * change." This manager implements exactly that, replacing the local
- * Yjs snapshot undo the port had borrowed:
+ * local snapshot undo the port had borrowed:
  *
  * - The undo stack is the client's OWN accepted canonical rows (the
  *   collaborative history), not local document snapshots.
@@ -234,9 +229,19 @@ interface EntityUndoState {
 	lastOwnRowAt: number;
 }
 
-export type DeRtcRevertUndoManager = SyncUndoManager & {
+/**
+ * The framework's undo manager shape, scoped by an opaque per-entity key
+ * (the entity's record) instead of a Y.Map: DE-RTC entities have no Yjs
+ * document. A function that accepts any object also satisfies the
+ * framework's Y.Map-typed `addToScope`.
+ */
+export type DeRtcRevertUndoManager = Omit< SyncUndoManager, 'addToScope' > & {
+	addToScope: (
+		key: object,
+		handlers: Parameters< SyncUndoManager[ 'addToScope' ] >[ 1 ]
+	) => void;
 	attachEntity: ( context: {
-		key: Y.Map< unknown >;
+		key: object;
 		bridge: DeRtcDocBridge;
 		feed: DeRtcUndoFeed;
 		applyRevert: ( blocks: unknown[] ) => void;
@@ -249,7 +254,7 @@ export type DeRtcRevertUndoManager = SyncUndoManager & {
  * @return The manager.
  */
 export function createDeRtcRevertUndoManager(): DeRtcRevertUndoManager {
-	const entities = new Map< Y.Map< unknown >, EntityUndoState >();
+	const entities = new Map< object, EntityUndoState >();
 	let recency = 0;
 
 	const notify = ( state: EntityUndoState ) => {
@@ -392,8 +397,8 @@ export function createDeRtcRevertUndoManager(): DeRtcRevertUndoManager {
 			feed.subscribe( ( row ) => onRow( state, row ) );
 		},
 
-		addToScope( ymap, handlers ) {
-			const state = entities.get( ymap as Y.Map< unknown > );
+		addToScope( key, handlers ) {
+			const state = entities.get( key );
 			if ( state ) {
 				state.handlers = handlers;
 				notify( state );

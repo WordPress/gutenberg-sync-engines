@@ -15,7 +15,8 @@ editor has the same copy of the document, and updates arrive before the
 other person moves on. A slow connection breaks both. If updates only
 arrive every 15 seconds, the cursor always shows a spot the other person
 has already left. The cursor also does not exist at all under the
-intent-log engine, which has no shared document to place a position in.
+intent-log and de-rtc engines, which have no shared Yjs document to place
+a position in.
 
 With awareness and content possibly on different channels, a third problem
 appears: a peer can name a block this editor has not received yet. The

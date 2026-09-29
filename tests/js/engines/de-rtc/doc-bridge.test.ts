@@ -5,12 +5,12 @@
  * last-writer-wins.
  */
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
-import * as Y from 'yjs';
 
 import { createDeRtcDocBridge } from '../../../../src/engines/de-rtc/doc-bridge';
-import { CRDT_RECORD_MAP_KEY } from '../../../../src/shared/yjs/constants';
-// eslint-disable-next-line import/no-unresolved -- Provided at runtime as wp.sync.
-import type { SyncConfig } from '@wordpress/sync';
+import {
+	createDeRtcRecord,
+	type DeRtcRecord,
+} from '../../../../src/engines/de-rtc/record';
 
 // Same stand-in as engine.test.ts: content is opaque JSON.
 jest.mock( '@wordpress/blocks', () => ( {
@@ -19,18 +19,13 @@ jest.mock( '@wordpress/blocks', () => ( {
 		JSON.stringify( blocks ),
 } ) );
 
-function makeSyncConfig(): jest.MockedObject< SyncConfig > {
-	return {
-		applyChangesToCRDTDoc: jest.fn( ( doc: Y.Doc, changes: any ) => {
-			const map = doc.getMap( CRDT_RECORD_MAP_KEY );
-			Object.entries( changes ).forEach( ( [ key, value ] ) => {
-				map.set( key, value );
-			} );
-		} ),
-		getChangesFromCRDTDoc: jest.fn( ( doc: Y.Doc ) =>
-			doc.getMap( CRDT_RECORD_MAP_KEY ).toJSON()
-		),
-	} as unknown as jest.MockedObject< SyncConfig >;
+/**
+ * A local editor edit: the editor's new block tree lands in the record.
+ * @param target
+ * @param blocks
+ */
+function setRecordBlocks( target: DeRtcRecord, blocks: unknown[] ) {
+	target.apply( { blocks }, 'local-editor' );
 }
 
 const A = { name: 'core/paragraph', attributes: { content: 'Alpha' } };
@@ -52,16 +47,16 @@ const B_PEER = { name: 'core/paragraph', attributes: { content: 'Beta peer' } };
 const contentOf = ( ...blocks: unknown[] ) => JSON.stringify( blocks );
 
 describe( 'de-rtc doc bridge per-block base honesty', () => {
-	let doc: Y.Doc;
+	let record: DeRtcRecord;
 	let bridge: ReturnType< typeof createDeRtcDocBridge >;
 
 	beforeEach( () => {
-		doc = new Y.Doc();
-		bridge = createDeRtcDocBridge( doc, makeSyncConfig() );
+		record = createDeRtcRecord();
+		bridge = createDeRtcDocBridge( record );
 	} );
 
 	function setLocalBlocks( ...blocks: unknown[] ) {
-		doc.getMap( CRDT_RECORD_MAP_KEY ).set( 'blocks', blocks );
+		setRecordBlocks( record, blocks );
 	}
 
 	it( 'records the prior version as the base of a kept, collided block', () => {
@@ -176,16 +171,16 @@ describe( 'de-rtc doc bridge clientId stability by syncId', () => {
 		attributes: { ...block.attributes, metadata: { syncId } },
 	} );
 
-	let doc: Y.Doc;
+	let record: DeRtcRecord;
 	let bridge: ReturnType< typeof createDeRtcDocBridge >;
 
 	beforeEach( () => {
-		doc = new Y.Doc();
-		bridge = createDeRtcDocBridge( doc, makeSyncConfig() );
+		record = createDeRtcRecord();
+		bridge = createDeRtcDocBridge( record );
 	} );
 
 	function localBlocks(): any[] {
-		return doc.getMap( CRDT_RECORD_MAP_KEY ).get( 'blocks' ) as any[];
+		return record.get( 'blocks' ) as any[];
 	}
 
 	it( 'keeps the clientId of every block whose identity survived, at every depth', () => {
@@ -194,7 +189,7 @@ describe( 'de-rtc doc bridge clientId stability by syncId', () => {
 			contentOf( withId( A, 'id-a' ), withId( B, 'id-b' ) )
 		);
 		// The editor assigned clientIds to what it rendered.
-		doc.getMap( CRDT_RECORD_MAP_KEY ).set( 'blocks', [
+		setRecordBlocks( record, [
 			{
 				name: 'core/group',
 				clientId: 'c-group',
@@ -233,9 +228,7 @@ describe( 'de-rtc doc bridge clientId stability by syncId', () => {
 	} );
 
 	it( 'maps a duplicated identity once so clientIds stay unique', () => {
-		doc.getMap( CRDT_RECORD_MAP_KEY ).set( 'blocks', [
-			withId( A, 'id-a', 'c-a' ),
-		] );
+		setRecordBlocks( record, [ withId( A, 'id-a', 'c-a' ) ] );
 		bridge.applyCanonical(
 			'v1',
 			contentOf(
@@ -254,7 +247,7 @@ describe( 'de-rtc doc bridge clientId stability by syncId', () => {
 			'v1',
 			contentOf( withId( A, 'id-a' ), withId( B, 'id-b' ) )
 		);
-		doc.getMap( CRDT_RECORD_MAP_KEY ).set( 'blocks', [
+		setRecordBlocks( record, [
 			withId( A_LOCAL_NEWER, 'id-a', 'c-a' ),
 			withId( B, 'id-b', 'c-b' ),
 		] );

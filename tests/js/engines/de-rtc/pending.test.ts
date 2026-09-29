@@ -7,14 +7,14 @@
  * editor saves carry base_version while a session lives.
  */
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
-import * as Y from 'yjs';
 
 import { createDeRtcDocBridge } from '../../../../src/engines/de-rtc/doc-bridge';
 import { createDeRtcReviewState } from '../../../../src/engines/de-rtc/review';
 import { registerSaveBaseVersion } from '../../../../src/engines/de-rtc/save-base-version';
-import { CRDT_RECORD_MAP_KEY } from '../../../../src/shared/yjs/constants';
-// eslint-disable-next-line import/no-unresolved -- Provided at runtime as wp.sync.
-import type { SyncConfig } from '@wordpress/sync';
+import {
+	createDeRtcRecord,
+	type DeRtcRecord,
+} from '../../../../src/engines/de-rtc/record';
 
 jest.mock( '@wordpress/blocks', () => ( {
 	parse: ( content: string ) => ( content ? JSON.parse( content ) : [] ),
@@ -22,25 +22,20 @@ jest.mock( '@wordpress/blocks', () => ( {
 		JSON.stringify( blocks ),
 } ) );
 
+/**
+ * A local editor edit: the editor's new block tree lands in the record.
+ * @param target
+ * @param blocks
+ */
+function setRecordBlocks( target: DeRtcRecord, blocks: unknown[] ) {
+	target.apply( { blocks }, 'local-editor' );
+}
+
 const mockApiFetchUse = jest.fn();
 jest.mock( '@wordpress/api-fetch', () => ( {
 	__esModule: true,
 	default: { use: ( middleware: unknown ) => mockApiFetchUse( middleware ) },
 } ) );
-
-function makeSyncConfig(): jest.MockedObject< SyncConfig > {
-	return {
-		applyChangesToCRDTDoc: jest.fn( ( doc: Y.Doc, changes: any ) => {
-			const map = doc.getMap( CRDT_RECORD_MAP_KEY );
-			Object.entries( changes ).forEach( ( [ key, value ] ) => {
-				map.set( key, value );
-			} );
-		} ),
-		getChangesFromCRDTDoc: jest.fn( ( doc: Y.Doc ) =>
-			doc.getMap( CRDT_RECORD_MAP_KEY ).toJSON()
-		),
-	} as unknown as jest.MockedObject< SyncConfig >;
-}
 
 const A = { name: 'core/paragraph', attributes: { content: 'Alpha' } };
 const A_LOCAL = {
@@ -64,14 +59,14 @@ const B = { name: 'core/paragraph', attributes: { content: 'Beta' } };
 const contentOf = ( ...blocks: unknown[] ) => JSON.stringify( blocks );
 
 describe( 'contested-block pending lifecycle (bridge)', () => {
-	let doc: Y.Doc;
+	let record: DeRtcRecord;
 	let bridge: ReturnType< typeof createDeRtcDocBridge >;
 	let contests: any[];
 	let resolved: Array< number | string >;
 
 	beforeEach( () => {
-		doc = new Y.Doc();
-		bridge = createDeRtcDocBridge( doc, makeSyncConfig() );
+		record = createDeRtcRecord();
+		bridge = createDeRtcDocBridge( record );
 		contests = [];
 		resolved = [];
 		bridge.onContested( ( event ) => contests.push( event ) );
@@ -79,7 +74,7 @@ describe( 'contested-block pending lifecycle (bridge)', () => {
 	} );
 
 	function setLocalBlocks( ...blocks: unknown[] ) {
-		doc.getMap( CRDT_RECORD_MAP_KEY ).set( 'blocks', blocks );
+		setRecordBlocks( record, blocks );
 	}
 	function collide( version: string, theirs: unknown ) {
 		bridge.incorporateCanonicalPreservingLocalEdits(
@@ -112,7 +107,7 @@ describe( 'contested-block pending lifecycle (bridge)', () => {
 		collide( 'v3', A_PEER2 );
 
 		expect( bridge.adoptContestedBlock( 0 ) ).toBe( true );
-		const blocks: any = doc.getMap( CRDT_RECORD_MAP_KEY ).get( 'blocks' );
+		const blocks: any = record.get( 'blocks' );
 		expect( blocks[ 0 ] ).toEqual( A_PEER2 ); // The LATEST, not the first.
 		expect( bridge.blockBaseVersions() ).toEqual( {} );
 		expect( resolved ).toEqual( [ 0 ] );
@@ -125,7 +120,7 @@ describe( 'contested-block pending lifecycle (bridge)', () => {
 		collide( 'v2', A_PEER );
 
 		expect( bridge.rejectContestedBlock( 0 ) ).toBe( true );
-		const blocks: any = doc.getMap( CRDT_RECORD_MAP_KEY ).get( 'blocks' );
+		const blocks: any = record.get( 'blocks' );
 		expect( blocks[ 0 ] ).toEqual( A_NEWER ); // Yours, untouched.
 		expect( bridge.blockBaseVersions() ).toEqual( { 0: 'v1' } ); // Honesty kept.
 		expect( resolved ).toEqual( [ 0 ] );

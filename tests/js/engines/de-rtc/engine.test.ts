@@ -9,7 +9,6 @@ import {
 	it,
 	jest,
 } from '@jest/globals';
-import * as Y from 'yjs';
 
 /**
  * Internal dependencies
@@ -20,7 +19,6 @@ import {
 	DE_RTC_SNAPSHOT_TYPE,
 	setDeRtcBurstQuietMsForTesting,
 } from '../../../../src/engines/de-rtc/session';
-import { CRDT_RECORD_MAP_KEY } from '../../../../src/shared/yjs/constants';
 // eslint-disable-next-line import/no-unresolved -- Provided at runtime as wp.sync.
 import type { SyncConfig } from '@wordpress/sync';
 
@@ -39,15 +37,8 @@ jest.mock( '@wordpress/blocks', () => ( {
  */
 function makeSyncConfig(): jest.MockedObject< SyncConfig > {
 	return {
-		applyChangesToCRDTDoc: jest.fn( ( doc: Y.Doc, changes: any ) => {
-			const map = doc.getMap( CRDT_RECORD_MAP_KEY );
-			Object.entries( changes ).forEach( ( [ key, value ] ) => {
-				map.set( key, value );
-			} );
-		} ),
-		getChangesFromCRDTDoc: jest.fn( ( doc: Y.Doc ) =>
-			doc.getMap( CRDT_RECORD_MAP_KEY ).toJSON()
-		),
+		// The engine keeps its own plain record; the config only
+		// supplies the awareness factory, which these tests omit.
 	} as unknown as jest.MockedObject< SyncConfig >;
 }
 
@@ -104,7 +95,7 @@ describe( 'createDeRtcEngine', () => {
 		const entity = makeEntity();
 		const persist = jest.fn();
 		entity.hydrate( { blocks: [ BLOCK_A ] } as any, persist );
-		expect( syncConfig.applyChangesToCRDTDoc ).not.toHaveBeenCalled();
+		expect( persist ).not.toHaveBeenCalled();
 
 		// Pre-bootstrap, an empty doc must not reach the editor.
 		expect(
@@ -127,7 +118,6 @@ describe( 'createDeRtcEngine', () => {
 			'editor',
 			{}
 		);
-		expect( syncConfig.applyChangesToCRDTDoc ).not.toHaveBeenCalled();
 
 		session.receiveUpdate( snapshotRow( 'v1', contentOf( BLOCK_A ) ) );
 
@@ -259,6 +249,5 @@ describe( 'createDeRtcEngine', () => {
 		).not.toThrow();
 		expect( session.getInitialUpdates() ).toEqual( [] );
 		expect( sent ).toHaveLength( 0 );
-		expect( syncConfig.applyChangesToCRDTDoc ).not.toHaveBeenCalled();
 	} );
 } );

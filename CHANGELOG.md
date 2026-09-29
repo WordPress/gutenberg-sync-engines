@@ -16,6 +16,10 @@ release, which the release script generates from the commit history.
   [Gutenberg #83410](https://github.com/WordPress/gutenberg/pull/83410).
   The plugin registers its adapter at startup for all existing engines and
   transports; no separate opt-in is required.
+- The de-rtc engine no longer keeps a Yjs document in the browser. Under
+  de-rtc, other people's text carets no longer show (who is editing still
+  does), saves no longer store a Yjs copy of the post in post meta, and
+  the editor treats autosaves as it does without collaboration.
 
 ## 0.0.2 — September 2026
 

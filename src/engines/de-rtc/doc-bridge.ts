@@ -1,52 +1,46 @@
 /**
- * External dependencies
- */
-import * as Y from 'yjs';
-
-/**
  * WordPress dependencies
  */
 // __unstableSerializeAndClean is the exact serializer core-data uses when
-// comparing CRDT blocks against persisted content; sharing it keeps proposal
+// comparing blocks against persisted content; sharing it keeps proposal
 // content byte-consistent with WordPress saves.
 // eslint-disable-next-line import/no-unresolved, @wordpress/no-unsafe-wp-apis -- Provided at runtime as wp.blocks.
 import { parse, __unstableSerializeAndClean } from '@wordpress/blocks';
-// eslint-disable-next-line import/no-unresolved -- Provided at runtime as wp.sync.
-import type { SyncConfig } from '@wordpress/sync';
 
 /**
  * Internal dependencies
  */
-import { CRDT_RECORD_MAP_KEY } from '../../shared/yjs/constants';
+import { sameBlocks, serializeBlocks, type DeRtcRecord } from './record';
 
 /**
- * Origin tag for Yjs transactions that apply server-accepted canonical
+ * Origin tag for record changes that apply server-accepted canonical
  * content, so they are not mistaken for local edits (which would echo a
  * proposal) and so the entity's observers report them as remote changes.
  */
 export const DE_RTC_REMOTE_ORIGIN = 'de-rtc-remote';
 
 /**
- * Origin tag for Yjs transactions that restore a parked proposal's blocks
- * into the doc. Dual-natured by design: the entity's observers report it
- * to the EDITOR like a remote change (the restored blocks must reach the
- * canvas), while the session codec treats it as a LOCAL edit (the doc is
- * dirty and the restored state must re-propose under the restorer's
- * capability).
+ * Origin tag for record changes that restore a parked proposal's blocks
+ * (or apply an undo revert). Dual-natured by design: the entity's
+ * observers report it to the EDITOR like a remote change (the restored
+ * blocks must reach the canvas), while the session codec treats it as a
+ * LOCAL edit (the record is dirty and the restored state must re-propose
+ * under the restorer's capability).
  */
 export const DE_RTC_RESTORE_ORIGIN = 'de-rtc-restore';
 
-/**
+/*
  * The shared per-entity state the engine entity and its session codec
- * both close over: the local Y.Doc that bridges the editor, and the
- * canonical version/content tracking the proposal wire needs.
+ * both close over: the plain record that mirrors the editor (see
+ * record.ts), and the canonical version/content tracking the proposal
+ * wire needs.
  *
- * The doc is an EDITOR BRIDGE, not the sync substrate: the server's
+ * The record is an EDITOR MIRROR, not a merge substrate: the server's
  * canonical document is a serialized-block string, and this bridge
  * translates between that string and the editor's block model using the
- * editor's own parser/serializer (via the sync config's record↔doc
- * mapping, shared with the yjs engines).
+ * editor's own parser/serializer.
  */
+
 /**
  * How a contested block is addressed: its durable identity (syncId) when
  * every block of the document carries one, else its top-level index.
@@ -54,8 +48,8 @@ export const DE_RTC_RESTORE_ORIGIN = 'de-rtc-restore';
 export type DeRtcContestKey = string | number;
 
 export interface DeRtcDocBridge {
-	/** The Yjs document bridging the editor. */
-	doc: Y.Doc;
+	/** The plain record mirroring the editor. */
+	record: DeRtcRecord;
 
 	/** Whether the server's genesis (or any canonical row) has applied. */
 	isBootstrapped: () => boolean;
@@ -177,14 +171,14 @@ export interface DeRtcDocBridge {
 	 */
 	rejectContestedBlock: ( key: DeRtcContestKey ) => boolean;
 
-	/** Serializes the doc's current blocks to proposal content. */
+	/** Serializes the record's current blocks to proposal content. */
 	buildContent: () => string;
 
 	/**
-	 * The doc's current entity-property registers in the wire shape: every
-	 * record-map entry except `blocks`, Yjs values plainified, the `meta`
-	 * map flattened to `meta.<key>` entries, taxonomy term-ID arrays in
-	 * canonical numeric order (matching the server genesis seed).
+	 * The record's current entity-property registers in the wire shape:
+	 * every field except `blocks`, the `meta` object flattened to
+	 * `meta.<key>` entries, taxonomy term-ID arrays in canonical numeric
+	 * order (matching the server genesis seed).
 	 */
 	buildProperties: () => Record< string, unknown >;
 
@@ -377,8 +371,11 @@ export function stabilizeClientIds(
 
 /**
  * Replaces the block carrying a syncId, wherever it sits in the tree.
+ * Only the top-level list is mutated: a nested replacement copies each
+ * parent on the path, so the editor's own (immutable) block objects are
+ * never changed.
  *
- * @param blocks      Block tree (mutated in place).
+ * @param blocks      Block tree (the top-level list is mutated in place).
  * @param syncId      The identity to find.
  * @param replacement The block to put in its place.
  * @return Whether a block was replaced.
@@ -394,11 +391,12 @@ export function replaceBlockBySyncId(
 			blocks[ i ] = replacement;
 			return true;
 		}
-		if (
-			Array.isArray( block.innerBlocks ) &&
-			replaceBlockBySyncId( block.innerBlocks, syncId, replacement )
-		) {
-			return true;
+		if ( Array.isArray( block.innerBlocks ) ) {
+			const innerBlocks = block.innerBlocks.slice();
+			if ( replaceBlockBySyncId( innerBlocks, syncId, replacement ) ) {
+				blocks[ i ] = { ...block, innerBlocks };
+				return true;
+			}
 		}
 	}
 	return false;
@@ -664,14 +662,10 @@ export function unflattenProperties(
 /**
  * Creates the shared doc bridge for one entity.
  *
- * @param doc        The entity's Yjs document.
- * @param syncConfig The sync config supplying the record↔doc mapping.
+ * @param record The entity's plain record.
  * @return The doc bridge.
  */
-export function createDeRtcDocBridge(
-	doc: Y.Doc,
-	syncConfig: SyncConfig
-): DeRtcDocBridge {
+export function createDeRtcDocBridge( record: DeRtcRecord ): DeRtcDocBridge {
 	let bootstrapped = false;
 	let version: string | null = null;
 	// Per-block true bases of blocks kept through colliding
@@ -732,11 +726,22 @@ export function createDeRtcDocBridge(
 	const seqOf = ( label: string | null ): number =>
 		null === label ? 0 : parseInt( label.replace( /^v/, '' ), 10 ) || 0;
 
-	// The doc's current blocks as plain JSON (the record map holds a
-	// Y.Array under the framework's mapping, a plain array under tests).
-	const localBlocksJson = (): any[] => {
-		const stored: any = doc.getMap( CRDT_RECORD_MAP_KEY ).get( 'blocks' );
-		return stored?.toJSON?.() ?? ( Array.isArray( stored ) ? stored : [] );
+	// The record's current blocks. They may be the editor's own block
+	// objects: read them, never mutate them.
+	const localBlocksJson = (): any[] => record.blocks();
+
+	/*
+	 * Applies canonical-side changes under the remote origin. Blocks that
+	 * serialize the same as the record's are left out, so an unchanged
+	 * canonical never reaches the editor as an edit (a Y.Doc merge wrote
+	 * nothing in that case, and nothing reached the editor either).
+	 */
+	const applyRemote = ( changes: Record< string, unknown > ) => {
+		const next = { ...changes };
+		if ( 'blocks' in next && sameBlocks( record.blocks(), next.blocks ) ) {
+			delete next.blocks;
+		}
+		record.apply( next, DE_RTC_REMOTE_ORIGIN );
 	};
 
 	const markVersion = ( nextVersion: string ) => {
@@ -751,51 +756,45 @@ export function createDeRtcDocBridge(
 
 	const readFlatProperties = (): Record< string, unknown > => {
 		const flat: Record< string, unknown > = {};
-		doc.getMap( CRDT_RECORD_MAP_KEY ).forEach(
-			( stored: any, name: string ) => {
-				/*
-				 * `blocks` IS the content model; a `content` record-map
-				 * entry (core-data mirrors the serialized string into the
-				 * doc) would duplicate the ENTIRE document as a property
-				 * register on every proposal and every announce — the
-				 * double-carry that wire inspection caught. One
-				 * representation: content travels as content, never as a
-				 * property.
-				 */
-				if ( 'blocks' === name || 'content' === name ) {
-					return;
-				}
-				const value =
-					stored && 'function' === typeof stored.toJSON
-						? stored.toJSON()
-						: stored;
-				if ( 'meta' === name ) {
-					if ( value && 'object' === typeof value ) {
-						for ( const [ metaKey, metaValue ] of Object.entries(
-							value as Record< string, unknown >
-						) ) {
-							flat[ `meta.${ metaKey }` ] = metaValue;
-						}
-					}
-					return;
-				}
-				if (
-					Array.isArray( value ) &&
-					value.every( ( entry ) => 'number' === typeof entry )
-				) {
-					// Term bindings are sets: canonical numeric order,
-					// matching the server genesis seed.
-					flat[ name ] = [ ...value ].sort( ( a, b ) => a - b );
-					return;
-				}
-				flat[ name ] = value;
+		for ( const name of record.keys() ) {
+			/*
+			 * `blocks` IS the content model; a `content` entry would
+			 * duplicate the ENTIRE document as a property register on
+			 * every proposal and every announce — the double-carry that
+			 * wire inspection caught. One representation: content travels
+			 * as content, never as a property. (The record never stores
+			 * `content`; the guard stays as the wire rule.)
+			 */
+			if ( 'blocks' === name || 'content' === name ) {
+				continue;
 			}
-		);
+			const value = record.get( name );
+			if ( 'meta' === name ) {
+				if ( value && 'object' === typeof value ) {
+					for ( const [ metaKey, metaValue ] of Object.entries(
+						value as Record< string, unknown >
+					) ) {
+						flat[ `meta.${ metaKey }` ] = metaValue;
+					}
+				}
+				continue;
+			}
+			if (
+				Array.isArray( value ) &&
+				value.every( ( entry ) => 'number' === typeof entry )
+			) {
+				// Term bindings are sets: canonical numeric order,
+				// matching the server genesis seed.
+				flat[ name ] = [ ...value ].sort( ( a, b ) => a - b );
+				continue;
+			}
+			flat[ name ] = value;
+		}
 		return flat;
 	};
 
 	return {
-		doc,
+		record,
 
 		isBootstrapped: () => bootstrapped,
 
@@ -823,9 +822,7 @@ export function createDeRtcDocBridge(
 			const changes: Record< string, unknown > = properties
 				? { ...unflattenProperties( properties ), blocks }
 				: { blocks };
-			doc.transact( () => {
-				syncConfig.applyChangesToCRDTDoc( doc, changes );
-			}, DE_RTC_REMOTE_ORIGIN );
+			applyRemote( changes );
 			// Wholesale adoption: every pending collision resolved.
 			blockBases.clear();
 			resolveAllContests();
@@ -880,11 +877,7 @@ export function createDeRtcDocBridge(
 				}
 			);
 			if ( null !== byIdentity ) {
-				doc.transact( () => {
-					syncConfig.applyChangesToCRDTDoc( doc, {
-						blocks: byIdentity.blocks,
-					} );
-				}, DE_RTC_REMOTE_ORIGIN );
+				applyRemote( { blocks: byIdentity.blocks } );
 				markVersion( nextVersion );
 				byIdentity.collided.forEach( emitContested );
 				return true;
@@ -958,9 +951,7 @@ export function createDeRtcDocBridge(
 				} )
 				.concat( canonicalBlocks.slice( proposedBlocks.length ) );
 
-			doc.transact( () => {
-				syncConfig.applyChangesToCRDTDoc( doc, { blocks: merged } );
-			}, DE_RTC_REMOTE_ORIGIN );
+			applyRemote( { blocks: merged } );
 			markVersion( nextVersion );
 			collided.forEach( emitContested );
 
@@ -968,17 +959,12 @@ export function createDeRtcDocBridge(
 		},
 
 		buildContent() {
-			// Serialize the doc's blocks the way core-data itself does when
-			// comparing CRDT state against persisted content — proposal
+			// Serialize the record's blocks the way core-data itself does
+			// when comparing blocks against persisted content — proposal
 			// content stays byte-consistent with what a WordPress save of
 			// the same blocks would produce (the server's hash fast-paths
 			// depend on that stability).
-			const stored: any = doc
-				.getMap( CRDT_RECORD_MAP_KEY )
-				.get( 'blocks' );
-			const blocks =
-				stored?.toJSON?.() ?? ( Array.isArray( stored ) ? stored : [] );
-			return __unstableSerializeAndClean( blocks ).trim();
+			return serializeBlocks( record.blocks() );
 		},
 
 		buildProperties: readFlatProperties,
@@ -1011,10 +997,8 @@ export function createDeRtcDocBridge(
 				blocks[ key ] = entry.block;
 			}
 			// Remote origin: this content already IS canonical — it must
-			// not mark the doc dirty or re-propose.
-			doc.transact( () => {
-				syncConfig.applyChangesToCRDTDoc( doc, { blocks } );
-			}, DE_RTC_REMOTE_ORIGIN );
+			// not mark the record dirty or re-propose.
+			applyRemote( { blocks } );
 			blockBases.delete( key );
 			resolveContest( key );
 			return true;
@@ -1056,12 +1040,7 @@ export function createDeRtcDocBridge(
 			if ( 0 === Object.keys( adopt ).length ) {
 				return;
 			}
-			doc.transact( () => {
-				syncConfig.applyChangesToCRDTDoc(
-					doc,
-					unflattenProperties( adopt )
-				);
-			}, DE_RTC_REMOTE_ORIGIN );
+			applyRemote( unflattenProperties( adopt ) );
 		},
 
 		onBootstrap( listener ) {

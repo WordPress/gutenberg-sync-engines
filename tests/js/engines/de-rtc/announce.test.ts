@@ -13,7 +13,6 @@ import {
 	it,
 	jest,
 } from '@jest/globals';
-import * as Y from 'yjs';
 
 import { hashDeRtcContent } from '../../../../src/engines/de-rtc/descriptor';
 import { createDeRtcEngine } from '../../../../src/engines/de-rtc/engine';
@@ -24,7 +23,6 @@ import {
 	DE_RTC_SNAPSHOT_TYPE,
 	setDeRtcBurstQuietMsForTesting,
 } from '../../../../src/engines/de-rtc/session';
-import { CRDT_RECORD_MAP_KEY } from '../../../../src/shared/yjs/constants';
 // eslint-disable-next-line import/no-unresolved -- Provided at runtime as wp.sync.
 import type { SyncConfig } from '@wordpress/sync';
 
@@ -36,15 +34,8 @@ jest.mock( '@wordpress/blocks', () => ( {
 
 function makeSyncConfig(): jest.MockedObject< SyncConfig > {
 	return {
-		applyChangesToCRDTDoc: jest.fn( ( doc: Y.Doc, changes: any ) => {
-			const map = doc.getMap( CRDT_RECORD_MAP_KEY );
-			Object.entries( changes ).forEach( ( [ key, value ] ) => {
-				map.set( key, value );
-			} );
-		} ),
-		getChangesFromCRDTDoc: jest.fn( ( doc: Y.Doc ) =>
-			doc.getMap( CRDT_RECORD_MAP_KEY ).toJSON()
-		),
+		// The engine keeps its own plain record; the config only
+		// supplies the awareness factory, which these tests omit.
 	} as unknown as jest.MockedObject< SyncConfig >;
 }
 

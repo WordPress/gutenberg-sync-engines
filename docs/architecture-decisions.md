@@ -42,10 +42,13 @@ we would scope.
    transports it supports, including "none — I sync when the user
    asks". Stop treating "works over any transport" as a feature worth
    damaging an engine to keep.
-4. **Client machinery reuse across engines.** de-rtc's client rides a
-   `Y.Doc` editor bridge purely to reuse the shared Yjs awareness
-   plumbing (the borrowed local-snapshot undo it once forced has been
-   replaced by revert-edit undo). The CRDT dependency the vision says
-   clients don't need remains; the descriptor lane is the natural
-   coupling point for moving de-rtc's client onto the editor's
-   semantic actions instead of a shadow CRDT.
+4. **Client machinery reuse across engines.** de-rtc's client used to
+   ride a `Y.Doc` editor bridge purely to reuse the framework's Yjs
+   record mapping and awareness plumbing. It now keeps a plain record
+   of what the editor shows (`src/engines/de-rtc/record.ts`, the
+   framework's field rules without the CRDT), so the CRDT dependency
+   the vision says clients don't need is gone. What remains: presence
+   still rides y-protocols' Awareness over a stub document, and
+   collaborators' carets are off, because core-data places them with
+   Yjs positions. The descriptor lane is still the natural coupling
+   point for moving de-rtc onto the editor's semantic actions.
