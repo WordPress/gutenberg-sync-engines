@@ -945,6 +945,17 @@ function installAdvisoryHooks(): void {
  * transport). See providers/sse.
  */
 let sseMode = false;
+
+/*
+ * Whether holding a stream open occupies a PHP worker.
+ *
+ * True for the `sse` transport, whose stream IS a web request and so
+ * holds a worker for as long as the tab lives. The `sse-daemon`
+ * transport streams from the sync daemon's own process, which keeps no
+ * worker and no request per stream, and reaps the stream from the
+ * socket when the browser lets go of it.
+ */
+let sseStreamHoldsWorker = true;
 const sseExchange = new SseExchange();
 
 /*
@@ -961,17 +972,25 @@ let sseSettleUntil = 0;
 
 /**
  * Whether receiving is on the stream (or about to be, once the room set
- * settles): SSE is selected, the tab is visible, and the exchange is
- * willing to open one. When it is not, receiving is short polling: after
- * a failed stream (the exchange refuses to open one for a while), and
- * while the tab is hidden — a stream holds a PHP worker for its whole
- * length, renewed for as long as the tab lives, and nobody is looking at
- * a hidden tab, so it polls at the background cadence like short polling
- * and the stream reopens the moment the tab is visible again
- * (handleVisibilityChange polls at once).
+ * settles): SSE is selected, the exchange is willing to open one, and
+ * either the tab is visible or holding the stream costs no web worker.
+ *
+ * When it is not, receiving is short polling: after a failed stream (the
+ * exchange refuses to open one for a while), and for a hidden tab whose
+ * stream a web worker has to stay up for. Nobody is looking at a hidden
+ * tab and a worker is a scarce thing, so such a tab polls at the
+ * background cadence like short polling, and the stream reopens the
+ * moment the tab is visible again (handleVisibilityChange polls at
+ * once). A stream the sync daemon serves holds no worker, so it is kept
+ * across the tab going hidden and the tab stays live to changes it
+ * cannot see yet.
  */
 function sseStreaming(): boolean {
-	return sseMode && isActiveBrowser && sseExchange.available;
+	return (
+		sseMode &&
+		sseExchange.available &&
+		( isActiveBrowser || ! sseStreamHoldsWorker )
+	);
 }
 
 /**
@@ -999,6 +1018,45 @@ export function setSseMode( enabled: boolean ): void {
 		sseExchange.close();
 	}
 	sseMode = enabled;
+}
+
+/**
+ * Declares who holds the stream open.
+ *
+ * Set false by a transport whose stream is served by the sync daemon
+ * rather than by a web request, which decides whether a hidden tab keeps
+ * its stream (see sseStreaming) or drops it for the background cadence.
+ *
+ * @param enabled Whether the stream occupies a PHP worker.
+ */
+export function setSseStreamHoldsWorker( enabled: boolean ): void {
+	sseStreamHoldsWorker = enabled;
+}
+
+/**
+ * Points SSE receiving at a different stream endpoint.
+ *
+ * The `sse` transport streams from the web tier's REST route; the
+ * `sse-daemon` transport names the sync daemon instead, which serves the
+ * same frames from its own process. Everything else about the exchange is
+ * unchanged: the same room payloads, the same cursors, and the same retry
+ * ladder.
+ *
+ * @param url The stream URL.
+ */
+export function setSseStreamUrl( url: string ): void {
+	sseExchange.setStreamUrl( url );
+}
+
+/**
+ * Sets (or clears) how an SSE stream request authenticates.
+ *
+ * @param provider Returns the headers for one stream open.
+ */
+export function setSseAuthProvider(
+	provider?: () => Promise< Record< string, string > >
+): void {
+	sseExchange.setAuthProvider( provider );
 }
 
 /*
@@ -1083,13 +1141,18 @@ function handleVisibilityChange() {
 	isActiveBrowser = document.visibilityState === 'visible';
 
 	if ( ! isActiveBrowser ) {
-		if ( sseMode ) {
+		if ( sseMode && sseStreamHoldsWorker ) {
 			/*
 			 * A hidden tab holds no stream (sseStreaming). Drop it the
 			 * way pagehide does: through the park signal, so the exchange
 			 * in flight sees a deliberate abort (no failure backoff, no
 			 * "will retry" error logged) and the loop goes on over
 			 * ordinary requests at the background cadence (sseDelay).
+			 *
+			 * Only for a stream that occupies a web worker: a stream the
+			 * sync daemon holds is kept, so a background tab is still
+			 * receiving and applies what arrived when it is focused
+			 * again, rather than spending a burst of requests to catch up.
 			 */
 			abortParkedStream();
 			sseExchange.close();

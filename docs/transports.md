@@ -10,6 +10,7 @@ idle traffic on your hardware; the stable shape:
 | --- | --- | --- |
 | http-polling | seconds-scale (bounded below by the poll interval) | roughly one request per poll interval |
 | sse | pushed the moment a row lands (Redis notices), or within half a second (version checks) | one held PHP worker per stream for up to five minutes; without Redis, one small lookup twice a second per stream; needs a proxy that passes streams through |
+| sse-daemon | pushed within about a second of the row landing (the daemon rescans each room once a second) | one held connection per stream in the sync daemon; no PHP worker, and no new port or TLS beyond the daemon the websocket transport already runs |
 | websocket | tens of milliseconds | a few frames per heartbeat — plus a persistent daemon, TLS termination, and an exposed port |
 
 **Short polling is the base transport, and an advisory channel sits
@@ -57,6 +58,32 @@ The short-polling cadence is tunable: the "Polling interval" field on
 Settings → Collaboration (default 5 seconds) slows active-tab polling down to 25 seconds
 for hosts that want fewer requests (see
 `src/providers/http-polling/README.md` for the exact semantics).
+
+**`sse` and `sse-daemon` are the same stream held by different
+processes.** Both send the room envelope once and then receive rows on
+one long-lived response. The difference is where that response is
+written. `sse` writes it from the web tier, so a PHP worker stays up for
+the length of the stream. `sse-daemon` writes it from the sync daemon, on
+the port the websocket transport already uses, so a stream costs a
+connection there instead of a worker. Three consequences are worth
+knowing before choosing between them.
+
+- A tab that goes hidden keeps its `sse-daemon` stream and keeps
+  receiving, because there is no worker to release. An `sse` tab drops
+  its stream on hide and re-reads on return.
+- Rows written through the ordinary WordPress REST endpoint reach a
+  daemon stream within about a second, on the daemon's once-a-second
+  room rescan, rather than the moment they land. Under `sse` with Redis
+  the notice is immediate.
+- A stream request authenticates with a one-time token in an
+  `Authorization` header (`/wp-sync/v1/ws-token`) rather than the REST
+  nonce `sse` sends, because the daemon is a separate process with no
+  WordPress request context. The daemon listens on its own port, so the
+  request is cross-origin and preflighted; the daemon answers the
+  preflight from the same origin allowlist the socket handshake uses.
+
+It needs the same proxy that passes streams through, and the same daemon
+the websocket transport runs.
 
 Two websocket specifics. The one-time auth token rides the
 `Sec-WebSocket-Protocol` offer list rather than the URL query string,

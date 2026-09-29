@@ -10,6 +10,24 @@ release, which the release script generates from the commit history.
 
 ## Unreleased
 
+### Added
+
+- Server-sent events transport served by the sync daemon
+  (`sse-daemon`), selectable on Settings → Collaboration. It delivers
+  the same rows as `sse` from a different place: the long-lived
+  response is written by the sync daemon on its own port, so no PHP
+  worker is held for the length of a stream. A stream request
+  authenticates with a one-time token in an `Authorization` header,
+  minted per stream open at `/wp-sync/v1/ws-token`, and rows that land
+  through ordinary WordPress requests reach the stream when the daemon
+  rescans a room once a second (`ROOM_SCAN_INTERVAL_S`). Two
+  consequences differ from `sse`. A tab that goes hidden keeps its
+  stream and receives while it is in the background, where `sse` drops
+  its stream to release the worker. And the daemon answers with an
+  ordinary chunked response, so the transport also works where the
+  WebSocket upgrade is blocked. Needs the same proxy that passes
+  streams through; see `docs/transports.md`.
+
 ### Changed
 
 - The bundled Gutenberg includes the entity sync interface from

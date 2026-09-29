@@ -34,6 +34,7 @@ import { createDeRtcEngineAdapter } from './engines/de-rtc-adapter';
 import { createHttpPollingProvider } from './providers/http-polling/http-polling-provider';
 import { createWebSocketProvider } from './providers/websocket/websocket-provider';
 import { createSseProvider } from './providers/sse/sse-provider';
+import { createSseDaemonProvider } from './providers/sse-daemon/sse-daemon-provider';
 import { bootstrapSlowAwareness } from './awareness';
 import { registerPluginEntitySync } from './entity-sync';
 
@@ -61,6 +62,13 @@ registerSyncTransport( {
 	slug: 'sse',
 	protocolVersion: 1,
 	create: createSseProvider,
+} );
+
+// The same receive stream, served by the sync daemon instead of a web worker.
+registerSyncTransport( {
+	slug: 'sse-daemon',
+	protocolVersion: 1,
+	create: createSseDaemonProvider,
 } );
 
 // Core-data receives lifecycle events through the plugin adapter in every mode.
