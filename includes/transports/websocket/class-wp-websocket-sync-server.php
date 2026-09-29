@@ -565,7 +565,7 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 				}
 			}
 
-			$frames = $conn->read_frames();
+			$frames = $conn->read_messages();
 
 			if ( is_wp_error( $frames ) ) {
 				$this->log( 'Protocol error: ' . $frames->get_error_message() );
@@ -669,7 +669,7 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 			// token entry (browsers enforce the echo matches an offer).
 			$offered_protocols = (string) ( $headers['sec-websocket-protocol'] ?? '' );
 			$echoed_protocol   = false !== strpos( $offered_protocols, self::SUBPROTOCOL ) ? self::SUBPROTOCOL : '';
-			$conn->accept_handshake( $headers['sec-websocket-key'], $echoed_protocol );
+			$conn->accept_request( $request, array( 'subprotocol' => $echoed_protocol ) );
 		}
 
 		/**
@@ -1523,7 +1523,7 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 					}
 
 					if ( $client['conn']->is_open() ) {
-						$client['conn']->send_ping();
+						$client['conn']->send_keepalive();
 					}
 				}
 			}

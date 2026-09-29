@@ -152,6 +152,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Plugin' ) ) {
 			require_once $engines . 'de-rtc/class-wp-de-rtc-review-controller.php';
 
 			$transports = GUTENBERG_SYNC_ENGINES_PATH . 'includes/transports/';
+			require_once $transports . 'class-wp-sync-connection.php';
 			require_once $transports . 'class-wp-http-polling-sync-server.php';
 			require_once $transports . 'sse/interface-wp-sync-change-waiter.php';
 			require_once $transports . 'sse/class-wp-sync-storage-change-waiter.php';
