@@ -11,7 +11,7 @@ import {
 	mergedGridFromModel,
 	mergeTableGrids,
 } from './merge-table-grids';
-import { useIsOwnProposal } from './merge-dialog';
+import { MissingBaseNotice, useIsOwnProposal } from './merge-dialog';
 
 /**
  * The merged result as blocks, seeded from a grid.
@@ -75,6 +75,8 @@ function GridPane( { label, grid, baseGrid, onRestore } ) {
  *
  * @param {Object}   props
  * @param {Object}   props.base          The grid both versions started from.
+ * @param {boolean}  props.isBaseMissing Whether the base grid is a stand-in
+ *                                       (the record had no base).
  * @param {Object}   props.yours         The author's version of the grid.
  * @param {string}   props.proposedLabel The author's pane heading.
  * @param {Object}   props.current       The document's current version.
@@ -83,6 +85,7 @@ function GridPane( { label, grid, baseGrid, onRestore } ) {
  */
 export function TableMergeDialogBody( {
 	base,
+	isBaseMissing = false,
 	yours,
 	current,
 	proposedLabel = __( 'Your version' ),
@@ -111,6 +114,7 @@ export function TableMergeDialogBody( {
 					'These edits could not be merged automatically. Compare the versions and choose what to keep.'
 				) }
 			</p>
+			{ isBaseMissing && <MissingBaseNotice /> }
 			<div className="gse-review-merge-dialog__panes">
 				<GridPane
 					label={ proposedLabel }
@@ -182,14 +186,17 @@ function tableBlockOf( content ) {
  * the proposed side shows every difference and the current side none.
  *
  * @param {Object} conflict The conflict record.
- * @return {Object} `{ base, yours, current }` grids.
+ * @return {Object} `{ base, yours, current }` grids, and `isBaseMissing`
+ *                  when the current version stands in for the base.
  */
 export function tableGridsOf( conflict ) {
 	const current = tableBlockOf( conflict.current );
-	const base = tableBlockOf( conflict.base ) ?? current;
+	const ownBase = tableBlockOf( conflict.base );
+	const base = ownBase ?? current;
 	const proposed = tableBlockOf( conflict.proposed );
 
 	return {
+		isBaseMissing: ! ownBase,
 		base: gridFromTableAttributes( base?.attributes ),
 		yours: gridFromTableAttributes( proposed?.attributes ),
 		current: gridFromTableAttributes( current?.attributes ),
@@ -242,6 +249,7 @@ export function TableConflictView( { conflict, onDecide, onClose } ) {
 		>
 			<TableMergeDialogBody
 				base={ grids.base }
+				isBaseMissing={ grids.isBaseMissing }
 				yours={ grids.yours }
 				current={ grids.current }
 				proposedLabel={ proposedLabel }

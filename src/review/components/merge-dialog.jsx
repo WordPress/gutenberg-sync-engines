@@ -2,11 +2,29 @@
 import { useState } from '@wordpress/element';
 import { useSelect } from '@wordpress/data';
 import { __ } from '@wordpress/i18n';
-import { Button, Modal } from '@wordpress/components';
+import { Button, Modal, Notice } from '@wordpress/components';
 import { parse, serialize } from '@wordpress/blocks';
 import { store as coreStore } from '@wordpress/core-data';
 import BlockDiffPane, { BlockDiffResources } from './block-diff-pane';
 import MergedResultEditor from './merged-result-editor';
+
+/**
+ * The notice a review dialog shows when the record has no base: the
+ * comparison then runs from the current version to the proposed one.
+ */
+export function MissingBaseNotice() {
+	return (
+		<Notice
+			className="gse-review-merge-dialog__notice"
+			status="warning"
+			isDismissible={ false }
+		>
+			{ __(
+				'The version both edits started from is no longer available. The proposed version is compared with the current version, so the current version shows no changes of its own.'
+			) }
+		</Notice>
+	);
+}
 
 /**
  * One version pane: a heading, this version's blocks rendered read-only
@@ -56,7 +74,8 @@ function Pane( { label, content, baseContent, onRestore } ) {
  *
  * Without a base (the engine could no longer recover it) the proposed
  * version is compared against the current one, which then shows no
- * changes of its own.
+ * changes of its own. A notice tells the reviewer so: the panes would
+ * otherwise read as if the current version had changed nothing.
  *
  * The merged result below the panes is a real block editor seeded from
  * the current version. Either pane's "Restore this version" reseeds it
@@ -103,6 +122,7 @@ export function MergeDialogBody( {
 	// pane's "Restore this version" reseeds it, and it stays
 	// hand-editable in the merged block editor below the panes.
 	const [ merged, setMerged ] = useState( () => parse( current ) );
+	const isBaseMissing = null === base || undefined === base;
 	const baseContent = base ?? current;
 
 	return (
@@ -113,6 +133,7 @@ export function MergeDialogBody( {
 					'These edits could not be merged automatically. Compare the versions and choose what to keep.'
 				) }
 			</p>
+			{ isBaseMissing && <MissingBaseNotice /> }
 			<div className="gse-review-merge-dialog__panes">
 				<Pane
 					label={ proposedLabel }

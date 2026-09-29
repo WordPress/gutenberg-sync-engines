@@ -97,6 +97,20 @@ describe( 'MergeDialogBody, one block', () => {
 				name: 'Modified block: Paragraph',
 			} )
 		).toHaveLength( 1 );
+		// The reviewer is told why the current pane shows nothing. The
+		// notice is also spoken, so the text appears twice in the page.
+		expect(
+			document.querySelector( '.gse-review-merge-dialog__notice' )
+		).toHaveTextContent( /started from is no longer available/ );
+	} );
+
+	it( 'shows no missing-base notice when the record has a base', async () => {
+		renderBody( conflict );
+		await act( async () => {} );
+
+		expect(
+			document.querySelector( '.gse-review-merge-dialog__notice' )
+		).toBeNull();
 	} );
 
 	it( 'Restore this version copies that version into the merged editor', async () => {
@@ -256,6 +270,38 @@ describe( 'MergeDialogBody, a section', () => {
 		expect( mergedContent ).toContain( 'shared view.</p>' );
 		expect( mergedContent ).toContain(
 			'Early access opens in May. Sign up now.'
+		);
+	} );
+} );
+
+describe( 'MergeDialogBody, a Custom HTML block inside a container', () => {
+	const side = ( markup ) =>
+		'<!-- wp:group {"metadata":{"syncId":"g1"}} -->\n' +
+		'<div class="wp-block-group"><!-- wp:html {"metadata":{"syncId":"h1"}} -->\n' +
+		markup +
+		'\n<!-- /wp:html --></div>\n' +
+		'<!-- /wp:group -->';
+	const conflict = {
+		base: side( '<b>Base markup</b>' ),
+		proposed: side( '<b>Proposed markup</b>' ),
+		current: side( '<b>Current markup</b>' ),
+	};
+
+	it( 'shows the nested markup in both panes and hands it back on accept', async () => {
+		const user = userEvent.setup();
+		const onAccept = jest.fn();
+		const { container } = renderBody( conflict, { onAccept } );
+		await act( async () => {} );
+
+		const [ proposedPane, currentPane ] = container.querySelectorAll(
+			'.gse-review-merge-dialog__pane-content'
+		);
+		expect( proposedPane ).toHaveTextContent( 'Proposed markup' );
+		expect( currentPane ).toHaveTextContent( 'Current markup' );
+
+		await user.click( screen.getByRole( 'button', { name: 'Accept' } ) );
+		expect( onAccept.mock.calls[ 0 ][ 0 ] ).toContain(
+			'<b>Current markup</b>'
 		);
 	} );
 } );

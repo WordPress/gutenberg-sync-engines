@@ -195,12 +195,16 @@ describe( 'TableMergeDialogBody', () => {
 
 describe( 'tableGridsOf', () => {
 	it( "reads the three grids out of a record's serialized sides", () => {
-		expect( tableGridsOf( TABLE_CONFLICT ) ).toEqual( TABLE_GRIDS );
+		expect( tableGridsOf( TABLE_CONFLICT ) ).toEqual( {
+			...TABLE_GRIDS,
+			isBaseMissing: false,
+		} );
 	} );
 
 	it( 'stands the current version in for a missing base', () => {
 		const grids = tableGridsOf( { ...TABLE_CONFLICT, base: null } );
 		expect( grids.base ).toEqual( TABLE_GRIDS.current );
 		expect( grids.yours ).toEqual( TABLE_GRIDS.yours );
+		expect( grids.isBaseMissing ).toBe( true );
 	} );
 } );
