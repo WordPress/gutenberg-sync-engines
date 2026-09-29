@@ -112,33 +112,29 @@ The plugin registers via:
 
 ## Development
 
-The framework is maintained in a separate Gutenberg branch and checked out
-at `gutenberg/` as a **Git submodule**. Each plugin commit pins one exact
+The framework is maintained in a separate Gutenberg branch and copied into `gutenberg/` as a **squashed Git subtree**. Each plugin commit pins one exact
 framework commit. The plugin loads this bundled copy when no standalone
 Gutenberg plugin is active.
 
 ### Setup
 
 ```bash
-git submodule update --init --recursive
 composer install          # PHP tooling
 npm install               # Plugin dependencies
 cd gutenberg && npm ci --ignore-scripts && npm run build && cd ..
 npm run build             # Plugin client bundle
 ```
 
-A fresh clone can use `git clone --recurse-submodules`. After switching
-plugin branches or creating a plugin worktree, run the submodule update
-command again, then rebuild if its pin changed. Save any local framework
-edits before updating its checkout.
+A normal clone includes the Gutenberg source. After switching plugin
+revisions, rebuild it if the bundled version changed.
 
 Framework development, rebasing, and updating the pin are described in
-[docs/gutenberg-submodule.md](docs/gutenberg-submodule.md).
+[docs/gutenberg-subtree.md](docs/gutenberg-subtree.md).
 
 ### Environment
 
 ```bash
-npm run env start         # Start WordPress (Gutenberg submodule + this plugin)
+npm run env start         # Start WordPress (Gutenberg subtree + this plugin)
 npm run env stop          # Stop it
 ```
 
@@ -156,7 +152,7 @@ npm run playground
 ```bash
 npm run test:js           # Jest — engines/providers + frozen-core vectors
 npm run test:php          # PHPUnit in the wp-env tests container (loads the
-                          # Gutenberg submodule as the framework, then the plugin)
+                          # Gutenberg subtree as the framework, then the plugin)
 npm run test:e2e          # Playwright — two-browser collaboration against the
                           # running env (needs `npx playwright install chromium`)
 ```

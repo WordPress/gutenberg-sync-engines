@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # Builds gutenberg-sync-engines.zip: a self-contained, ready-to-install
 # WordPress plugin. The zip bundles the pinned Gutenberg plugin (built from
-# the gutenberg/ submodule) so the collaborative-editing framework is present
+# the gutenberg/ subtree) so the collaborative-editing framework is present
 # on any WordPress installation — the plugin entry loads the bundled copy
 # when no other Gutenberg is active.
 #
 # Prerequisites (the release workflow runs these; locally, run them once):
-#   git submodule update --init --recursive
 #   npm ci
 #   cd gutenberg && npm ci --ignore-scripts && npm run build && cd ..
 #
@@ -16,13 +15,13 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 if [ ! -f gutenberg/gutenberg.php ]; then
-	echo "error: the Gutenberg submodule is not initialized." >&2
-	echo "  git submodule update --init --recursive" >&2
+	echo "error: the bundled Gutenberg source is missing." >&2
+	echo "  Restore gutenberg/ from this plugin revision before building." >&2
 	exit 1
 fi
 
 if [ ! -d gutenberg/build ]; then
-	echo "error: gutenberg/build is missing. Build the submodule first:" >&2
+	echo "error: gutenberg/build is missing. Build the subtree first:" >&2
 	echo "  cd gutenberg && npm ci --ignore-scripts && npm run build" >&2
 	exit 1
 fi

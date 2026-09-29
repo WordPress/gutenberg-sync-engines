@@ -31,7 +31,7 @@ Start here if you want to:
   [entity-sync-adapter.md](entity-sync-adapter.md) — the default
   adapter, its checks, and the remaining migration limits.
 - **Update the bundled Gutenberg framework** →
-  [gutenberg-submodule.md](gutenberg-submodule.md) — setup, rebasing,
+  [gutenberg-subtree.md](gutenberg-subtree.md) — setup, rebasing,
   updating the pin, and release packaging.
 - **See what we plan to build next** → [plan/](plan/README.md) — one
   file per bug or feature, written in plain language with an example

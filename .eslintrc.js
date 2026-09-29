@@ -9,7 +9,7 @@
 module.exports = {
 	root: true,
 	extends: [ 'plugin:@wordpress/eslint-plugin/recommended' ],
-	// The pinned Gutenberg submodule and generated output are never linted here;
+	// The pinned Gutenberg subtree and generated output are never linted here;
 	// y-utilities is vendored third-party code (from the Yjs ecosystem) with
 	// its own eslint-disable directives targeting a different config.
 	ignorePatterns: [

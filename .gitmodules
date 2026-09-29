@@ -1,4 +1,0 @@
-[submodule "gutenberg"]
-	path = gutenberg
-	url = https://github.com/WordPress/gutenberg.git
-	branch = try/sync-engines

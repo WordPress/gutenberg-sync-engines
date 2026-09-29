@@ -303,7 +303,7 @@ The framework/plugin split is complete: the framework ships **neither** engines
     commit and retained framework changes: `docs/entity-sync-adapter.md`.
   - `framework.ts` — unlocks `@wordpress/sync` private APIs once and re-exports
     the framework runtime the adapters use.
-- `gutenberg/` — a **pinned Git submodule of Gutenberg** (source only;
+- `gutenberg/` — a **pinned, squashed Git subtree of Gutenberg** (source only;
   see below). The BUNDLED runtime framework: the plugin entry loads
   `gutenberg/gutenberg.php` itself whenever no standalone Gutenberg is
   active (wp-env no longer mounts it as a separate plugin).
@@ -362,49 +362,37 @@ The framework/plugin split is complete: the framework ships **neither** engines
   already been tried and failed), `wontfix.md` (looked at, set aside,
   with reasons). The work itself lives in GitHub Issues, not here.
 
-## The `gutenberg/` submodule
+## The `gutenberg/` subtree
 
-The plugin pins a separate Gutenberg repository through a Git submodule.
-Its framework changes live in commits above upstream trunk. The plugin
-loads `gutenberg/gutenberg.php` when no standalone Gutenberg is active.
-Built assets and dependencies are generated locally and are not committed.
+The plugin includes Gutenberg source as a squashed Git subtree. Framework
+changes are visible in this repository and are also maintained as commits
+on the separate Gutenberg `try/sync-engines` branch. Rebase that branch onto
+upstream trunk, test it, then import the reviewed version here.
 
-Initialize before installing dependencies:
+The plugin loads `gutenberg/gutenberg.php` when no standalone Gutenberg is
+active. Dependencies and built assets are generated locally. A normal clone
+includes the source; CI needs no submodule setup. Release ZIPs include the
+built framework.
 
-```bash
-git submodule update --init --recursive
-```
-
-Run that command in each new plugin worktree and after changing the plugin
-branch or revision. Save framework edits first. CI checks out submodules
-before dependency installation. Release ZIPs include the built Gutenberg
-files, so users do not need Git.
-
-Maintain framework changes in the separate Gutenberg branch. After a rebase,
-run the framework and plugin checks, preserve the reviewed commit with a
-permanent tag, and update this repository's pin. The framework commit must
-be available at the configured remote before a plugin update is published.
-Publishing requires the user's separate instruction.
-
-The first pin is `89bea5705f66172e80a7b0c88598052d378595ce`, which includes
-PR #83410 and the plugin's default adapter integration. Retain the private
-API exports, post-lock fallback, and conflict-review integration on updates.
-See `docs/gutenberg-submodule.md` and `docs/entity-sync-adapter.md`.
+The bundled framework commit is `89bea5705f66172e80a7b0c88598052d378595ce`,
+above trunk `0d3eefe596560204e99bb1047df65e2e666a9ad1`. It includes PR #83410
+and the default adapter integration. Retain the private API exports,
+post-lock fallback, and conflict-review integration on updates.
+See `docs/gutenberg-subtree.md` and `docs/entity-sync-adapter.md`.
 
 ## Setup (from a clean checkout)
 
 ```bash
-git submodule update --init --recursive
 composer install          # PHP tooling (PHPCS/WPCS, PHPUnit 9 + polyfills)
 npm install               # JS tooling (@wordpress/scripts, wp-env, Playwright)
-npm run build             # This plugin's client bundle → build/sync-engines.js
 
 # Build the vendored Gutenberg once (source-only in git). Heavy (~1-2 min build,
 # plus a large npm install). Required for wp-env to serve working editor assets
-# AND for Jest/typecheck, which resolve @wordpress/sync + yjs from the submodule.
-# --ignore-scripts skips install hooks; npm run build regenerates required
-# library and manifest outputs.
+# AND for Jest/typecheck, which resolve @wordpress/sync + yjs from the subtree.
+# --ignore-scripts skips the Husky install hook, which needs a Git root.
+# npm run build regenerates required library and manifest outputs.
 cd gutenberg && npm install --ignore-scripts && npm run build && cd ..
+npm run build             # This plugin's client bundle → build/sync-engines.js
 ```
 
 ## Environment
@@ -414,7 +402,7 @@ set `testsEnvironment: false`, so each starts a single site):
 
 ```bash
 npm run env start         # DEV env (.wp-env.json): this plugin (which loads
-                          # the bundled Gutenberg submodule itself),
+                          # the bundled Gutenberg subtree itself),
                           # http://localhost:8888. Its afterStart
                           # lifecycle hook auto-starts the websocket sync
                           # daemon (detached, --mode=daemon: the site's
@@ -485,7 +473,7 @@ fast → slow (only the last three need wp-env):
    planner/merge-behavior change: fails loudly on oracle violations and
    prints disposition/escalation stats so drift is visible.
 2. **Jest + frozen vectors** — `npm run test:js` (needs only the built
-   submodule). Engines, providers, and the cross-language vector contract.
+   subtree). Engines, providers, and the cross-language vector contract.
 3. **Vendored conformance suites** — y-php (~4 s) and automerge-php
    (<1 s), commands above; no WordPress. Only when touching the vendored
    libs (rare — they're frozen).
@@ -518,12 +506,12 @@ PHPUnit wipes the tests-env database, killing every in-flight spec
 (auth and plugin activation vanish mid-run). Serialize the suites.
 
 `test:js` and `npm run typecheck` resolve `@wordpress/sync`/`yjs` from the
-**built submodule** (see Setup); `WP_SYNC_FRAMEWORK_ROOT=<framework-checkout>`
+**built subtree** (see Setup); `WP_SYNC_FRAMEWORK_ROOT=<framework-checkout>`
 points Jest at a live framework checkout instead when co-developing (tsconfig
-paths stay pinned to the submodule).
+paths stay pinned to the subtree).
 
 `test:php` and `test:e2e` need the running TESTS env (`npm run env:tests
-start`) with the submodule built; both target `.wp-env.tests.json` (test:php
+start`) with the subtree built; both target `.wp-env.tests.json` (test:php
 runs PHPUnit in that env's cli container, Playwright's webServer starts that
 env when 8889 is not already serving). For e2e also run `npx playwright install chromium` once. If the
 tests site isn't on `:8889` (auto-port / override), pass
@@ -537,12 +525,12 @@ global-setup REST call dying with
 
 All suites are green at head; CI (`.github/workflows/ci.yml`) is the
 source of truth for exact test counts — it certifies every suite
-(including `composer lint`, the websocket e2e lane, and the submodule's
+(including `composer lint`, the websocket e2e lane, and the subtree's
 collaboration-review-panel component Jest) on pushes to `main` and
 PRs. The v1 integration tree passed the full default e2e suite three
 consecutive times with retries disabled; the old login
 flake is closed by the plugin-local hardened fixtures
-(`tests/e2e/config/collaboration-fixtures.ts` — the root-cause submodule
+(`tests/e2e/config/collaboration-fixtures.ts` — the root-cause subtree
 fixture fix remains upstream/human-owned). One known intermittent
 remains: the parked-A12 residual (intent-log mid-burst compaction
 splice, issue #37), firing ~1-2 of 8 under the repetition hammer; the
@@ -611,7 +599,7 @@ they exist so a failure is observable without re-instrumenting:
 
 - **`npm run doctor`** — read-only environment preflight
   (`tests/e2e/bin/rtc-dev.mjs --mode=doctor`): builds present (plugin
-  bundle, submodule, submodule node_modules), both wp-env environments
+  bundle, subtree, subtree node_modules), both wp-env environments
   (running? REST reachable? which port?), the worktree plugin-copy
   activation arrangement (double-mount fatals), whether the plugin
   actually loaded (`wp collaboration` commands registered), current
@@ -680,7 +668,7 @@ they exist so a failure is observable without re-instrumenting:
 ## Gotchas (each of these has bitten — don't rediscover them)
 
 - **Jest scope:** `jest.config.js` sets `roots: [src, tests]`. Without it,
-  `wp-scripts test-unit-js` recurses into the submodule's ~1030 monorepo suites.
+  `wp-scripts test-unit-js` recurses into the subtree's ~1030 monorepo suites.
 - **phpcs scope:** `phpcs.xml.dist` excludes `/gutenberg/*`.
 - **Slow awareness rides whatever carries awareness.** Over the sync
   transport the block name goes out on the framework awareness state
@@ -711,12 +699,12 @@ they exist so a failure is observable without re-instrumenting:
   `yoast/phpunit-polyfills` pull 10 makes every PHP test error.
 - **PHP test bootstrap** (`tests/bootstrap.php`) loads the framework before the
   plugin: it resolves the framework plugin from `WP_SYNC_FRAMEWORK_PLUGIN`
-  (env/const) else defaults to the submodule's wp-env path
+  (env/const) else defaults to the subtree's wp-env path
   (`WP_PLUGIN_DIR/gutenberg/gutenberg.php`). Otherwise `WP_Sync_Post_Meta_Storage
   not found`.
-- **e2e uses the submodule's collaboration fixtures**, so it must load a single
-  `@playwright/test`. The submodule's `npm install` re-creates its own (identical)
-  copy → Playwright "two instances" error. `pretest:e2e` rimrafs the submodule's
+- **e2e uses the subtree's collaboration fixtures**, so it must load a single
+  `@playwright/test`. The subtree's `npm install` re-creates its own (identical)
+  copy → Playwright "two instances" error. `pretest:e2e` rimrafs the subtree's
   copy so fixtures resolve up to this plugin's. The runner is `playwright test`
   **directly** — NOT `wp-scripts test-e2e` (v30's is the jest+puppeteer runner).
 - **e2e global setup is plugin-local** (`tests/e2e/config/global-setup.ts`): auth,
@@ -727,7 +715,7 @@ they exist so a failure is observable without re-instrumenting:
   itself needs no activation — the plugin loads its bundled Gutenberg — but the
   setup DOES deactivate a stale `gutenberg-stub` activation left by an aborted
   precedence-spec run (an active stub blocks the bundled framework). We deliberately
-  do NOT reuse the submodule's global-setup (it deactivates a Gutenberg test
+  do NOT reuse the subtree's global-setup (it deactivates a Gutenberg test
   plugin this env doesn't need touched). Ours also runs the WS-provider setup
   (`tests/e2e/config/rtc-websocket-setup.ts`), gated on
   `GUTENBERG_RTC_TEST_WS_PROVIDER`.
@@ -889,7 +877,7 @@ applies.
   shrinking an over-limit room via epoch compaction stays post-v1).
   Materialization fidelity is FIXED as of PR #35: every Y.Block carries
   a `_save` mirror (its registered save() output, refreshed on attribute
-  merges; the submodule's `crdt-blocks.ts` writes it under the exported
+  merges; the subtree's `crdt-blocks.ts` writes it under the exported
   `CRDT_BLOCK_SAVE_KEY`) and the engine prefers it over genesis
   wrappers, so attribute-driven wrapper changes materialize. The genesis
   rich-text defect (stripped inner markup landing in the first

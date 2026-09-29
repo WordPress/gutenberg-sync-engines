@@ -7,12 +7,13 @@ polling, SSE, or WebSocket.
 
 ## Upstream source
 
-The Gutenberg submodule includes the entity sync API merged in
+The Gutenberg subtree includes the entity sync API merged in
 `05068f8ec12b665a01fcd66d350cd4579d94ff22` ([PR #83410](https://github.com/WordPress/gutenberg/pull/83410)).
-The initial submodule pin is `89bea5705f66172e80a7b0c88598052d378595ce`:
+The bundled framework commit is `89bea5705f66172e80a7b0c88598052d378595ce`:
 four framework commits above trunk `0d3eefe596560204e99bb1047df65e2e666a9ad1`.
-The Git submodule entry is the source of truth for the current pin.
-See [the framework workflow](gutenberg-submodule.md) for updates.
+The source is committed under `gutenberg/`, so framework changes are visible
+in this repository.
+See [the framework workflow](gutenberg-subtree.md) for updates.
 
 The landed API uses `beforeSave` and `afterSave`. It does not include the
 `prepareSave` API from our earlier local experiment. The plugin now follows
@@ -52,7 +53,7 @@ plugin registration point. Our vendored copy makes these changes:
 
 The PHP room server and other framework extensions remain in the vendored
 copy. This change does not make the plugin compatible with unmodified
-upstream Gutenberg, or remove the need for the submodule.
+upstream Gutenberg, or remove the need for the subtree.
 
 ## Checks
 
