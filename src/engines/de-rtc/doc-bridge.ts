@@ -17,7 +17,7 @@ import type { SyncConfig } from '@wordpress/sync';
 /**
  * Internal dependencies
  */
-import { CRDT_RECORD_MAP_KEY } from '../yjs/constants';
+import { CRDT_RECORD_MAP_KEY } from '../../shared/yjs/constants';
 
 /**
  * Origin tag for Yjs transactions that apply server-accepted canonical

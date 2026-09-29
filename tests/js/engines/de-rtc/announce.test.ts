@@ -24,7 +24,7 @@ import {
 	DE_RTC_SNAPSHOT_TYPE,
 	setDeRtcBurstQuietMsForTesting,
 } from '../../../../src/engines/de-rtc/session';
-import { CRDT_RECORD_MAP_KEY } from '../../../../src/engines/yjs/constants';
+import { CRDT_RECORD_MAP_KEY } from '../../../../src/shared/yjs/constants';
 // eslint-disable-next-line import/no-unresolved -- Provided at runtime as wp.sync.
 import type { SyncConfig } from '@wordpress/sync';
 

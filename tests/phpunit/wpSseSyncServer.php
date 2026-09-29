@@ -165,7 +165,7 @@ class Tests_Collaboration_WpSseSyncServer extends WP_Test_REST_TestCase {
 											'baseSeq'  => 0,
 											'type'     => 'insert_text',
 											'payload'  => array(
-												'syncId' => WP_Intent_Log_Planner::genesis_sync_id( $this->post_id, 0, array( 0 ) ),
+												'syncId' => WP_Sync_Block_Identity::genesis_sync_id( $this->post_id, 0, array( 0 ) ),
 												'field'  => 'content',
 												'offset' => 0,
 												'text'   => 'x',

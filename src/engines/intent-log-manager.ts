@@ -17,7 +17,7 @@ import { getBlockType, getSaveContent } from '@wordpress/blocks';
 /**
  * Internal dependencies
  */
-import { createAwarenessDoc } from './awareness-sync';
+import { createAwarenessDoc } from '../shared/awareness-sync';
 import { registerAwareness } from '../awareness/registry';
 import {
 	applyDerivedIntents,

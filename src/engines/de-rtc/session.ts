@@ -13,7 +13,7 @@ import type {
 	EngineSessionCodec,
 	EngineUpdate,
 } from '@wordpress/sync';
-import { applyServerAwarenessStates } from '../awareness-sync';
+import { applyServerAwarenessStates } from '../../shared/awareness-sync';
 import { announceLocalWrite } from '../../providers/advisory/announce';
 import type { TransportSessionExtensions } from '../../providers/session-extensions';
 import type { DeRtcCommitAdapter } from './commit';

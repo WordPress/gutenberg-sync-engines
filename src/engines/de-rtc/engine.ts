@@ -19,13 +19,16 @@ import type {
  * Internal dependencies
  *
  * The local Y.Doc is an EDITOR BRIDGE only (block model, undo scope,
- * awareness anchor) reusing the shared `engines/yjs/` schema; the sync
+ * awareness anchor) reusing the shared `shared/yjs/` schema; the sync
  * substrate is de-rtc's proposal wire — the server's canonical document
  * is a serialized-block string, never a CRDT.
  */
-import { CRDT_RECORD_MAP_KEY } from '../yjs/constants';
-import { createYjsDoc, serializeCrdtDoc } from '../yjs/doc';
-import { docContainsSnapshot, encodeDocSnapshot } from '../yjs/snapshot';
+import { CRDT_RECORD_MAP_KEY } from '../../shared/yjs/constants';
+import { createYjsDoc, serializeCrdtDoc } from '../../shared/yjs/doc';
+import {
+	docContainsSnapshot,
+	encodeDocSnapshot,
+} from '../../shared/yjs/snapshot';
 import { createDeRtcAuthorship, type DeRtcBlockAuthorship } from './authorship';
 import {
 	createDeRtcRevertUndoManager,
@@ -34,7 +37,7 @@ import {
 } from './revert-undo';
 import { createDeRtcCommitAdapter } from './commit';
 import { registerSaveBaseVersion } from './save-base-version';
-import { applyServerAwarenessStates } from '../awareness-sync';
+import { applyServerAwarenessStates } from '../../shared/awareness-sync';
 import { registerAwareness } from '../../awareness/registry';
 import {
 	createDeRtcDocBridge,

@@ -15,7 +15,7 @@ import type {
 	IntentDisposition,
 	IntentEnvelope,
 } from './intent-log/engine-types';
-import { applyServerAwarenessStates } from './awareness-sync';
+import { applyServerAwarenessStates } from '../shared/awareness-sync';
 import type {
 	AwarenessState,
 	EngineDisposition,
