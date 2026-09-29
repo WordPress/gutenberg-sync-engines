@@ -5,6 +5,7 @@
     "moduleResolution": "node",
     "baseUrl": ".",
     "paths": {
+      "@wordpress/core-data": [ "./gutenberg/packages/core-data/build-types" ],
       "@wordpress/sync": [ "./gutenberg/packages/sync/src" ],
       "@wordpress/blocks": [
         "./gutenberg/node_modules/@wordpress/blocks/build-types"

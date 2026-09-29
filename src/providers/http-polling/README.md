@@ -62,8 +62,8 @@ The loop is driven by the cadence rules in `docs/plan/advisory-channel.md`
   30 s discovery window after page load and after the tab regains focus,
   when the 4000 ms solo cadence applies. The room
   queues are HELD: local updates wait in the browser
-  until company arrives, a save (an `apiFetch` middleware flushes them
-  first, `save-flush.ts`), or the tab going hidden. Codecs that declare
+  until company arrives, a save (the entity adapter flushes them
+  first through `beforeSave`), or the tab going hidden. Codecs that declare
   `sendsWhileAlone` (de-rtc) are exempt and send 300 ms after the first
   queued update. Company restarts the timer cadence and releases the queues.
 - **Company, some peer not on the advisory channel**: 1000 ms (the

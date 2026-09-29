@@ -84,10 +84,6 @@ jest.mock( '../../../../src/providers/sse/sse-exchange', () => ( {
 	SseExchange: jest.fn( () => mockSseExchange ),
 } ) );
 
-jest.mock( '../../../../src/providers/http-polling/save-flush', () => ( {
-	registerSaveFlush: jest.fn(),
-} ) );
-
 jest.mock( '../../../../src/providers/advisory/channel', () => ( {
 	advisoryCoversClients: () => mockCoverage,
 	getChannelPresence: () => mockChannelPresence,

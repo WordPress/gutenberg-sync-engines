@@ -297,6 +297,10 @@ The framework/plugin split is complete: the framework ships **neither** engines
     on EVERY awareness instance the engines create, in every mode: a
     peer can carry the field at any time and core-data throws on an
     unknown field. Jest: `tests/js/awareness/`.
+  - `entity-sync/` — registers the default entity sync adapter after engines
+    and transports. It wraps the vendored core-data bridge and flushes held
+    HTTP updates through `beforeSave`. There is no opt-in bundle. Upstream
+    commit and retained framework changes: `docs/entity-sync-adapter.md`.
   - `framework.ts` — unlocks `@wordpress/sync` private APIs once and re-exports
     the framework runtime the adapters use.
 - `gutenberg/` — a **pinned, squashed git subtree of Gutenberg** (source only;
@@ -378,6 +382,11 @@ Bump the pin with a squashed subtree pull from the framework checkout:
 ```bash
 git subtree pull --prefix gutenberg <path-to-gutenberg-framework-checkout> <branch> --squash
 ```
+
+The subtree also includes Gutenberg's merged entity sync API
+commit `05068f8ec12b665a01fcd66d350cd4579d94ff22`, applied to the pin. The plugin
+owns default registration; retain the private API exports and conflict-review
+integration when updating. See `docs/entity-sync-adapter.md`.
 
 After a bump, re-run `cd gutenberg && npm install && npm run build`. A subtree
 `npm run build` may touch a tracked snapshot (e.g. readable-js-assets); revert

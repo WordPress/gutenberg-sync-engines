@@ -13,13 +13,9 @@
  * finds no engine/transport to negotiate and the editor falls back to the
  * classic post lock — real-time collaboration effectively disabled.
  *
- * NOTE: the moved engine adapters and providers under `engines/` and
- * `providers/` still import framework internals by relative path (their
- * origin inside `@wordpress/sync`). Those imports, and the exact shape of
- * the unlocked surface below, are the coordinated Gutenberg change tracked
- * in PORTING.md. `@wordpress/sync` is externalized to the `wp.sync` runtime
- * global at build time (dependency extraction), so this plugin ships no copy
- * of the framework.
+ * Core-data receives record loads, edits, saves and cleanup through the
+ * entity adapter registered below. The bundled bridge preserves each engine's
+ * snapshots, undo metadata, connection status and conflict-review handlers.
  */
 
 /**
@@ -39,6 +35,7 @@ import { createHttpPollingProvider } from './providers/http-polling/http-polling
 import { createWebSocketProvider } from './providers/websocket/websocket-provider';
 import { createSseProvider } from './providers/sse/sse-provider';
 import { bootstrapSlowAwareness } from './awareness';
+import { registerPluginEntitySync } from './entity-sync';
 
 const { registerSyncEngine, registerSyncTransport } = unlock( privateApis );
 
@@ -65,6 +62,9 @@ registerSyncTransport( {
 	protocolVersion: 1,
 	create: createSseProvider,
 } );
+
+// Core-data receives lifecycle events through the plugin adapter in every mode.
+registerPluginEntitySync();
 
 // Slow awareness (block presence on a slow cadence), when the site has
 // turned it on; see src/awareness/.
