@@ -2,6 +2,7 @@
 import { addFilter } from '@wordpress/hooks';
 import { createHigherOrderComponent } from '@wordpress/compose';
 import { useIsInsideReviewSurface } from '../components/review-surface';
+import { useTypingHold } from '../typing-hold';
 import ConflictBlock, { useBlockConflicts } from '../components/conflict-block';
 
 /**
@@ -21,8 +22,14 @@ const withConflictReview = createHigherOrderComponent(
 		const conflicts = useBlockConflicts( props.clientId );
 		// The dialogs' own editors show the record's sides, never cards.
 		const isInsideReview = useIsInsideReviewSurface();
+		// The card waits while the person is still typing in the block,
+		// when the engine keeps the record up with that typing.
+		const isHeld = useTypingHold(
+			props.clientId,
+			! isInsideReview && true === conflicts[ 0 ]?.followsTyping
+		);
 
-		if ( ! conflicts.length || isInsideReview ) {
+		if ( ! conflicts.length || isInsideReview || isHeld ) {
 			return <BlockEdit { ...props } />;
 		}
 

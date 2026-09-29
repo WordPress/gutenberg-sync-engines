@@ -189,8 +189,16 @@ export function createDeRtcReviewState(): DeRtcReviewState {
 			// decision closes the whole lineage). An accepted replacement
 			// applies ONCE, on the task's latest revision; the superseded
 			// revisions close as dismissed.
+			// Revisions the server already closed (it closes the rows a
+			// newer row of the same author and blocks replaces) need no
+			// request of their own.
 			const item = open.get( proposalId );
-			const ids = [ proposalId, ...( item?.supersededIds ?? [] ) ];
+			const ids = [
+				proposalId,
+				...( item?.supersededIds ?? [] ).filter(
+					( id ) => ! resolvedIds.has( id )
+				),
+			];
 			ids.forEach( ( id ) => resolvedIds.add( id ) );
 			if ( open.delete( proposalId ) ) {
 				notify();

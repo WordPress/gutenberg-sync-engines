@@ -688,6 +688,9 @@ export function createDeRtcEngine(): SyncEngine & {
 								.map( ( block ) => block.html )
 								.join( '\n\n' ),
 							current,
+							// The server sets an author's later typing
+							// aside into the same record.
+							followsTyping: true,
 						};
 					} ),
 					/*

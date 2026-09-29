@@ -887,6 +887,21 @@ applies.
   in `src/index.ts`, and takes the reviewer's decision back through
   `resolveConflict` (`accept` with the merged content, or `dismiss`).
   The ENGINE applies the decision; the UI never writes to the canvas.
+  A card WAITS while its author is still typing in the block
+  (`src/review/typing-hold.ts`: 1.2 s without typing, 20 s at most),
+  but only for records an engine marks `followsTyping`, which promises
+  that later typing is set aside into the same record. Only de-rtc
+  promises it: the server falls back to the base form on the author's
+  own open review row when the declared block base version is pruned
+  (20 snapshots, one version per accepted commit: about 3 minutes for
+  one typist at the default 10 s commit cadence, seconds at cadence 0,
+  which the e2e setup pins), waives the commit cadence at the first
+  typing pause while the client has an open record of its own (the
+  rest of the sentence would otherwise wait out the 10 s), and closes the rows a
+  newer row of the same author and blocks replaces (`superseded`).
+  intent-log must NOT opt in yet: after a park it accepts the author's
+  next keystrokes at offsets that count the parked text, which
+  scrambles the paragraph. The early card is what limits that today.
   intent-log builds records in `src/engines/intent-log-conflicts.ts`
   and authors an accepted result as a new change; de-rtc parks
   escalations as durable `parked` rows and resolves them over its REST

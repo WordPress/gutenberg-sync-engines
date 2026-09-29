@@ -191,6 +191,83 @@ class Tests_Collaboration_WpDeRtcBlockConflictSalvage extends WP_UnitTestCase {
 	}
 
 	/**
+	 * Someone who keeps typing after their edit was set aside, while the
+	 * room advances past the bounded version snapshots: the version their
+	 * block started from is gone, so the base form stored on their own
+	 * open review row stands in. The later typing parks again (it never
+	 * overwrites the peer) and replaces the earlier row, so one record
+	 * stays open and it keeps the base the first edit started from.
+	 */
+	public function test_typing_on_after_a_park_parks_again_once_the_true_base_is_pruned() {
+		$engine = $this->engine();
+		$this->assertSame( $this->genesis(), $engine->materialize( $this->room() ) );
+
+		// The first paragraph of the canonical content, retyped.
+		$retype = function ( string $typed ): string {
+			return preg_replace( '#<p>.*?</p>#', '<p>' . $typed . '</p>', $this->engine()->materialize( $this->room() ), 1 );
+		};
+
+		// The peer types Alpha one version at a time.
+		$limit      = wp_de_rtc_get_automerge_version_snapshot_limit();
+		$text       = 'Peer';
+		$head       = 'v1';
+		$peer_types = function ( int $count ) use ( $engine, $retype, &$text, &$head ) {
+			for ( $i = 0; $i < $count; $i++ ) {
+				$text  .= ' word';
+				$result = $engine->handle_updates( $this->room(), 621, 0, array( $this->proposal( 'p-peer-' . strlen( $text ), $head, $retype( $text ) ) ), array() );
+				$this->assertSame( 'applied', $result['dispositions'][0]['status'] );
+				$head = $result['dispositions'][0]['version'];
+			}
+		};
+		$peer_types( 5 );
+
+		// My first keystroke, from v1, conflicts and parks.
+		$first  = str_replace( 'Alpha block original text.', 'M', $this->genesis() );
+		$result = $engine->handle_updates( $this->room(), 622, 0, array( $this->proposal( 'p-mine-1', 'v1', $first ) ), array() );
+		$this->assertCount( 1, $this->parked_rows( $engine ), 'The first keystroke parks.' );
+		$head = $result['dispositions'][0]['version'] ?? $head;
+
+		// The peer types on, past the snapshot limit: v1 is no longer held.
+		$peer_types( $limit + 3 );
+
+		// I keep typing: the whole-document base has advanced, and the
+		// block declares its true base, v1, which is pruned.
+		foreach ( array( 'My', 'My full sentence' ) as $step => $typed ) {
+			$result = $engine->handle_updates(
+				$this->room(),
+				622,
+				0,
+				array( $this->proposal( 'p-mine-' . ( $step + 2 ), $head, $retype( $typed ), array( '0' => 'v1' ) ) ),
+				array()
+			);
+			$this->assertSame( 'applied', $result['dispositions'][0]['status'] );
+			$this->assertSame( 1, $result['dispositions'][0]['parkedBlocks'] ?? null, 'The later typing parks again.' );
+			$head = $result['dispositions'][0]['version'] ?? $head;
+		}
+
+		$final = $this->engine()->materialize( $this->room() );
+		$this->assertStringContainsString( $text, $final, 'The peer\'s text stays.' );
+		$this->assertStringNotContainsString( 'My full sentence', $final, 'The later typing never overwrites the peer.' );
+
+		// One record stays open: the newest row, with the first base.
+		$response = $engine->get_updates_since( $this->room(), 999, 0, array() );
+		$open     = array();
+		foreach ( $response['updates'] as $update ) {
+			$decoded = json_decode( $update['data'], true );
+			if ( WP_De_RTC_Engine::UPDATE_TYPE_PARKED === $update['type'] ) {
+				$open[ $decoded['proposalId'] ] = $decoded;
+			} elseif ( WP_De_RTC_Engine::UPDATE_TYPE_RESOLVED === $update['type'] ) {
+				$this->assertSame( 'superseded', $decoded['resolution'] );
+				unset( $open[ $decoded['proposalId'] ] );
+			}
+		}
+		$this->assertSame( array( 'p-mine-3' ), array_keys( $open ) );
+		$block = $open['p-mine-3']['changedBlocks'][0];
+		$this->assertStringContainsString( 'My full sentence', $block['html'] );
+		$this->assertStringContainsString( 'Alpha block original text.', $block['baseHtml'] );
+	}
+
+	/**
 	 * The documented residual: a client that does NOT declare per-block
 	 * bases still presents a clean sole-writer change and overwrites —
 	 * the map is what retires the LWW.

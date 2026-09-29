@@ -393,6 +393,77 @@ describe( 'de-rtc announce model', () => {
 		}
 	} );
 
+	it( 'an open review record of its own waives the cadence at the first pause in the typing', () => {
+		jest.useFakeTimers();
+		setDeRtcBurstQuietMsForTesting( 500 );
+		( window as any )._gutenbergSyncEnginesSettings = {
+			deRtcCommitIntervalMs: 10_000,
+		};
+		try {
+			const { entity, session, sent } = makeSession();
+			const proposals = () =>
+				sent.filter(
+					( update ) => DE_RTC_PROPOSAL_TYPE === update.type
+				);
+			session.receiveUpdate( snapshotRow( 'v1', contentOf( BLOCK_A ) ) );
+
+			// The first keystroke commits at once, and is set aside.
+			entity.applyLocalChanges(
+				{ blocks: [ BLOCK_B ] } as any,
+				'editor',
+				{}
+			);
+			expect( proposals() ).toHaveLength( 1 );
+			const first = JSON.parse( proposals()[ 0 ].data );
+			session.receiveUpdate( {
+				type: 'parked',
+				data: JSON.stringify( {
+					proposalId: first.proposalId,
+					reason: 'manual-conflict-required',
+					authorClientId: Number(
+						first.proposalId.split( '-' )[ 1 ]
+					),
+					author: 7,
+					at: 1000,
+					baseVersion: 'v1',
+					changedBlocks: [ { index: 0, html: 'Beta' } ],
+				} ),
+			} );
+			session.receiveDispositions?.( [
+				{
+					intentId: first.proposalId,
+					status: 'applied',
+				},
+			] );
+
+			// The person types on. Nothing goes out while they type.
+			entity.applyLocalChanges(
+				{ blocks: [ BLOCK_C ] } as any,
+				'editor',
+				{}
+			);
+			jest.advanceTimersByTime( 300 );
+			entity.applyLocalChanges(
+				{ blocks: [ BLOCK_C, BLOCK_B ] } as any,
+				'editor',
+				{}
+			);
+			jest.advanceTimersByTime( 300 );
+			expect( proposals() ).toHaveLength( 1 );
+
+			// At the pause the rest goes out, well inside the cadence.
+			jest.advanceTimersByTime( 300 );
+			expect( proposals() ).toHaveLength( 2 );
+			expect(
+				JSON.parse( proposals()[ 1 ].data ).proposedContent
+			).toContain( 'Gamma' );
+		} finally {
+			delete ( window as any )._gutenbergSyncEnginesSettings;
+			setDeRtcBurstQuietMsForTesting( 0 );
+			jest.useRealTimers();
+		}
+	} );
+
 	it( 'REGRESSION: a snapshot arriving mid-typing-burst is deferred until the burst quiets', async () => {
 		// The e2e gap: our own proposal settles by hash MID-BURST, so for
 		// one inter-keystroke window dirty and inFlight are both false —

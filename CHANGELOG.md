@@ -24,6 +24,11 @@ release, which the release script generates from the commit history.
     shows a card with its markup as inert text. Users allowed to publish
     unfiltered HTML can open a dialog to approve, edit, or remove it.
 
+-   de-rtc: a review card waits for a pause in typing (1.2 seconds, 20
+    seconds at most) before it replaces a block its author is still
+    typing in. The typing that follows a set-aside edit joins the same
+    review record, so the reviewer sees the whole sentence.
+
 -   A "Changes to review" panel in the document sidebar. It lists the
     set-aside changes that have no block to show a card on, such as a
     post title or a proposed new block.

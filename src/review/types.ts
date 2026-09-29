@@ -43,6 +43,15 @@ export interface SyncConflict {
 	 * The target as this client's document has it now.
 	 */
 	current: string;
+	/**
+	 * Whether the record keeps up with an author who types on: the engine
+	 * sets their later edits to the same blocks aside too and folds them
+	 * into this record. The card then waits for a pause in the typing
+	 * (see typing-hold.ts), so the record carries the whole sentence.
+	 * Without it the card replaces the block at once, which stops the
+	 * typing before the engine can misplace it.
+	 */
+	followsTyping?: boolean;
 }
 
 /**

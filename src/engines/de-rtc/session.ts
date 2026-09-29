@@ -318,6 +318,21 @@ export function createDeRtcSessionCodec(
 	let lastCommitBuiltAt = 0;
 	let cadenceTimer: ReturnType< typeof setTimeout > | null = null;
 
+	/**
+	 * Whether this client has blocks of its own set aside for review.
+	 */
+	function hasOwnOpenRecord(): boolean {
+		return (
+			review
+				?.getOpen()
+				.some(
+					( parked ) =>
+						parked.authorClientId === doc.clientID &&
+						! parked.property
+				) ?? false
+		);
+	}
+
 	function maybePropose(): void {
 		if (
 			! dirty ||
@@ -341,10 +356,33 @@ export function createDeRtcSessionCodec(
 			return;
 		}
 		if ( commitIntervalMs > 0 ) {
-			const wait = lastCommitBuiltAt + commitIntervalMs - Date.now();
+			let wait = lastCommitBuiltAt + commitIntervalMs - Date.now();
+			/*
+			 * An open review record of this client's own waives the
+			 * cadence at the first pause in the typing. The record was
+			 * opened by the first keystroke of the burst (a commit goes
+			 * out at once when the dial's window has passed), and the rest
+			 * of the sentence would otherwise wait out the window while
+			 * the reviewer is shown that one keystroke as the whole
+			 * proposal. Only the pause commits early: typing without an
+			 * open record keeps the dial's cadence.
+			 */
+			const waived = wait > 0 && hasOwnOpenRecord();
+			if ( waived ) {
+				wait = Math.min(
+					wait,
+					lastLocalEditAt + burstQuietMs - Date.now()
+				);
+			}
 			if ( wait > 0 ) {
 				// Hold the commit to the dial's cadence; dirty keeps
-				// coalescing and ONE timer re-enters at the boundary.
+				// coalescing and ONE timer re-enters at the boundary (a
+				// waived wait moves with every keystroke, so its timer
+				// is set again each time).
+				if ( waived && null !== cadenceTimer ) {
+					clearTimeout( cadenceTimer );
+					cadenceTimer = null;
+				}
 				if ( null === cadenceTimer ) {
 					cadenceTimer = setTimeout( () => {
 						cadenceTimer = null;
@@ -491,6 +529,11 @@ export function createDeRtcSessionCodec(
 						? decoded.changedBlocks
 						: [],
 				} as DeRtcParkedProposal );
+				if ( decoded.authorClientId === doc.clientID ) {
+					// Typing held to the cadence may now go out at the
+					// next pause (see maybePropose).
+					maybePropose();
+				}
 			}
 			return;
 		}

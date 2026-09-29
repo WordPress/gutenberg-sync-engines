@@ -15,6 +15,9 @@ import './hooks/sequestered-block';
 import './register-views';
 import './register-panel';
 import './style.scss';
+import { startTypingTracker } from './typing-hold';
+
+startTypingTracker();
 
 export {
 	registerConflictSource,

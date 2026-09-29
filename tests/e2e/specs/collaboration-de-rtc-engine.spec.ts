@@ -546,6 +546,283 @@ test.describe( 'Collaboration - de-rtc engine @engine-de-rtc', () => {
 		} ).toPass( { timeout: 20000 } );
 	} );
 
+	test( 'someone who types on after their edit was set aside keeps the block, and the reviewer gets the whole sentence', async ( {
+		collaborationUtils,
+		requestUtils,
+		editor,
+	} ) => {
+		test.setTimeout( 120_000 );
+
+		const post = await requestUtils.createPost( {
+			title: 'DE-RTC Typing Through A Conflict Test',
+			status: 'draft',
+			content:
+				'<!-- wp:paragraph -->\n<p>Contested paragraph words</p>\n<!-- /wp:paragraph -->',
+		} );
+
+		await openSession( collaborationUtils, post.id );
+		const { editor2, page2 } = collaborationUtils;
+		const page1 = editor.page;
+
+		const paragraph1 = editor.canvas
+			.locator( '[data-type="core/paragraph"]' )
+			.first();
+		const paragraph2 = editor2.canvas
+			.locator( '[data-type="core/paragraph"]' )
+			.first();
+		const isSyncPoll = ( url: URL ) =>
+			decodeURIComponent( url.href ).includes( '/wp-sync/v1/updates' );
+		const isAutosaveCommit = ( response: {
+			url: () => string;
+			request: () => { method: () => string };
+		} ) =>
+			decodeURIComponent( response.url() ).includes(
+				`/wp/v2/posts/${ post.id }/autosaves`
+			) && 'POST' === response.request().method();
+
+		// User two stays on the genesis version while user one rewrites
+		// (see the review-lane spec above for why the polls are held).
+		const heldPolls: Array< { continue: () => Promise< void > } > = [];
+		await page2.route( isSyncPoll, ( route ) => {
+			heldPolls.push( route );
+		} );
+
+		/*
+		 * At the commit cadence this suite pins (0, see the global
+		 * setup) nearly every keystroke advances the room by one version,
+		 * and the server keeps the last 20. User one's rewrite stays just inside
+		 * that, so user two's first keystroke still finds the version it
+		 * started from and is set aside. User two's own typing then runs
+		 * the room past it: the rest of the sentence relies on the base
+		 * form kept with their open record.
+		 */
+		const userOneText = 'Alpha bravo charlie';
+		await paragraph1.click( { clickCount: 3 } );
+		await page1.keyboard.type( userOneText, { delay: 50 } );
+		await expect( async () => {
+			const [ block ] = await editor.getBlocks();
+			expect( block.attributes.content ).toBe( userOneText );
+		} ).toPass( { timeout: 10000 } );
+		await page1.waitForTimeout( 3000 );
+
+		// User two rewrites the same words. The first keystroke's commit
+		// is set aside; user two keeps typing through it.
+		const userTwoText = 'Foxtrot golf hotel india juliet kilo';
+		const firstCommit = page2.waitForResponse( isAutosaveCommit, {
+			timeout: 30000,
+		} );
+		await paragraph2.click( { clickCount: 3 } );
+		const typing = page2.keyboard.type( userTwoText, { delay: 80 } );
+		await firstCommit;
+		for ( const route of heldPolls.splice( 0 ) ) {
+			await route.continue().catch( () => {} );
+		}
+		await page2.unroute( isSyncPoll );
+
+		// While user two types, their block is still a paragraph they can
+		// type in: no card has taken it.
+		const card = /has conflicting edits/;
+		await expect( editor2.canvas.getByText( card ) ).toHaveCount( 0 );
+		await typing;
+
+		// At the pause the card appears in both windows.
+		for ( const canvas of [ editor.canvas, editor2.canvas ] ) {
+			await expect( canvas.getByText( card ) ).toHaveCount( 1, {
+				timeout: 20000,
+			} );
+		}
+
+		// User one's text was never replaced.
+		const [ kept ] = await editor.getBlocks();
+		expect( kept.attributes.content ).toBe( userOneText );
+
+		// The reviewer sees the whole sentence as the proposed version,
+		// and the version both started from.
+		await editor.canvas
+			.getByRole( 'button', { name: 'Review conflict', exact: true } )
+			.click();
+		const dialog = page1.getByRole( 'dialog', {
+			name: 'Review conflicting edits',
+		} );
+		await expect( dialog ).toBeVisible( { timeout: 10000 } );
+		const proposedPane = dialog
+			.locator( '.gse-review-merge-dialog__pane' )
+			.first();
+		// The pane marks the changes word by word against the base, so
+		// the sentence reads there with the removed words in between.
+		for ( const word of userTwoText.split( ' ' ) ) {
+			await expect( proposedPane ).toContainText( word );
+		}
+		await expect( proposedPane.getByRole( 'deletion' ) ).not.toHaveCount(
+			0
+		);
+		await expect(
+			dialog.locator( '.gse-review-merge-dialog__notice' )
+		).toHaveCount( 0 );
+
+		// Accepting the proposed version lands it for both, and one
+		// decision closes the record everywhere.
+		await proposedPane
+			.getByRole( 'button', { name: 'Restore this version' } )
+			.click();
+		await dialog
+			.getByRole( 'button', { name: 'Accept', exact: true } )
+			.click();
+		await expect( dialog ).toBeHidden( { timeout: 10000 } );
+
+		await expect( async () => {
+			const [ blocks1, blocks2 ] = await Promise.all( [
+				editor.getBlocks(),
+				editor2.getBlocks(),
+			] );
+			expect( blocks1[ 0 ].attributes.content ).toBe( userTwoText );
+			expect( blocks2[ 0 ].attributes.content ).toBe( userTwoText );
+			expect( await editor.canvas.getByText( card ).count() ).toBe( 0 );
+			expect( await editor2.canvas.getByText( card ).count() ).toBe( 0 );
+		} ).toPass( { timeout: 30000 } );
+	} );
+
+	test( 'at the default commit cadence, typing that follows a set-aside edit goes out at the first pause', async ( {
+		collaborationUtils,
+		requestUtils,
+		editor,
+	} ) => {
+		test.setTimeout( 150_000 );
+
+		// The shipped default: one commit every 10 seconds. The editors
+		// read the setting when they load.
+		const setCommitCadence = ( seconds: number ) =>
+			requestUtils.rest( {
+				method: 'POST',
+				path: '/wp/v2/settings',
+				data: {
+					gutenberg_sync_engines_de_rtc_commit_interval: seconds,
+				},
+			} );
+		await setCommitCadence( 10 );
+
+		try {
+			const post = await requestUtils.createPost( {
+				title: 'DE-RTC Typing Through A Conflict At Cadence Test',
+				status: 'draft',
+				content:
+					'<!-- wp:paragraph -->\n<p>Contested paragraph words</p>\n<!-- /wp:paragraph -->',
+			} );
+
+			await openSession( collaborationUtils, post.id );
+			const { editor2, page2 } = collaborationUtils;
+			const page1 = editor.page;
+
+			const paragraph1 = editor.canvas
+				.locator( '[data-type="core/paragraph"]' )
+				.first();
+			const paragraph2 = editor2.canvas
+				.locator( '[data-type="core/paragraph"]' )
+				.first();
+			const isSyncPoll = ( url: URL ) =>
+				decodeURIComponent( url.href ).includes(
+					'/wp-sync/v1/updates'
+				);
+			const isAutosaveCommit = ( response: {
+				url: () => string;
+				request: () => { method: () => string };
+			} ) =>
+				decodeURIComponent( response.url() ).includes(
+					`/wp/v2/posts/${ post.id }/autosaves`
+				) && 'POST' === response.request().method();
+
+			const heldPolls: Array< { continue: () => Promise< void > } > = [];
+			await page2.route( isSyncPoll, ( route ) => {
+				heldPolls.push( route );
+			} );
+
+			// User one's rewrite: the first keystroke commits at once,
+			// the rest with the next commit, a cadence later.
+			const userOneText = 'Alpha bravo charlie';
+			const userOneCommits: string[] = [];
+			page1.on( 'response', ( response ) => {
+				if ( isAutosaveCommit( response ) ) {
+					userOneCommits.push( response.request().postData() ?? '' );
+				}
+			} );
+			await paragraph1.click( { clickCount: 3 } );
+			await page1.keyboard.type( userOneText, { delay: 50 } );
+			await expect( async () => {
+				expect(
+					userOneCommits.some( ( body ) =>
+						body.includes( userOneText )
+					)
+				).toBe( true );
+			} ).toPass( { timeout: 20000 } );
+
+			// User two rewrites the same words from the version before.
+			// The first keystroke commits at once and is set aside.
+			const userTwoText = 'Foxtrot golf hotel india juliet kilo';
+			const userTwoCommits: Array< { at: number; body: string } > = [];
+			page2.on( 'response', ( response ) => {
+				if ( isAutosaveCommit( response ) ) {
+					userTwoCommits.push( {
+						at: Date.now(),
+						body: response.request().postData() ?? '',
+					} );
+				}
+			} );
+			await paragraph2.click( { clickCount: 3 } );
+			const typing = page2.keyboard.type( userTwoText, { delay: 80 } );
+			await expect( async () => {
+				expect( userTwoCommits.length ).toBeGreaterThan( 0 );
+			} ).toPass( { timeout: 20000 } );
+			for ( const route of heldPolls.splice( 0 ) ) {
+				await route.continue().catch( () => {} );
+			}
+			await page2.unroute( isSyncPoll );
+			await typing;
+			const typedAt = Date.now();
+
+			// The rest of the sentence goes out at the pause, not a
+			// cadence after the first commit.
+			await expect( async () => {
+				expect(
+					userTwoCommits.some( ( commit ) =>
+						commit.body.includes( userTwoText )
+					)
+				).toBe( true );
+			} ).toPass( { timeout: 4000 } );
+			const whole = userTwoCommits.find( ( commit ) =>
+				commit.body.includes( userTwoText )
+			);
+			expect( ( whole?.at ?? 0 ) - typedAt ).toBeLessThan( 4000 );
+
+			// The reviewer's card carries the whole sentence.
+			await expect(
+				editor.canvas.getByText( /has conflicting edits/ )
+			).toHaveCount( 1, { timeout: 20000 } );
+			await editor.canvas
+				.getByRole( 'button', {
+					name: 'Review conflict',
+					exact: true,
+				} )
+				.click();
+			const dialog = page1.getByRole( 'dialog', {
+				name: 'Review conflicting edits',
+			} );
+			await expect( dialog ).toBeVisible( { timeout: 10000 } );
+			const proposedPane = dialog
+				.locator( '.gse-review-merge-dialog__pane' )
+				.first();
+			for ( const word of userTwoText.split( ' ' ) ) {
+				await expect( proposedPane ).toContainText( word );
+			}
+
+			// User one's text was never replaced.
+			const [ kept ] = await editor.getBlocks();
+			expect( kept.attributes.content ).toBe( userOneText );
+		} finally {
+			// Back to the cadence the suite pins (see the global setup).
+			await setCommitCadence( 0 );
+		}
+	} );
+
 	test( 'every block carries a durable identity that both users share, that persists into saved content, and that survives reload', async ( {
 		collaborationUtils,
 		requestUtils,

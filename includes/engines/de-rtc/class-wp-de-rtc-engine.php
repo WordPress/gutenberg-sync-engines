@@ -463,7 +463,7 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 		 *                        attempts are exhausted under contention.
 		 */
 		private function ingest_proposal( string $room, int $client_id, array &$state, array $proposal, &$review ) {
-			$base_content = $this->resolve_effective_base( $room, $state, $proposal );
+			$base_content = $this->resolve_effective_base( $room, $state, $proposal, $client_id, $review );
 			if ( null === $base_content ) {
 				return array(
 					'status' => 'voided',
@@ -560,7 +560,7 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 						);
 					}
 					$state        = $reloaded;
-					$base_content = $this->resolve_effective_base( $room, $state, $proposal );
+					$base_content = $this->resolve_effective_base( $room, $state, $proposal, $client_id, $review );
 					if ( null === $base_content ) {
 						// The base aged out of the snapshot window mid-retry.
 						return array(
@@ -1173,6 +1173,8 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 				}
 			}
 
+			$replaced = $this->supersede_open_rows( $room, $client_id, $reason, $changed_blocks, $review );
+
 			$changed_text = '';
 			foreach ( $changed_blocks as $block ) {
 				$changed_text .= ' ' . wp_strip_all_tags( $block['html'] );
@@ -1201,8 +1203,31 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 				self::UPDATE_TYPE_PARKED,
 				wp_json_encode( $payload )
 			);
-			if ( $stored ) {
-				$review['open'][ $parked_id ] = $payload;
+			if ( ! $stored ) {
+				return;
+			}
+			$review['open'][ $parked_id ] = $payload;
+
+			// The new row first, then the closures: a client that reads
+			// them in order never sees the block without a record.
+			foreach ( $replaced as $replaced_id ) {
+				$closed = $this->add_row(
+					$room,
+					$client_id,
+					self::UPDATE_TYPE_RESOLVED,
+					wp_json_encode(
+						array(
+							'proposalId'   => $replaced_id,
+							'resolution'   => 'superseded',
+							'supersededBy' => $parked_id,
+							'resolvedBy'   => get_current_user_id(),
+							'time'         => time(),
+						)
+					)
+				);
+				if ( $closed ) {
+					$review['resolved'][ $replaced_id ] = true;
+				}
 			}
 		}
 
@@ -1665,6 +1690,133 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 				$disposition['applied'] = $applied;
 			}
 			return $disposition;
+		}
+
+		/**
+		 * The base form of a block as the author's earliest open review
+		 * row stored it, or null when no open row of theirs holds the block.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param array  $review    Review ledger.
+		 * @param int    $client_id Author client id.
+		 * @param string $sync_id   The block's identity.
+		 * @return string|null The block's base form.
+		 */
+		private function open_row_block_base( array $review, int $client_id, string $sync_id ): ?string {
+			foreach ( $review['open'] as $proposal_id => $row ) {
+				if (
+					isset( $review['resolved'][ $proposal_id ] ) ||
+					! is_array( $row ) ||
+					(int) ( $row['authorClientId'] ?? -1 ) !== $client_id ||
+					! is_array( $row['changedBlocks'] ?? null )
+				) {
+					continue;
+				}
+				foreach ( $row['changedBlocks'] as $block ) {
+					if (
+						is_array( $block ) &&
+						( $block['syncId'] ?? null ) === $sync_id &&
+						is_string( $block['baseHtml'] ?? null ) &&
+						'' !== $block['baseHtml']
+					) {
+						return $block['baseHtml'];
+					}
+				}
+			}
+
+			return null;
+		}
+
+		/**
+		 * The blocks a review row covers, as one comparable key: each
+		 * block by identity when it carries one, else by index.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param array $changed_blocks Parked blocks.
+		 * @return string The key.
+		 */
+		private static function block_set_key( array $changed_blocks ): string {
+			$keys = array();
+			foreach ( $changed_blocks as $block ) {
+				if ( ! is_array( $block ) ) {
+					continue;
+				}
+				if ( is_string( $block['syncId'] ?? null ) && '' !== $block['syncId'] ) {
+					$keys[] = $block['syncId'];
+				} else {
+					$keys[] = (string) (int) ( $block['index'] ?? 0 );
+				}
+			}
+			sort( $keys );
+
+			return implode( ',', $keys );
+		}
+
+		/**
+		 * Closes the author's open review rows that a new row replaces:
+		 * same author, same reason, same blocks. Someone who keeps typing
+		 * after their edit was set aside parks a row per proposal, and the
+		 * newest row carries everything the earlier ones did, so one
+		 * record stays open per author and block set. Each replaced row's
+		 * base forms carry over to the new row, so the record keeps the
+		 * version the FIRST edit started from.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param string $room           Room identifier.
+		 * @param int    $client_id      Author client id.
+		 * @param string $reason         Escalation reason.
+		 * @param array  $changed_blocks The new row's blocks (by reference;
+		 *                               base forms carried over).
+		 * @param array  $review         Review ledger (by reference).
+		 * @return string[] The replaced rows' ids, oldest first.
+		 */
+		private function supersede_open_rows( string $room, int $client_id, string $reason, array &$changed_blocks, array &$review ): array {
+			$key      = self::block_set_key( $changed_blocks );
+			$replaced = array();
+			if ( '' === $key ) {
+				return $replaced;
+			}
+			foreach ( $review['open'] as $proposal_id => $row ) {
+				if (
+					isset( $review['resolved'][ $proposal_id ] ) ||
+					! is_array( $row ) ||
+					isset( $row['property'] ) ||
+					( $row['reason'] ?? null ) !== $reason ||
+					(int) ( $row['authorClientId'] ?? -1 ) !== $client_id ||
+					! is_array( $row['changedBlocks'] ?? null ) ||
+					self::block_set_key( $row['changedBlocks'] ) !== $key
+				) {
+					continue;
+				}
+				$replaced[] = (string) $proposal_id;
+			}
+			if ( array() === $replaced ) {
+				return $replaced;
+			}
+
+			// The earliest replaced row holds the oldest base forms.
+			$first = $review['open'][ $replaced[0] ]['changedBlocks'];
+			foreach ( $changed_blocks as &$block ) {
+				if ( ! is_array( $block ) ) {
+					continue;
+				}
+				foreach ( $first as $earlier ) {
+					if (
+						is_array( $earlier ) &&
+						is_string( $earlier['baseHtml'] ?? null ) &&
+						self::block_set_key( array( $earlier ) ) === self::block_set_key( array( $block ) )
+					) {
+						$block['baseHtml'] = $earlier['baseHtml'];
+						break;
+					}
+				}
+			}
+			unset( $block );
+
+			return $replaced;
 		}
 
 		/**
@@ -2484,13 +2636,22 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 		 *
 		 * @since 0.5.0
 		 *
-		 * @param string $room     Room identifier.
-		 * @param array  $state    Room state.
-		 * @param array  $proposal Decoded proposal payload.
+		 * A declared version the room no longer holds (the snapshots are
+		 * bounded, and a room that advances on every keystroke outruns
+		 * them within one sentence) falls back to the base form stored on
+		 * the author's own open review row for that block: someone who
+		 * keeps typing after their edit was set aside declares the same
+		 * true base on every proposal, and the row kept it.
+		 *
+		 * @param string     $room      Room identifier.
+		 * @param array      $state     Room state.
+		 * @param array      $proposal  Decoded proposal payload.
+		 * @param int        $client_id Proposing client id (0 = unknown).
+		 * @param array|null $review    Review ledger (lazily loaded, by reference).
 		 * @return string|null Effective base content, or null when the
 		 *                     whole-document base is unresolvable.
 		 */
-		private function resolve_effective_base( string $room, array $state, array $proposal ): ?string {
+		private function resolve_effective_base( string $room, array $state, array $proposal, int $client_id = 0, &$review = null ): ?string {
 			$base_content = $this->resolve_base_content( $state, $proposal['baseVersion'] );
 			if ( null === $base_content ) {
 				$base_content = $this->resolve_base_from_revisions( $room, (string) $proposal['baseVersion'] );
@@ -2527,6 +2688,12 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 				$block_base = $this->resolve_base_content( $state, $block_version );
 				if ( null === $block_base ) {
 					$block_base = $this->resolve_base_from_revisions( $room, $block_version );
+				}
+				if ( null === $block_base && null !== $sync_id && $client_id > 0 ) {
+					if ( null === $review ) {
+						$review = $this->load_review_ledger( $room );
+					}
+					$block_base = $this->open_row_block_base( $review, $client_id, $sync_id );
 				}
 				if ( null === $block_base ) {
 					continue;
