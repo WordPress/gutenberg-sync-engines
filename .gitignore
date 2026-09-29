@@ -27,3 +27,6 @@
 # Transport-tool failure screenshots (written to CWD on soak/bench failures)
 soak-fail-*.png
 bench-fail-*.png
+
+# Local recovery copies
+/_trash

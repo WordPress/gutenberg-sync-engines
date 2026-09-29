@@ -4,10 +4,11 @@
 
 	<!-- What to scan. -->
 	<file>.</file>
+	<exclude-pattern>/_trash/*</exclude-pattern>
 	<exclude-pattern>/vendor/*</exclude-pattern>
 	<exclude-pattern>/node_modules/*</exclude-pattern>
 	<exclude-pattern>/build/*</exclude-pattern>
-	<!-- The pinned Gutenberg subtree is vendored runtime, not this plugin's code. -->
+	<!-- The pinned Gutenberg submodule is vendored runtime, not this plugin's code. -->
 	<exclude-pattern>/gutenberg/*</exclude-pattern>
 	<!-- Vendored y-php library (deliberately mirrors JS Yjs, not WPCS; it
 	     carries its own phpcs.xml.dist). -->

@@ -3,9 +3,9 @@
  *
  * The plugin brings its own e2e runner (`@playwright/test`,
  * `@wordpress/e2e-test-utils-playwright`, `@wordpress/scripts`); the **runtime**
- * Gutenberg comes from the pinned subtree in `../../gutenberg` (mounted by this
+ * Gutenberg comes from the pinned submodule in `../../gutenberg` (mounted by this
  * plugin's `.wp-env.json`). Specs live in `./specs` and import Gutenberg's
- * collaboration fixtures from the subtree while importing engine internals
+ * collaboration fixtures from the submodule while importing engine internals
  * (e.g. `genesisSyncId`) from this plugin's own source.
  *
  * External dependencies
@@ -20,7 +20,7 @@ import { defineConfig, devices } from '@playwright/test';
 import baseConfig from '@wordpress/scripts/config/playwright.config.js';
 
 // A trimmed, plugin-local global setup (auth + clean state) — see its header
-// for why we don't reuse the subtree's monorepo-suite-specific one.
+// for why we don't reuse the submodule's monorepo-suite-specific one.
 const globalSetup = fileURLToPath(
 	new URL( './config/global-setup.ts', 'file:' + __filename ).href
 );
@@ -74,7 +74,7 @@ export default defineConfig( {
 	testIgnore: [ '**/specs/websocket-only/**', '**/specs/sse-only/**' ],
 	webServer: {
 		...baseConfig.webServer,
-		// Start this plugin's TESTS wp-env (Gutenberg subtree + this
+		// Start this plugin's TESTS wp-env (Gutenberg submodule + this
 		// plugin, .wp-env.tests.json). Rarely runs: reuseExistingServer is
 		// true, so an already-running env on the port is used as-is (see
 		// the AGENTS.md warning about a FOREIGN wp-env holding the port).

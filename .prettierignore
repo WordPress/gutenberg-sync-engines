@@ -5,7 +5,7 @@ vendor
 package-lock.json
 composer.lock
 
-# Pinned Gutenberg subtree — formatted by its own tooling at the pin.
+# Pinned Gutenberg submodule — formatted by its own tooling at the pin.
 gutenberg
 
 # Frozen cross-language intent-log core (byte-matched against its PHP twin
@@ -30,3 +30,6 @@ includes/lib/automerge-php
 
 # Playwright e2e output.
 artifacts
+
+# Local recovery copies.
+_trash

@@ -10,13 +10,13 @@ const defaultConfig = require( '@wordpress/scripts/config/jest-unit.config.js' )
 
 // At runtime WordPress provides the framework (`@wordpress/sync`) and Yjs as
 // `wp.sync`; under Jest there is no such global, so we resolve the framework
-// from the pinned Gutenberg subtree in `./gutenberg` — the same copy wp-env
+// from the pinned Gutenberg submodule in `./gutenberg` — the same copy wp-env
 // and e2e run against — and pin `yjs` itself to the framework's SINGLE copy so
 // the plugin and the framework share one Yjs instance
 // (https://github.com/yjs/yjs/issues/438). y-protocols and lib0 are left to
 // normal resolution so their package `exports` pick the CommonJS build Jest
 // can load; being stateless, a duplicate of them is harmless as long as they
-// bind to the one shared `yjs`. Requires the subtree to be installed and
+// bind to the one shared `yjs`. Requires the submodule to be installed and
 // built (see Setup in AGENTS.md). Set WP_SYNC_FRAMEWORK_ROOT to test against
 // a live framework checkout instead (co-development), mirroring the PHP
 // bootstrap's WP_SYNC_FRAMEWORK_PLUGIN env override.
@@ -28,7 +28,7 @@ const SYNC_SRC = path.join( FRAMEWORK_ROOT, 'packages/sync/src' );
 
 module.exports = {
 	...defaultConfig,
-	// Discover ONLY this plugin's own tests. The pinned Gutenberg subtree in
+	// Discover ONLY this plugin's own tests. The pinned Gutenberg submodule in
 	// `gutenberg/` carries thousands of the monorepo's own test files; without
 	// this restriction Jest would recurse into it and run (and fail) them.
 	roots: [ '<rootDir>/src', '<rootDir>/tests' ],
@@ -59,7 +59,7 @@ module.exports = {
 		'^@wordpress/sync$': SYNC_SRC,
 		// Stateless grammar parser used by the intent-log manager to read
 		// persisted syncIds out of loaded record content; resolved from the
-		// subtree so no plugin-local install is needed (at runtime it is the
+		// submodule so no plugin-local install is needed (at runtime it is the
 		// wp-block-serialization-default-parser script).
 		'^@wordpress/block-serialization-default-parser$': path.join(
 			FRAMEWORK_MODULES,
@@ -81,11 +81,11 @@ module.exports = {
 			'@wordpress/hooks'
 		),
 		// The slow-awareness store is a @wordpress/data store; resolve the
-		// package from the subtree (the single wp.data at runtime).
+		// package from the submodule (the single wp.data at runtime).
 		'^@wordpress/data$': path.join( FRAMEWORK_MODULES, '@wordpress/data' ),
 		// The de-rtc doc bridge serializes/parses through the editor's block
 		// library (the single wp.blocks at runtime); resolve it from the
-		// subtree. Tests mock it — block registration is editor state.
+		// submodule. Tests mock it — block registration is editor state.
 		'^@wordpress/blocks$': path.join(
 			FRAMEWORK_MODULES,
 			'@wordpress/blocks'

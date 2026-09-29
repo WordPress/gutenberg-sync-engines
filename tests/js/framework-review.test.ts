@@ -1,6 +1,6 @@
 /**
  * The framework manager's review wiring, driven through the REAL
- * `createSyncManager` (resolved from the subtree source): an engine that
+ * `createSyncManager` (resolved from the submodule source): an engine that
  * supplies a `review` source gets its parked-conflict items presented
  * through the record handlers and the manager's resolution verbs, with
  * the notification discipline the review UI depends on (coalesced list
@@ -33,7 +33,7 @@ import {
 	resetProviderCreatorsForTesting,
 } from '../../src/framework';
 
-// eslint-disable-next-line import/no-unresolved -- Resolved to the subtree.
+// eslint-disable-next-line import/no-unresolved -- Resolved to the submodule.
 import type {
 	SyncEngine,
 	SyncReviewItem,
