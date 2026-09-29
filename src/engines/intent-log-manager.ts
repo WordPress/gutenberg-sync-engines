@@ -12,7 +12,12 @@ import type { Awareness } from 'y-protocols/awareness';
 import apiFetch from '@wordpress/api-fetch';
 import { parse as parseBlockDelimiters } from '@wordpress/block-serialization-default-parser';
 // eslint-disable-next-line import/no-unresolved -- Provided by the editor runtime.
-import { getBlockType, getSaveContent } from '@wordpress/blocks';
+import {
+	getBlockType,
+	getSaveContent,
+	parse,
+	serialize,
+} from '@wordpress/blocks';
 
 /**
  * Internal dependencies
@@ -35,18 +40,20 @@ import {
 	type IntentLogSession,
 } from './intent-log-session';
 import { mintSyncId } from './intent-log/sync-id.js';
-import { fieldToHtml } from './intent-log/rich-text.js';
 import {
 	createIntentLogUndoManager,
 	type IntentLogUndoManager,
 } from './intent-log-undo';
 import { getProviderCreators } from '../framework';
-import type { EngineBlock, EngineDocument } from './intent-log/engine-types';
+import {
+	buildConflictRecords,
+	type ConflictRecord,
+} from './intent-log-conflicts';
+import type { EngineDocument } from './intent-log/engine-types';
 import type {
 	SyncConflict,
 	SyncConflictDecision,
 	SyncConflictSource,
-	SyncConflictTarget,
 } from '../review/types';
 import type {
 	CollectionHandlers,
@@ -1012,32 +1019,141 @@ export const intentLogConflictSource: SyncConflictSource = {
 };
 
 /**
- * The block a parked intent targets, located in the session's document:
- * its parent's durable id and its index among its siblings (the position
- * side of a SyncConflict block target).
+ * A bridge block as `serialize()` takes it: registered attribute defaults
+ * filled in (the editor materializes them on parse, the engine document
+ * does not carry them), valid, children converted the same way.
  *
- * @param blocks   The blocks to search (the root, then recursively).
- * @param syncId   The block's durable id.
- * @param parentId The id of the block whose children `blocks` are.
- * @return The parent id and index, or null when the block is gone.
+ * @param block Bridge block.
+ * @return The block to serialize.
  */
-function locateBlock(
-	blocks: EngineBlock[],
-	syncId: string,
-	parentId?: string
-): { parentId?: string; index: number } | null {
-	for ( let index = 0; index < blocks.length; index++ ) {
-		const block = blocks[ index ];
-		if ( block.syncId === syncId ) {
-			return { parentId, index };
-		}
-		const inChildren = locateBlock( block.children, syncId, block.syncId );
-		if ( inChildren ) {
-			return inChildren;
-		}
-	}
-	return null;
+function toSerializableBlock( block: BridgeBlock ): EditorBlock {
+	return {
+		...block,
+		attributes: withBlockDefaults(
+			block.name,
+			( block.attributes ?? {} ) as Record< string, unknown >
+		),
+		clientId: '',
+		isValid: true,
+		innerBlocks: block.innerBlocks.map( toSerializableBlock ),
+	};
 }
+
+/**
+ * The bridge blocks carrying the given ids, at any depth, in the order of
+ * the ids.
+ *
+ * @param blocks Bridge blocks.
+ * @param ids    The blocks' durable ids.
+ * @return The blocks found.
+ */
+function pickBlocksById( blocks: BridgeBlock[], ids: string[] ): BridgeBlock[] {
+	const found = new Map< string, BridgeBlock >();
+	const walk = ( list: BridgeBlock[] ) => {
+		for ( const block of list ) {
+			const syncId = ( block.attributes?.metadata as { syncId?: string } )
+				?.syncId;
+			if ( syncId && ids.includes( syncId ) && ! found.has( syncId ) ) {
+				found.set( syncId, block );
+			}
+			walk( block.innerBlocks );
+		}
+	};
+	walk( blocks );
+	return ids
+		.map( ( id ) => found.get( id ) )
+		.filter( ( block ): block is BridgeBlock => undefined !== block );
+}
+
+/**
+ * Parsed editor blocks as bridge blocks (name, attributes, children).
+ * Freeform whitespace between blocks parses as nameless blocks and is
+ * dropped.
+ *
+ * @param blocks Parsed blocks.
+ * @return Bridge blocks.
+ */
+function toBridgeBlocks( blocks: ReturnType< typeof parse > ): BridgeBlock[] {
+	return blocks
+		.filter( ( block ) => !! block.name )
+		.map( ( block ) => ( {
+			name: block.name,
+			attributes: { ...( block.attributes ?? {} ) },
+			innerBlocks: toBridgeBlocks( block.innerBlocks ?? [] ),
+		} ) );
+}
+
+/**
+ * A bridge tree with a record's blocks replaced: the replacement takes
+ * the place of the first of the ids met in document order, the other ids
+ * are removed. With none of the ids present (a proposed insertion) the
+ * replacement lands at the given slot.
+ *
+ * @param blocks        The tree.
+ * @param ids           The record's block ids.
+ * @param replacement   The replacement blocks.
+ * @param slot          Where an insertion lands: the parent's id (the top
+ *                      level when absent) and the index among its children.
+ * @param slot.parentId
+ * @param slot.index
+ * @return The rewritten tree.
+ */
+function replaceBlocksInTree(
+	blocks: BridgeBlock[],
+	ids: string[],
+	replacement: BridgeBlock[],
+	slot: { parentId?: string; index: number }
+): BridgeBlock[] {
+	let placed = false;
+	const walk = ( list: BridgeBlock[] ): BridgeBlock[] => {
+		const out: BridgeBlock[] = [];
+		for ( const block of list ) {
+			const syncId = ( block.attributes?.metadata as { syncId?: string } )
+				?.syncId;
+			if ( syncId && ids.includes( syncId ) ) {
+				if ( ! placed ) {
+					placed = true;
+					out.push( ...replacement );
+				}
+				continue;
+			}
+			out.push( { ...block, innerBlocks: walk( block.innerBlocks ) } );
+		}
+		return out;
+	};
+	const rewritten = walk( blocks );
+	if ( placed ) {
+		return rewritten;
+	}
+	const insertInto = ( list: BridgeBlock[] ): BridgeBlock[] => {
+		const next = list.slice();
+		next.splice( Math.min( slot.index, next.length ), 0, ...replacement );
+		return next;
+	};
+	if ( undefined === slot.parentId ) {
+		return insertInto( rewritten );
+	}
+	const intoParent = ( list: BridgeBlock[] ): BridgeBlock[] =>
+		list.map( ( block ) => {
+			const syncId = ( block.attributes?.metadata as { syncId?: string } )
+				?.syncId;
+			if ( syncId === slot.parentId ) {
+				return {
+					...block,
+					innerBlocks: insertInto( block.innerBlocks ),
+				};
+			}
+			return { ...block, innerBlocks: intoParent( block.innerBlocks ) };
+		} );
+	return intoParent( rewritten );
+}
+
+/** Intent types that change the block structure. */
+const STRUCTURAL_INTENTS = new Set( [
+	'insert_block',
+	'remove_block',
+	'move_block',
+] );
 
 export function createIntentLogManager( debug = false ): SyncManager {
 	const entityStates = new Map< string, EntityState >();
@@ -1654,194 +1770,144 @@ export function createIntentLogManager( debug = false ): SyncManager {
 		 * arrival would re-surface long-resolved conflicts on every reload.
 		 */
 		let proposalsNotifyScheduled = false;
-		const summarizeProposal = ( proposal: {
-			intent: { type: string; payload: Record< string, unknown > };
-		} ): string | undefined => {
-			const { type, payload } = proposal.intent;
-			switch ( type ) {
-				case 'insert_text':
-				case 'replace_text':
-					return payload.text as string;
-				case 'replace_attr_content':
-					return payload.newText as string;
-				case 'delete_text':
-					return undefined; // A lost deletion has no content to show.
-				case 'set_attr':
-					return `${ payload.key as string }: ${ JSON.stringify(
-						payload.value
-					) }`;
-				case 'set_property':
-					return `${ payload.name as string }: ${ JSON.stringify(
-						payload.value
-					) }`;
-				case 'format_text':
-					return payload.format as string;
-				case 'insert_block': {
-					// The reviewer must SEE what they would approve —
-					// notably a raw-attr block's markup (core/html).
-					const block = payload.block as
-						| {
-								blockType?: string;
-								text?: string;
-								fields?: {
-									content?: { text?: string };
-								};
-								attrs?: Record< string, unknown >;
-						  }
-						| undefined;
-					const text =
-						block?.fields?.content?.text ??
-						block?.text ??
-						( typeof block?.attrs?.content === 'string'
-							? ( block.attrs.content as string )
-							: undefined );
-					return text
-						? `${ block?.blockType ?? 'block' }: ${ text }`
-						: block?.blockType;
-				}
-				default:
-					return undefined;
-			}
-		};
-		// A parked new-block proposal (insert_block) has no block in the
-		// reviewer's canvas to anchor to. Surface its intended position and
-		// a readable content preview so the editor can render it INLINE
-		// where it would land, with approve/discard in place.
-		const proposedInsertionFor = ( proposal: {
-			intent: { type: string; payload: Record< string, unknown > };
-		} ) => {
-			if ( 'insert_block' !== proposal.intent.type ) {
-				return undefined;
-			}
-			const payload = proposal.intent.payload;
-			const block = payload.block as
-				| {
-						blockType?: string;
-						fields?: {
-							content?: { text: string; formats?: unknown[] };
-						};
-						attrs?: Record< string, unknown >;
-				  }
-				| undefined;
-			const field = block?.fields?.content;
-			let html = '';
-			if ( field ) {
-				html = fieldToHtml( field as never );
-			} else if ( typeof block?.attrs?.content === 'string' ) {
-				html = block.attrs.content as string;
-			}
-			return {
-				blockType: block?.blockType,
-				html,
-				afterSiblingId:
-					typeof payload.afterSiblingId === 'string'
-						? payload.afterSiblingId
-						: undefined,
-				parentId:
-					typeof payload.parentId === 'string'
-						? payload.parentId
-						: undefined,
-			};
-		};
 		/*
-		 * PROVISIONAL (plan Phase 2): one SyncConflict per parked
-		 * proposal, with its target located in the document and the three
-		 * sides left empty (the review dialogs still seed from their
-		 * mocks). Phase 3 reconstructs base/proposed/current from the
-		 * retained log, groups the members of a txn into one record, and
-		 * applies an accepted replacement as ordinary intents.
+		 * The conflict review lane: the open proposals as SyncConflict
+		 * records (one per parked unit, overlapping units folded, three
+		 * sides rebuilt from the retained log; see
+		 * intent-log-conflicts.ts), and the reviewer's decision applied
+		 * by the engine.
 		 */
-		type OpenProposal = ReturnType<
-			IntentLogSession[ 'getOpenProposals' ]
-		>[ number ];
-		const conflictFor = ( proposal: OpenProposal ): SyncConflict => {
-			const { intent, actorId, reason } = proposal;
-			const payload = intent.payload;
+		const conflictRecords = (): ConflictRecord[] =>
+			buildConflictRecords( session.getOpenProposals(), {
+				getDocument: () => session.getDocument(),
+				getDocumentAt: ( seq ) => session.getDocumentAt( seq ),
+				serializeBlocks: ( doc, ids ) => {
+					try {
+						return serialize(
+							pickBlocksById(
+								documentBlocks( state, doc ),
+								ids
+							).map( toSerializableBlock ) as Parameters<
+								typeof serialize
+							>[ 0 ]
+						);
+					} catch {
+						return '';
+					}
+				},
+			} );
+		/**
+		 * Authors a record's accepted replacement as ordinary intents under
+		 * one new txn: the current document with the record's blocks
+		 * replaced by the content, diffed against the current document, so
+		 * the wire carries the smallest edit (a block that kept its
+		 * identity and changed its text derives a text edit).
+		 *
+		 * @param parked  The record.
+		 * @param content The replacement, as serialized blocks ('' removes).
+		 */
+		const authorReplacement = (
+			parked: ConflictRecord,
+			content: string
+		) => {
 			const doc = session.getDocument();
-			// The fallback is a target no block matches (an insertion
-			// nowhere): intents that address no block, or a block the
-			// document no longer holds.
-			let target: SyncConflictTarget = {
-				type: 'blocks',
-				index: 0,
-				count: 0,
-			};
-			let insertion: ReturnType< typeof proposedInsertionFor >;
-			if (
-				'set_property' === intent.type &&
-				typeof payload.name === 'string'
-			) {
-				target = { type: 'property', name: payload.name };
-			} else if ( 'insert_block' === intent.type ) {
-				insertion = proposedInsertionFor( proposal );
-				const sibling =
-					insertion?.afterSiblingId && doc
-						? locateBlock( doc.root, insertion.afterSiblingId )
-						: null;
-				target = {
-					type: 'blocks',
-					parentId: insertion?.parentId,
-					index: sibling ? sibling.index + 1 : 0,
-					count: 0,
-				};
-			} else if ( typeof payload.syncId === 'string' ) {
-				const located = doc
-					? locateBlock( doc.root, payload.syncId )
-					: null;
-				target = {
-					type: 'blocks',
-					ids: [ payload.syncId ],
-					parentId: located?.parentId,
-					index: located?.index ?? 0,
-					count: 1,
-				};
+			if ( ! doc ) {
+				return;
 			}
-			return {
-				id: intent.intentId,
-				kind:
-					'requires-approval' === reason ? 'sequestration' : 'merge',
-				authorId: Number( /^u(\d+)/.exec( actorId )?.[ 1 ] ?? 0 ),
-				target,
-				base: null,
-				// PROVISIONAL: an insertion's decoded markup, else the
-				// reviewer-facing summary, stands in for the serialized
-				// proposed side until Phase 3.
-				proposed:
-					insertion?.html ?? summarizeProposal( proposal ) ?? '',
-				current: '',
-			};
+			const { target } = parked.conflict;
+			const slot =
+				'blocks' === target.type
+					? { parentId: target.parentId, index: target.index }
+					: { index: 0 };
+			const tree = replaceBlocksInTree(
+				documentBlocks( state, doc ),
+				parked.blockIds,
+				'' === content.trim() ? [] : toBridgeBlocks( parse( content ) ),
+				slot
+			);
+			const derived = deriveIntents( doc, tree, {
+				// Only the parked's own blocks may disappear.
+				removableIds: new Set( parked.blockIds ),
+				excludeIds: state.docTombstones,
+				richTextFields: state.fieldsResolver,
+				rawContent: state.rawContent,
+				saveMarkup: saveMarkupAdapter,
+			} );
+			if ( ! derived || 0 === derived.intents.length ) {
+				return;
+			}
+			state.capturing = true;
+			try {
+				// Authored at the head, against the optimistic document the
+				// diff was taken from; the observed frame stays where the
+				// capture lane left it.
+				const envelopes = session.authorBatch( derived.intents, {
+					txnId: globalThis.crypto.randomUUID(),
+					baseSeq: session.getSeq(),
+					observe: false,
+				} );
+				undoManager?.noteAuthored( session, envelopes );
+			} finally {
+				state.capturing = false;
+			}
 		};
 		conflictEntities.set( key, {
-			list: () => session.getOpenProposals().map( conflictFor ),
+			list: () => conflictRecords().map( ( parked ) => parked.conflict ),
 			resolve: ( conflictId, decision ) => {
-				const proposal = session
-					.getOpenProposals()
-					.find( ( open ) => open.intent.intentId === conflictId );
-				if ( ! proposal ) {
+				const parked = conflictRecords().find(
+					( candidate ) => candidate.conflict.id === conflictId
+				);
+				if ( ! parked ) {
 					return;
 				}
-				if (
-					'accept' === decision.action &&
-					'requires-approval' === proposal.reason &&
-					'' !== decision.content
-				) {
-					// Approval: the restore lane re-authors the held
-					// markup as ordinary intents under the reviewer's
-					// account, then closes the proposal. PROVISIONAL: the
-					// reviewer's edited content is not honored yet (the
-					// held markup lands as parked); Phase 3 authors the
-					// replacement from `decision.content` instead.
-					manager.restoreProposal?.(
-						objectType,
-						objectId,
-						conflictId
-					);
-					return;
+				const memberIds = parked.members.map(
+					( member ) => member.intent.intentId
+				);
+				if ( 'accept' === decision.action ) {
+					if (
+						'sequestration' === parked.conflict.kind &&
+						decision.content === parked.conflict.proposed
+					) {
+						// Approval of the held markup as parked: the
+						// restore lane re-authors each member under the
+						// reviewer's account and closes it as restored.
+						for ( const id of memberIds ) {
+							manager.restoreProposal?.(
+								objectType,
+								objectId,
+								id
+							);
+						}
+						return;
+					}
+					if ( undefined !== parked.property ) {
+						const original =
+							parked.members.at( -1 )?.intent.payload.value;
+						let value: unknown = decision.content;
+						if ( 'string' !== typeof original ) {
+							try {
+								value = JSON.parse( decision.content );
+							} catch {
+								value = decision.content;
+							}
+						}
+						session.author( 'set_property', {
+							name: parked.property,
+							value,
+						} );
+					} else {
+						authorReplacement( parked, decision.content );
+					}
 				}
-				// PROVISIONAL: an accepted replacement of a merge conflict,
-				// and an accepted removal (empty content), only close the
-				// record until Phase 3 authors the replacement.
-				session.resolveProposal( conflictId, 'dismissed' );
+				/*
+				 * The closures go out AFTER the replacement, through the
+				 * same local update queue: one flush carries the intents
+				 * first and the resolutions behind them, so the parked
+				 * never closes ahead of the edit that settles it.
+				 */
+				for ( const id of memberIds ) {
+					session.resolveProposal( id, 'dismissed' );
+				}
 			},
 		} );
 		session.onProposalsChange( () => {
@@ -2247,8 +2313,26 @@ export function createIntentLogManager( debug = false ): SyncManager {
 				}
 				state.capturing = true;
 				try {
+					/*
+					 * A batch that changes the block structure is ONE
+					 * atomic unit (a split is a text change plus an
+					 * insertion: parking half of it would leave half an
+					 * edit in the document), so its members park together
+					 * when any of them conflicts. A batch of text,
+					 * format, and attribute edits stays unstamped: its
+					 * members merge or park one by one, which keeps as
+					 * much of a typing burst merging as can, and conflict
+					 * review folds the parked ones back into one record
+					 * (see intent-log-conflicts.ts).
+					 */
+					const structural = derived.intents.some( ( intent ) =>
+						STRUCTURAL_INTENTS.has( intent.type )
+					);
 					const envelopes = state.session.authorBatch(
-						derived.intents
+						derived.intents,
+						structural
+							? { txnId: globalThis.crypto.randomUUID() }
+							: {}
 					);
 					undoManager?.noteAuthored( state.session, envelopes );
 				} finally {

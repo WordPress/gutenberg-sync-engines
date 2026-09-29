@@ -378,6 +378,9 @@ export function createIntentLogSession(
 	const resolvedIds = new Set< string >();
 	const proposalsChangeListeners = new Set< () => void >();
 	const notifyProposalsChange = () => {
+		// An opened or closed proposal moves the retention floor (see
+		// applyRetention).
+		applyRetention();
 		proposalsChangeListeners.forEach( ( listener ) => listener() );
 	};
 	const changeListeners = new Set< () => void >();
@@ -430,16 +433,33 @@ export function createIntentLogSession(
 
 	/**
 	 * Recomputes the replica's retention floor: the log must stay sliceable
-	 * from BOTH the observed frame (the next capture authors at it) and the
-	 * undo pin (inverse derivation reads documents at retained seqs).
+	 * from the observed frame (the next capture authors at it), the undo
+	 * pin (inverse derivation reads documents at retained seqs), AND the
+	 * base of every open proposal (conflict review rebuilds what the
+	 * author started from; a parked intent is no longer pending, so the
+	 * outbox floor alone would let its base be trimmed away). A proposal
+	 * whose base is already below the replica's first seq (parked before
+	 * this session joined) cannot pull the floor back; its record has no
+	 * base side.
 	 */
 	const applyRetention = (): void => {
-		if ( replica ) {
-			replica.retainFrom =
-				null === undoRetainSeq
-					? observedSeq
-					: Math.min( observedSeq, undoRetainSeq );
+		if ( ! replica ) {
+			return;
 		}
+		let floor =
+			null === undoRetainSeq
+				? observedSeq
+				: Math.min( observedSeq, undoRetainSeq );
+		for ( const proposal of proposals ) {
+			if ( resolvedIds.has( proposal.intent.intentId ) ) {
+				continue;
+			}
+			const baseSeq = Number( proposal.intent.baseSeq );
+			if ( Number.isFinite( baseSeq ) && baseSeq >= replica.firstSeq ) {
+				floor = Math.min( floor, baseSeq );
+			}
+		}
+		replica.retainFrom = floor;
 	};
 
 	/**

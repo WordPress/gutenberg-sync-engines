@@ -509,4 +509,75 @@ describe( 'intent-log session codec', () => {
 			canonicalJson( createDocument( fresh ) )
 		);
 	} );
+
+	it( 'keeps the log sliceable from the base of every open proposal', () => {
+		const session = createIntentLogSession( { userId: 7, clientId: 1 } );
+		const remote = ( intentId: string, offset: number ) => ( {
+			data: JSON.stringify( {
+				intentId,
+				actorId: 'u9c9',
+				baseSeq: 0,
+				txnId: null,
+				type: 'insert_text',
+				payload: {
+					syncId: 'p1',
+					field: 'content',
+					offset,
+					text: 'x',
+				},
+			} ),
+			type: INTENT_LOG_UPDATE_TYPES.INTENT,
+		} );
+		session.receiveUpdate( {
+			data: JSON.stringify( { doc: createDocument( GENESIS_BLOCKS ) } ),
+			type: INTENT_LOG_UPDATE_TYPES.SNAPSHOT,
+		} );
+		// The editor displays the genesis (the manager records this at
+		// bootstrap), so the log stays sliceable from it for now.
+		session.setObservedSeq( 0 );
+		session.receiveUpdate( remote( 'r1', 0 ) );
+		session.receiveUpdate( remote( 'r2', 1 ) );
+
+		// An edit authored against the genesis parks for review.
+		session.receiveUpdate( {
+			data: JSON.stringify( {
+				intent: {
+					intentId: 'parked-1',
+					actorId: 'u8c8',
+					baseSeq: 0,
+					txnId: null,
+					type: 'insert_text',
+					payload: {
+						syncId: 'p1',
+						field: 'content',
+						offset: 5,
+						text: '!',
+					},
+				},
+				actorId: 'u8c8',
+				reason: 'frame-conflict',
+			} ),
+			type: INTENT_LOG_UPDATE_TYPES.PARKED,
+		} );
+
+		// The editor catches up to the head; without the open proposal the
+		// log would now trim up to the observed frame.
+		session.setObservedSeq( session.getSeq() );
+		session.receiveUpdate( remote( 'r3', 2 ) );
+		expect( session.getRetainedFloor() ).toBe( 0 );
+		expect( session.getDocumentAt( 0 ) ).not.toBeNull();
+
+		// Closing the proposal releases the floor.
+		session.receiveUpdate( {
+			data: JSON.stringify( {
+				proposalId: 'parked-1',
+				resolution: 'dismissed',
+			} ),
+			type: INTENT_LOG_UPDATE_TYPES.RESOLVED,
+		} );
+		session.setObservedSeq( session.getSeq() );
+		session.receiveUpdate( remote( 'r4', 3 ) );
+		expect( session.getRetainedFloor() ).toBeGreaterThan( 0 );
+		expect( session.getDocumentAt( 0 ) ).toBeNull();
+	} );
 } );

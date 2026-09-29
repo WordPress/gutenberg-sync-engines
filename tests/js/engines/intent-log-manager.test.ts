@@ -15,18 +15,30 @@ import {
  */
 import { addFilter, removeFilter } from '@wordpress/hooks';
 
-// The real module drags ESM-only deps into Jest; the manager only reads
-// attribute schemas for its block-default merge.
-jest.mock( '@wordpress/blocks', () => ( {
-	getBlockType: ( name: string ) =>
-		'core/group' === name
-			? {
-					attributes: {
-						tagName: { default: 'div', type: 'string' },
-					},
-			  }
-			: undefined,
-} ) );
+// The real module drags ESM-only deps into Jest; the manager reads
+// attribute schemas for its block-default merge, and serializes and parses
+// blocks for conflict review. The stand-ins render blocks as opaque JSON
+// (name, attributes, children), the same trick the de-rtc suites use.
+jest.mock( '@wordpress/blocks', () => {
+	const strip = ( block: any ): unknown => ( {
+		name: block.name,
+		attributes: block.attributes,
+		innerBlocks: ( block.innerBlocks ?? [] ).map( strip ),
+	} );
+	return {
+		getBlockType: ( name: string ) =>
+			'core/group' === name
+				? {
+						attributes: {
+							tagName: { default: 'div', type: 'string' },
+						},
+				  }
+				: undefined,
+		serialize: ( blocks: unknown[] ) =>
+			JSON.stringify( blocks.map( strip ) ),
+		parse: ( content: string ) => ( content ? JSON.parse( content ) : [] ),
+	};
+} );
 
 // Taxonomy discovery (the manager mirrors entities.js: post-type
 // taxonomies by rest_base). The built-in post type carries the two
@@ -2162,7 +2174,6 @@ describe( 'intent-log manager', () => {
 				id: 'i-frame-conflict',
 				kind: 'merge',
 				authorId: 999,
-				proposed: 'lost words',
 			} ),
 		] );
 
@@ -2387,6 +2398,214 @@ describe( 'intent-log manager', () => {
 		expect(
 			intentLogConflictSource.getOpenConflicts( 'postType/post', '1' )
 		).toEqual( [] );
+	} );
+
+	it( 'a parked text edit carries its base, proposed, and current sides', async () => {
+		const { transport } = await loadManagedEntity();
+
+		transport.captured.session!.receiveUpdate(
+			snapshotRow( [
+				{ syncId: 'p1', blockType: 'core/paragraph', text: 'Hello' },
+			] )
+		);
+		// A collaborator's edit landed first...
+		transport.captured.session!.receiveUpdate( {
+			data: JSON.stringify( {
+				intentId: 'remote-1',
+				actorId: 'u9c9',
+				baseSeq: 0,
+				txnId: null,
+				type: 'insert_text',
+				payload: {
+					syncId: 'p1',
+					field: 'content',
+					offset: 5,
+					text: ' there',
+				},
+			} ),
+			type: INTENT_LOG_UPDATE_TYPES.INTENT,
+		} );
+		// ...and another author's edit against the same base parked.
+		transport.captured.session!.receiveUpdate( {
+			data: JSON.stringify( {
+				intent: {
+					intentId: 'parked-1',
+					actorId: 'u8c8',
+					baseSeq: 0,
+					txnId: null,
+					type: 'insert_text',
+					payload: {
+						syncId: 'p1',
+						field: 'content',
+						offset: 5,
+						text: ' friend',
+					},
+				},
+				actorId: 'u8c8',
+				reason: 'frame-conflict',
+			} ),
+			type: INTENT_LOG_UPDATE_TYPES.PARKED,
+		} );
+		await Promise.resolve();
+
+		const [ conflict ] = intentLogConflictSource.getOpenConflicts(
+			'postType/post',
+			'1'
+		);
+		const textOf = ( side: string | null ) =>
+			JSON.parse( side ?? '[]' ).map(
+				( block: { attributes: { content: string } } ) =>
+					block.attributes.content
+			);
+		expect( conflict ).toMatchObject( {
+			id: 'parked-1',
+			kind: 'merge',
+			authorId: 8,
+			target: { type: 'blocks', ids: [ 'p1' ], index: 0, count: 1 },
+		} );
+		expect( textOf( conflict.base ) ).toEqual( [ 'Hello' ] );
+		expect( textOf( conflict.proposed ) ).toEqual( [ 'Hello friend' ] );
+		expect( textOf( conflict.current ) ).toEqual( [ 'Hello there' ] );
+	} );
+
+	it( 'accept authors the replacement as ordinary intents, then closes every member, in that order', async () => {
+		const { transport } = await loadManagedEntity();
+
+		transport.captured.session!.receiveUpdate(
+			snapshotRow( [
+				{ syncId: 'p1', blockType: 'core/paragraph', text: 'Hello' },
+			] )
+		);
+		// Two parked keystrokes on the same block: one record.
+		for ( const [ intentId, offset, text ] of [
+			[ 'k1', 5, '!' ],
+			[ 'k2', 6, '?' ],
+		] as Array< [ string, number, string ] > ) {
+			transport.captured.session!.receiveUpdate( {
+				data: JSON.stringify( {
+					intent: {
+						intentId,
+						actorId: 'u8c8',
+						baseSeq: 0,
+						txnId: null,
+						type: 'insert_text',
+						payload: {
+							syncId: 'p1',
+							field: 'content',
+							offset,
+							text,
+						},
+					},
+					actorId: 'u8c8',
+					reason: 'frame-conflict',
+				} ),
+				type: INTENT_LOG_UPDATE_TYPES.PARKED,
+			} );
+		}
+		await Promise.resolve();
+		const open = intentLogConflictSource.getOpenConflicts(
+			'postType/post',
+			'1'
+		);
+		expect( open ).toHaveLength( 1 );
+		transport.captured.sent.length = 0;
+
+		// The reviewer's merged result keeps the block's identity.
+		const replacement = JSON.stringify( [
+			{
+				name: 'core/paragraph',
+				attributes: {
+					content: 'Hello, merged',
+					metadata: { syncId: 'p1' },
+				},
+				innerBlocks: [],
+			},
+		] );
+		intentLogConflictSource.resolveConflict(
+			'postType/post',
+			'1',
+			open[ 0 ].id,
+			{ action: 'accept', content: replacement }
+		);
+
+		const sent = transport.captured.sent.map( ( update ) => ( {
+			type: update.type,
+			decoded: JSON.parse( update.data ),
+		} ) );
+		const firstResolution = sent.findIndex(
+			( row ) => INTENT_LOG_UPDATE_TYPES.RESOLVED === row.type
+		);
+		const intents = sent.filter(
+			( row ) => INTENT_LOG_UPDATE_TYPES.INTENT === row.type
+		);
+		// The replacement is an ordinary edit of the SAME block, under one
+		// txn, and every intent precedes every resolution.
+		expect( intents.length ).toBeGreaterThan( 0 );
+		expect(
+			intents.every( ( row ) => 'p1' === row.decoded.payload.syncId )
+		).toBe( true );
+		expect(
+			new Set( intents.map( ( row ) => row.decoded.txnId ) ).size
+		).toBe( 1 );
+		expect( intents[ 0 ].decoded.txnId ).toEqual( expect.any( String ) );
+		expect( firstResolution ).toBe( intents.length );
+		expect(
+			sent.slice( firstResolution ).map( ( row ) => row.decoded )
+		).toEqual( [
+			{ proposalId: 'k1', resolution: 'dismissed' },
+			{ proposalId: 'k2', resolution: 'dismissed' },
+		] );
+
+		// The document holds the merged text, and the record is closed.
+		const doc = (
+			transport.captured.session as IntentLogSession
+		 ).getDocument()!;
+		expect( doc.root[ 0 ].fields.content.text ).toBe( 'Hello, merged' );
+		expect(
+			intentLogConflictSource.getOpenConflicts( 'postType/post', '1' )
+		).toEqual( [] );
+	} );
+
+	it( "accept with empty content removes the record's block", async () => {
+		const { transport } = await loadManagedEntity();
+		transport.captured.session!.receiveUpdate(
+			snapshotRow( [
+				{ syncId: 'p1', blockType: 'core/paragraph', text: 'Keep' },
+				{ syncId: 'p2', blockType: 'core/paragraph', text: 'Drop' },
+			] )
+		);
+		transport.captured.session!.receiveUpdate( {
+			data: JSON.stringify( {
+				intent: {
+					intentId: 'parked-1',
+					actorId: 'u8c8',
+					baseSeq: 0,
+					txnId: null,
+					type: 'insert_text',
+					payload: {
+						syncId: 'p2',
+						field: 'content',
+						offset: 4,
+						text: '!',
+					},
+				},
+				actorId: 'u8c8',
+				reason: 'frame-conflict',
+			} ),
+			type: INTENT_LOG_UPDATE_TYPES.PARKED,
+		} );
+		await Promise.resolve();
+
+		intentLogConflictSource.resolveConflict(
+			'postType/post',
+			'1',
+			'parked-1',
+			{ action: 'accept', content: '' }
+		);
+		const doc = (
+			transport.captured.session as IntentLogSession
+		 ).getDocument()!;
+		expect( doc.root.map( ( block ) => block.syncId ) ).toEqual( [ 'p1' ] );
 	} );
 
 	it( 'restoreProposal re-authors lost text at the current head, then resolves', async () => {
