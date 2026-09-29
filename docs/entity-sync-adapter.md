@@ -63,15 +63,18 @@ From this checkout:
 npm run build
 npm run typecheck
 npm run test:js -- --runInBand
-npm run test:entity-sync
 ```
 
-`test:entity-sync` checks types against the vendored API and runs the adapter
-checks. They include normal entry-point registration, the real save actions,
+`typecheck` checks the adapter's types against the vendored API. The regular
+`test:js` suite includes all adapter checks: entry-point registration, the real save actions,
 real intent-log clients with local undo and redo, cancellation during a
 record load, and the real HTTP provider with a simulated server response.
-An optional Gutenberg checkout argument checks the types and save actions
-against that source instead.
+
+To run only the adapter tests:
+
+```sh
+npm run test:js -- entity-sync
+```
 
 For the vendored code:
 
