@@ -134,9 +134,9 @@ spread.
   and parks; a privileged reviewer's restore IS the approval.
 - **yjs-server**: The offending blocks are replaced with their
   kses-sanitized form and the compensating delta broadcasts. WordPress's
-  filter-on-save semantics at per-update grain — the protected markup is
-  gone and no human ever reviews it. Coarser than the other two by
-  design.
+  filter-on-save semantics at per-update grain. The markup that was
+  stripped is held for review: a privileged reviewer approves it, which
+  puts it back, or discards it.
 - **de-rtc**: Per-block sequestration, upstream's model: exactly the
   risky blocks revert to their base form and park for review while the
   safe remainder of the commit merges and lands. Restore re-proposes

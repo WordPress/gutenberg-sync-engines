@@ -22,69 +22,37 @@ release, which the release script generates from the commit history.
     is currently switched off (its registration in `src/index.ts` is
     commented out); short polling behaves normally until it is re-enabled.
 
--   A prototype flow for reviewing conflicting edits, for UI design work.
-    A block whose edits were set aside is replaced in place by a
-    recovery-style card, the way an invalid block is: a "Review conflict"
-    action above a preview of the conflict with add/remove highlighting,
-    and the block's content is read-only until the conflict is reviewed.
-    The action opens a dialog comparing "Your version" with the "Current
-    version", each shown as real read-only blocks with the editor's
-    revision-comparison highlighting (changed blocks are outlined, added
-    and removed text is marked inline) against the shared version both
-    started from; either can be restored into the merged result, which is
-    edited in its own small block editor with text formatting controls,
-    and Accept writes that result into the block and clears the set-aside
-    items. Escalations no longer raise editor notices; the in-place card
-    and the sidebar panel are the only surfaces. The compared texts are
-    pre-set placeholder content for now. Real conflicts from any engine
-    open the flow; supplying the real texts is follow-up engine work.
+-   Conflict review in the editor, owned by this plugin. A block whose
+    edit was set aside shows a card in its place with a "Review
+    conflict" action. The action opens a dialog that compares the
+    proposed version and the current version with the version both
+    started from, and Accept applies the merged result for everyone.
+    Tables and multi-block sections get their own comparison. Editor
+    notices for set-aside edits are gone.
 
--   A table-shaped variant of the conflict review prototype. When the
-    conflicted block is a table, the in-place card previews the changed
-    cells as a compact table, and the review dialog shows both versions
-    as tables highlighting each side's own changes and pre-fills the
-    merged result with a suggested cell-level merge: clean changes from
-    both sides applied, and a cell both sides changed differently
-    holding the current version's value, to be settled by editing the
-    merged table directly. The compared grids are pre-set placeholder
-    content, like the rest of the prototype.
+-   Review of blocks held by the security filter (wp_kses). A held block
+    shows a card with its markup as inert text. Users allowed to publish
+    unfiltered HTML can open a dialog to approve, edit, or remove it.
 
--   A section-shaped variant of the conflict review prototype, for
-    conflicts that have no single-block answer, like a paragraph split
-    on one side and edited on the other: the two sides no longer agree
-    on the block structure itself, so the review compares the whole
-    section. When the conflicted block is a group, or sits inside one,
-    the in-place card reads "This section has conflicting edits." and
-    the review dialog shows each version's blocks with the editor's
-    revision-comparison highlighting against the shared base: the split
-    reads as a changed paragraph plus an added one, the edit as a
-    changed paragraph. The merged result is a small multi-block editor
-    whose structure is unlocked, so resolving can keep, drop, or reshape
-    blocks; accepting replaces the section's blocks. All set-aside edits
-    landing inside one group present as a SINGLE conflict: one card on
-    the group's first affected block (other affected blocks keep their
-    normal editing controls), and accepting resolves every set-aside
-    edit in the group, so edits spanning several blocks read and settle
-    as one conflict instead of a card per block. The compared versions
-    are pre-set placeholder content, like the rest of the prototype.
+-   A "Changes to review" panel in the document sidebar. It lists the
+    set-aside changes that have no block to show a card on, such as a
+    post title or a proposed new block.
 
--   A prototype flow for reviewing blocks held back by the security
-    filter (wp_kses), for UI design work. A held block is replaced in
-    place by a recovery-style card reading "This block requires elevated
-    permissions." above the held markup shown as inert text. Users
-    allowed to publish unfiltered HTML also get a "Review changes"
-    action opening a dialog showing the held markup as the editor's
-    line-numbered code comparison, still as inert text: for a brand-new
-    proposal every line reads as added, for an update the removed and
-    added lines interleave in one view. The dialog offers Approve, Remove
-    block, and plain-text editing of the proposed markup with the
-    comparison recomputing live. The card triggers on
-    the engines' real security holds (edits parked as needing approval),
-    which no longer render the conflicting-edits card. Approve resolves
-    the parked items through the engines' restore lane, so the REAL held
-    markup lands for every collaborator. The dialog's preview contents
-    are pre-set placeholder scenarios; supplying the real texts to the
-    dialog is follow-up work.
+-   The review cards and dialogs show real contents. Each engine
+    supplies what was proposed, what the document has now, and the
+    version both started from. A plugin can register its own review
+    dialog for a block type with `registerSyncConflictView`.
+
+-   intent-log: accepting a review writes the reviewer's merged result
+    as a new change under the reviewer's account.
+
+-   de-rtc: the review route takes a new `accepted` resolution that
+    carries the reviewer's merged content.
+
+-   yjs-server: markup that the security filter strips is now held for
+    review, where it used to be discarded. The filtered block still
+    lands at once. A new route, `/wp-sync/v1/yjs-server/resolve`,
+    approves or discards a hold.
 
 ### Fixed
 

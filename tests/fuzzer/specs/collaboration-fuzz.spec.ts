@@ -473,21 +473,14 @@ async function appendToNthParagraph(
 }
 
 /**
- * The engines' review cards: the pending-edit card on a block whose edit
- * was set aside, and the approval card for a proposed new block. Both are
- * popovers drawn over the canvas, so either can sit on top of the block
- * the next UI action wants to click (issue #109).
+ * The engines' review cards. A block whose edit was set aside, or whose
+ * markup is held for approval, is REPLACED in place by a card (the way an
+ * invalid block is replaced by its recovery card): the block the next UI
+ * action wants to click may be a card, with nothing to type into until
+ * the card is decided (issue #109).
  */
-const REVIEW_CARD_SELECTOR =
-	'.editor-collaboration-pending-card, .editor-collaboration-insertion-card';
-
-// How long a UI click may wait before the harness looks for a review card
-// in its way. The full action timeout still applies to the click that
-// follows.
-const COVERED_CLICK_TIMEOUT_MS = 3000;
-
 interface CardResolution {
-	card: 'insertion' | 'pending';
+	card: 'conflict' | 'held';
 	choice: 'adopt' | 'reject';
 }
 
@@ -506,73 +499,89 @@ function createCardRng( seed: number, step: number, userIndex: number ) {
 }
 
 /**
- * The visible review cards whose box overlaps the target's box.
+ * Decide the review card a block has been replaced by, with a seeded
+ * choice, and wait for the block to come back.
  *
- * @param page   Page that draws the cards.
- * @param target Element the action wants to click.
- */
-async function findCoveringCards(
-	page: Page,
-	target: Locator
-): Promise< Locator[] > {
-	const box = await target.boundingBox();
-	if ( ! box ) {
-		return [];
-	}
-	const covering: Locator[] = [];
-	const cards = page.locator( REVIEW_CARD_SELECTOR );
-	for ( let i = 0; i < ( await cards.count() ); i++ ) {
-		const card = cards.nth( i );
-		const cardBox = await card.boundingBox();
-		if (
-			cardBox &&
-			cardBox.x < box.x + box.width &&
-			box.x < cardBox.x + cardBox.width &&
-			cardBox.y < box.y + box.height &&
-			box.y < cardBox.y + cardBox.height
-		) {
-			covering.push( card );
-		}
-	}
-	return covering;
-}
-
-/**
- * Make a seeded Adopt/Reject (Approve/Discard) choice on one review card
- * and wait for the card to go away. Adopt falls back to Reject when this
- * user may not adopt (the card shows a hint instead of the button).
+ * A conflict card opens the merge dialog: "adopt" restores the proposed
+ * version into the merged result before accepting, "reject" accepts the
+ * merged result as it opens (the current version). A held block's card
+ * opens the approval dialog for users who may approve: "adopt" approves,
+ * "reject" removes the block. A user who may not approve has no action
+ * on the card, and the card stays.
  *
- * @param card The card to resolve.
- * @param rng  Choice source.
+ * @param page   Page that owns the block.
+ * @param target The block element.
+ * @param rng    Choice source.
+ * @return The resolution, or null when the target is not a card or the
+ *         acting user cannot decide it.
  */
 async function resolveReviewCard(
-	card: Locator,
+	page: Page,
+	target: Locator,
 	rng: Random
-): Promise< CardResolution > {
-	const handle = await card.elementHandle();
-	const kind = ( await card.evaluate( ( element ) =>
-		element.classList.contains( 'editor-collaboration-insertion-card' )
-	) )
-		? 'insertion'
-		: 'pending';
-	const [ adoptName, rejectName ] =
-		kind === 'insertion' ? [ 'Approve', 'Discard' ] : [ 'Adopt', 'Reject' ];
-	const adopt = card.getByRole( 'button', { exact: true, name: adoptName } );
-	const choice =
-		rng() < 0.5 && ( await adopt.count() ) > 0 ? 'adopt' : 'reject';
-	await ( choice === 'adopt'
-		? adopt
-		: card.getByRole( 'button', { exact: true, name: rejectName } )
-	).click();
-	await handle?.waitForElementState( 'hidden', { timeout: 10000 } );
-	return { card: kind, choice };
+): Promise< CardResolution | null > {
+	const reviewConflict = target.getByRole( 'button', {
+		exact: true,
+		name: 'Review conflict',
+	} );
+	if ( ( await reviewConflict.count() ) > 0 ) {
+		const choice = rng() < 0.5 ? 'adopt' : 'reject';
+		await reviewConflict.first().click();
+		const dialog = page.getByRole( 'dialog', {
+			name: 'Review conflicting edits',
+		} );
+		await dialog.waitFor( { timeout: 10000 } );
+		if ( 'adopt' === choice ) {
+			await dialog
+				.getByRole( 'button', { name: 'Restore this version' } )
+				.first()
+				.click();
+		}
+		await dialog
+			.getByRole( 'button', { exact: true, name: 'Accept' } )
+			.click();
+		await dialog.waitFor( { state: 'hidden', timeout: 10000 } );
+		await reviewConflict
+			.first()
+			.waitFor( { state: 'detached', timeout: 10000 } )
+			.catch( () => {} );
+		return { card: 'conflict', choice };
+	}
+
+	const reviewHeld = target.getByRole( 'button', {
+		exact: true,
+		name: 'Review changes',
+	} );
+	if ( ( await reviewHeld.count() ) > 0 ) {
+		const choice = rng() < 0.5 ? 'adopt' : 'reject';
+		await reviewHeld.first().click();
+		const dialog = page.getByRole( 'dialog', {
+			name: 'Review proposed changes',
+		} );
+		await dialog.waitFor( { timeout: 10000 } );
+		await dialog
+			.getByRole( 'button', {
+				exact: true,
+				name: 'adopt' === choice ? 'Approve' : 'Remove block',
+			} )
+			.click();
+		await dialog.waitFor( { state: 'hidden', timeout: 10000 } );
+		await reviewHeld
+			.first()
+			.waitFor( { state: 'detached', timeout: 10000 } )
+			.catch( () => {} );
+		return { card: 'held', choice };
+	}
+
+	return null;
 }
 
 /**
- * Click a canvas element the way a person would: when an engine's review
- * card covers it, deal with the card first (a seeded Adopt or Reject) and
- * then click. The resolutions are returned so the action records them in
- * its trace detail. Anything else in the way fails the click as before.
+ * Click a canvas block the way a person would: when a review card has
+ * replaced it, decide the card first (a seeded choice) and then click the
+ * block that comes back. The resolutions are returned so the action
+ * records them in its trace detail. A card the acting user cannot decide
+ * is clicked as it is.
  *
  * @param page   Page that owns the target.
  * @param target Element to click.
@@ -584,19 +593,14 @@ async function clickPastReviewCards(
 	rng: Random
 ): Promise< CardResolution[] > {
 	const resolutions: CardResolution[] = [];
-	for ( let attempt = 0; attempt < 3; attempt++ ) {
-		try {
-			await target.click( { timeout: COVERED_CLICK_TIMEOUT_MS } );
-			return resolutions;
-		} catch {
-			const covering = await findCoveringCards( page, target );
-			if ( ! covering.length ) {
-				break;
-			}
-			for ( const card of covering ) {
-				resolutions.push( await resolveReviewCard( card, rng ) );
-			}
+	// One block can carry several records (edits by different authors);
+	// they present one after the other.
+	for ( let attempt = 0; attempt < 5; attempt++ ) {
+		const resolution = await resolveReviewCard( page, target, rng );
+		if ( ! resolution ) {
+			break;
 		}
+		resolutions.push( resolution );
 	}
 	await target.click();
 	return resolutions;

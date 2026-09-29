@@ -285,6 +285,16 @@ The framework/plugin split is complete: the framework ships **neither** engines
     yjs-server.
   - `providers/{http-polling,sse,websocket}/` — transports (sse reuses the
     polling manager, swapping only its receive half for the stream).
+  - `review/` — the CONFLICT REVIEW UI: the cards that replace a
+    conflicted or held block in the canvas (two `editor.BlockEdit`
+    filters in `hooks/`), the dialogs they open (`components/`), the
+    sidebar panel for conflicts with no block to show them on, and the
+    two registries the engines and block views plug into
+    (`conflicts.ts`, `views.ts`). The components are JavaScript moved
+    from a prototype (`// @ts-nocheck`, excluded from typecheck in
+    tests); the registries and types are TypeScript. It reuses the
+    editor's revision comparison through the subtree's one vendor
+    delta (see the subtree section). Jest: `tests/js/review/`.
   - `awareness/` — SLOW AWARENESS (`docs/awareness-high-latency.md`),
     on when the "Awareness interval" setting is above 0: each tab
     publishes the block its selection is in (`metadata.syncId`, else the
@@ -372,6 +382,18 @@ when active, always wins (the loader defers; the
 `wp-content/plugins/gutenberg`). The subtree is committed **source-only** —
 its `node_modules/` and `build/` are gitignored (by Gutenberg's own nested
 `.gitignore`) and must be generated locally (see Setup).
+
+The subtree carries ONE deliberate delta on top of its pin, preserve it
+when bumping: the editor package exports its revision comparison as
+private APIs for the conflict review UI (`diffRevisionContent`,
+`registerDiffFormatTypes`, `unregisterDiffFormatTypes`,
+`DiffDescriptions`, `REVISION_DIFF_STYLES`,
+`REVISION_REMOVED_FILTER_SVG`, `RevisionsCodeDiff`). It touches four
+files under `gutenberg/packages/editor/`: `src/private-apis.js`,
+`src/components/post-revisions-preview/block-diff-view.jsx` (new),
+`revisions-canvas.jsx` beside it, and `CHANGELOG.md`. The plugin reads
+them through `unlockEditor` in `src/lock-unlock.ts`. The delta goes
+away once the export lands upstream.
 
 Bump the pin with a squashed subtree pull from the framework checkout:
 
@@ -858,12 +880,26 @@ applies.
   ACCEPTED rows), yjs-server via the shared `src/engines/yjs/undo.ts`,
   and de-rtc via revert-edit undo (reverts derived from the client's
   own accepted canonical rows, proposed as ordinary new changes).
-- **Conflict review is cross-engine**: intent-log through its bespoke
-  manager; de-rtc parks escalations as durable `parked` rows and
-  presents them through the framework review panel via
-  `src/engines/review-manager-decorator.ts` (the plumbing any
-  createSyncManager-composed engine can reuse); yjs-server has NO review
-  lane by design (CRDT merge detects no conflicts to park).
+- **Conflict review is cross-engine, and the plugin owns its UI**
+  (`src/review/`). Each engine publishes its open conflicts as
+  `SyncConflict` records (`src/review/types.ts`: both sides plus the
+  version they started from) through a `SyncConflictSource` registered
+  in `src/index.ts`, and takes the reviewer's decision back through
+  `resolveConflict` (`accept` with the merged content, or `dismiss`).
+  The ENGINE applies the decision; the UI never writes to the canvas.
+  intent-log builds records in `src/engines/intent-log-conflicts.ts`
+  and authors an accepted result as a new change; de-rtc parks
+  escalations as durable `parked` rows and resolves them over its REST
+  route (`accepted` carries the content); yjs-server has NO merge
+  conflicts (CRDT merge detects none to park) but HOLDS markup the kses
+  lane strips (`held` / `held-resolved` rows, the `META_HELD` ledger,
+  the `/wp-sync/v1/yjs-server/resolve` route). The framework's own
+  review panel and notices are no longer fed. Two traps: the review
+  dialogs mount block editors whose blocks carry the SAME syncIds as
+  the document, so the card filters must stand down inside them
+  (`ReviewSurface`); and a conflict with no block in the canvas (a
+  post field, a proposed new block) has no card, only the "Changes to
+  review" sidebar panel (`components/unanchored-panel.jsx`).
 - **Shared genesis property seed**: all three engines seed
   `WP_Sync_Post_Genesis_Props::for_post()` (REST-shaped scalars,
   taxonomies by rest_base, `meta.<key>`), so joiners see identical field
@@ -873,9 +909,11 @@ applies.
   decoded/merged/re-encoded per request, the most expensive per-ingest
   path of the three engines (run `npm run bench -- --suite=engines` for
   numbers), no
-  review lane
-  (register conflicts LWW silently), kses is sanitize-and-compensate (no
-  human review of stripped markup), rooms are size-gated at both ends
+  review of merges
+  (register conflicts LWW silently), kses is sanitize-and-compensate
+  (the sanitized block lands at once; the stripped markup is held for a
+  reviewer, one hold per author and block), rooms are size-gated at
+  both ends
   (genesis refuses above `wp_sync_yjs_server_max_genesis_bytes`, 1 MB
   default; a room grown past `wp_sync_yjs_server_max_room_bytes`, 8 MB
   default, rejects further writes with 413 while reads/saves continue —

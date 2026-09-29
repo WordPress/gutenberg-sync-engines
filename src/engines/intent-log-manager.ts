@@ -1161,13 +1161,6 @@ function replaceBlocksInTree(
 	return intoParent( rewritten );
 }
 
-/** Intent types that change the block structure. */
-const STRUCTURAL_INTENTS = new Set( [
-	'insert_block',
-	'remove_block',
-	'move_block',
-] );
-
 export function createIntentLogManager( debug = false ): SyncManager {
 	const entityStates = new Map< string, EntityState >();
 	const collectionStates = new Map< ObjectType, CollectionState >();
@@ -2346,25 +2339,19 @@ export function createIntentLogManager( debug = false ): SyncManager {
 				state.capturing = true;
 				try {
 					/*
-					 * A batch that changes the block structure is ONE
-					 * atomic unit (a split is a text change plus an
-					 * insertion: parking half of it would leave half an
-					 * edit in the document), so its members park together
-					 * when any of them conflicts. A batch of text,
-					 * format, and attribute edits stays unstamped: its
-					 * members merge or park one by one, which keeps as
-					 * much of a typing burst merging as can, and conflict
-					 * review folds the parked ones back into one record
-					 * (see intent-log-conflicts.ts).
+					 * Captured batches are NOT stamped as one atomic unit.
+					 * A batch is everything the editor changed since the
+					 * last capture, related or not: stamped as a unit, one
+					 * conflicting member would set the whole batch aside
+					 * (an inserted paragraph parked because an attribute
+					 * write beside it conflicted; found by the e2e save
+					 * test). The members merge or park one by one, and
+					 * conflict review folds what parked back into one
+					 * record per author and block (see
+					 * intent-log-conflicts.ts).
 					 */
-					const structural = derived.intents.some( ( intent ) =>
-						STRUCTURAL_INTENTS.has( intent.type )
-					);
 					const envelopes = state.session.authorBatch(
-						derived.intents,
-						structural
-							? { txnId: globalThis.crypto.randomUUID() }
-							: {}
+						derived.intents
 					);
 					undoManager?.noteAuthored( state.session, envelopes );
 				} finally {

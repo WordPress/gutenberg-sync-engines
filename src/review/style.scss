@@ -172,3 +172,54 @@
 		margin-top: $grid-unit-20;
 	}
 }
+
+// The sidebar panel for conflicts that have no block to present on.
+.gse-review-panel {
+	.gse-review-panel__description {
+		color: $gray-700;
+		margin: 0 0 $grid-unit-15;
+	}
+
+	.gse-review-panel__item {
+		border-top: $border-width solid $gray-200;
+		padding: $grid-unit-15 0;
+
+		&:last-of-type {
+			padding-bottom: 0;
+		}
+	}
+
+	.gse-review-panel__heading {
+		font-weight: 600;
+		margin: 0 0 $grid-unit-10;
+	}
+
+	.gse-review-panel__label {
+		color: $gray-700;
+		font-size: $helptext-font-size;
+		margin: 0 0 $grid-unit-05;
+		text-transform: uppercase;
+	}
+
+	.gse-review-panel__value {
+		background: $gray-100;
+		border-radius: $radius-small;
+		margin: 0 0 $grid-unit-10;
+		max-height: 8em;
+		overflow: auto;
+		padding: $grid-unit-10;
+		white-space: pre-wrap;
+		word-break: break-word;
+	}
+
+	.gse-review-panel__actions {
+		display: flex;
+		gap: $grid-unit-10;
+	}
+
+	.gse-review-panel__hint {
+		color: $gray-700;
+		font-size: $helptext-font-size;
+		margin: $grid-unit-10 0 0;
+	}
+}
