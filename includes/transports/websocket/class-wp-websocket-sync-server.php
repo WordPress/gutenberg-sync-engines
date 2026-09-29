@@ -370,8 +370,21 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 
 					foreach ( $write as $stream ) {
 						$key = (int) $stream;
-						if ( isset( $this->clients[ $key ] ) ) {
-							$this->clients[ $key ]['conn']->flush_writes();
+						if ( ! isset( $this->clients[ $key ] ) ) {
+							continue;
+						}
+
+						/*
+						 * A failed write means the peer is gone, and takes
+						 * the connection's place in the client table with
+						 * it. Nothing else can reap a receive stream whose
+						 * peer vanished without closing it — the idle sweep
+						 * passes over a framing that never sends anything —
+						 * so the entry would otherwise hold its slot for
+						 * the life of the daemon.
+						 */
+						if ( ! $this->clients[ $key ]['conn']->flush_writes() ) {
+							$this->disconnect( $key );
 						}
 					}
 				}
