@@ -267,6 +267,63 @@ class Tests_Collaboration_WpSseSyncServer extends WP_Test_REST_TestCase {
 		$this->assertTrue( $waiter->wait( 1.0 ), 'A presence write bumps the version.' );
 	}
 
+	public function test_a_substitute_backend_write_wakes_the_version_check() {
+		$backend = new class() implements WP_Sync_Awareness_Backend {
+			public $rooms = array();
+			public function entries( string $room, int $timeout ): array {
+				return array_values( $this->rooms[ $room ] ?? array() );
+			}
+			public function put( string $room, int $client_id, array $state, int $user_id, int $timeout ): array {
+				$this->rooms[ $room ][ $client_id ] = array(
+					'client_id'  => $client_id,
+					'state'      => $state,
+					'updated_at' => time(),
+					'wp_user_id' => $user_id,
+				);
+				return $this->entries( $room, $timeout );
+			}
+			public function forget( string $room, int $client_id, int $timeout ): array {
+				unset( $this->rooms[ $room ][ $client_id ] );
+				return $this->entries( $room, $timeout );
+			}
+		};
+		add_filter( 'wp_sync_awareness_backend', static fn() => $backend );
+		WP_Sync_Awareness::reset_backend_for_testing();
+		add_filter( 'wp_sync_sse_redis_url', '__return_empty_string' );
+		$this->server->redis = null;
+		$sleeps              = 0;
+		$this->server->sleep = function ( float $seconds ) use ( &$sleeps, $backend ) {
+			$this->server->clock += $seconds;
+			++$sleeps;
+			if ( 2 === $sleeps ) {
+				$backend->put( 'postType/post:' . $this->post_id, 42, array( 'name' => 'peer' ), 0, 30 );
+			}
+			if ( $sleeps > 6 ) {
+				throw new RuntimeException( 'End test stream' );
+			}
+		};
+		$this->server->handle_request( $this->request() ); // Mints the generation token (see above).
+		$request = $this->request();
+		$initial = $this->server->handle_request( $request )->get_data();
+		$events  = array();
+		try {
+			$this->server->stream(
+				$request,
+				$initial,
+				function ( $frame ) use ( &$events ) {
+					if ( 0 === strpos( $frame, 'event: sync' ) ) {
+						$events[] = array( $this->server->clock, json_decode( explode( 'data: ', $frame, 2 )[1], true ) );
+					}
+				}
+			);
+		} finally {
+			WP_Sync_Awareness::reset_backend_for_testing();
+		}
+		$this->assertCount( 2, $events, 'The initial read, then the read the awareness check woke.' );
+		$this->assertSame( 1.0, $events[1][0], 'Noticed on the check right after the write, though it bumped no counter.' );
+		$this->assertArrayHasKey( 42, $events[1][1]['rooms'][0]['awareness'] );
+	}
+
 	public function test_a_write_during_the_read_still_wakes_the_next_check() {
 		add_filter( 'wp_sync_sse_redis_url', '__return_empty_string' );
 		$this->server->redis        = null;

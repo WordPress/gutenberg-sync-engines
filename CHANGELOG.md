@@ -65,6 +65,12 @@ release, which the release script generates from the commit history.
 
 ### Changed
 
+-   The plugin now requires the
+    [Presence API](https://wordpress.org/plugins/presence-api/) plugin and
+    WordPress 7.0, so who is in a room is kept in its `wp_presence` table
+    by default. When presence recording is turned off, awareness falls
+    back to the built-in store and the editor keeps showing collaborators.
+
 -   Intent-log now preserves formatting and safe deletions across concurrent
     paragraph splits, including repeated splits and joins. Each edit keeps
     one outcome, and undo covers all affected paragraphs. Protocol 2 requires

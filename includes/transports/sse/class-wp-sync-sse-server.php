@@ -219,25 +219,44 @@ class WP_Sync_SSE_Server extends WP_HTTP_Polling_Sync_Server {
 			wp_cache_flush_runtime();
 		}
 		if ( $this->storage_has_versions() ) {
-			return $this->storage->get_room_versions( array_column( $this->stream_rooms, 'room' ) ) !== $this->stream_versions;
+			if ( $this->storage->get_room_versions( array_column( $this->stream_rooms, 'room' ) ) !== $this->stream_versions ) {
+				return true;
+			}
+			// A substitute backend's writes bump no counter, so its awareness is read.
+			if ( ! WP_Sync_Awareness::has_substitute_backend() ) {
+				return false;
+			}
+			foreach ( $this->stream_rooms as $room ) {
+				if ( $this->awareness_changed( (string) $room['room'] ) ) {
+					return true;
+				}
+			}
+			return false;
 		}
 		foreach ( $this->stream_rooms as $room ) {
 			$name   = (string) $room['room'];
 			$engine = $this->engines->get_engine_for_room( $name );
 			$result = $engine->get_updates_since( $name, (int) $room['client_id'], (int) $room['after'], array() );
-			if ( ! empty( $result['updates'] ) ) {
-				return true;
-			}
-			$current = array();
-			foreach ( $this->awareness->entries( $name, self::AWARENESS_TIMEOUT ) as $entry ) {
-				$current[ $entry['client_id'] ] = $entry['state'];
-			}
-			// phpcs:ignore Universal.Operators.StrictComparisons.LooseNotEqual, WordPress.PHP.YodaConditions.NotYoda -- Order-insensitive comparison intended.
-			if ( $current != ( $this->stream_awareness[ $name ] ?? array() ) ) {
+			if ( ! empty( $result['updates'] ) || $this->awareness_changed( $name ) ) {
 				return true;
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * Whether a room's awareness differs from the map last sent.
+	 *
+	 * @param string $name Room identifier.
+	 * @return bool True when the next read would carry new awareness.
+	 */
+	protected function awareness_changed( string $name ): bool {
+		$current = array();
+		foreach ( $this->awareness->entries( $name, self::AWARENESS_TIMEOUT ) as $entry ) {
+			$current[ $entry['client_id'] ] = $entry['state'];
+		}
+		// phpcs:ignore Universal.Operators.StrictComparisons.LooseNotEqual, WordPress.PHP.YodaConditions.NotYoda -- Order-insensitive comparison intended.
+		return $current != ( $this->stream_awareness[ $name ] ?? array() );
 	}
 
 	/**
