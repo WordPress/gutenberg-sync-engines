@@ -58,7 +58,6 @@ import {
 	setSignalCarrier,
 	setSyncClientId,
 } from '../advisory/signaling';
-import { registerSaveFlush } from './save-flush';
 import type {
 	ConnectionStatus,
 	EngineDisposition,
@@ -886,7 +885,6 @@ function installAdvisoryHooks(): void {
 		}
 		return false;
 	} );
-	registerSaveFlush( flushHeldUpdates );
 	onAdvisoryCoverageChanged( reschedule );
 	onAdvisoryAnnounce( pollSoonForAnnounce );
 	onRoomCursor( ( cursor ) => {

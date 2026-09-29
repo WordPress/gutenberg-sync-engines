@@ -51,7 +51,7 @@ export function BlockCardBody( { groups, onResolve } ) {
 					? __( 'Your edit on this block is pending.' )
 					: __(
 							'A collaborator’s edit on this block is pending.'
-					  ) }{ ' ' }
+						) }{ ' ' }
 				{ reasons.join( ' ' ) }
 			</p>
 			{ summaries.length > 0 && (
@@ -134,7 +134,7 @@ export function InsertionCardBody( { item, onResolve } ) {
 					? __( 'You proposed adding content that needs approval.' )
 					: __(
 							'A collaborator proposed adding content that needs approval.'
-					  ) }
+						) }
 			</p>
 			{ blockType && (
 				<p className="editor-collaboration-insertion-card__type">

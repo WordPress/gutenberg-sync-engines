@@ -10,6 +10,13 @@ release, which the release script generates from the commit history.
 
 ## Unreleased
 
+### Changed
+
+- The bundled Gutenberg includes the entity sync interface from
+  [Gutenberg #83410](https://github.com/WordPress/gutenberg/pull/83410).
+  The plugin registers its adapter at startup for all existing engines and
+  transports; no separate opt-in is required.
+
 ## 0.0.2 — September 2026
 
 ### Added

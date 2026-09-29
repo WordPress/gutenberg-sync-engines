@@ -64,7 +64,7 @@ export default function CollaborationReviewPanel() {
 										// the block; the flash points at it.
 										selectBlock( clientId );
 										flashBlock( clientId, 500 );
-								  }
+									}
 								: undefined
 						}
 					/>

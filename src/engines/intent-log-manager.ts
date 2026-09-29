@@ -1012,6 +1012,8 @@ export function createIntentLogManager( debug = false ): SyncManager {
 		string,
 		Promise< string[] >
 	>();
+	// A load can still be fetching taxonomy metadata when its record unloads.
+	const pendingLoads = new Map< string, symbol >();
 	const taxonomyProperties = ( postType: string ): Promise< string[] > => {
 		let promise = taxonomyPropertiesByPostType.get( postType );
 		if ( ! promise ) {
@@ -1047,7 +1049,7 @@ export function createIntentLogManager( debug = false ): SyncManager {
 		handlers: RecordHandlers
 	): Promise< void > {
 		const key = entityKey( objectType, objectId );
-		if ( entityStates.has( key ) ) {
+		if ( entityStates.has( key ) || pendingLoads.has( key ) ) {
 			return;
 		}
 		if ( false === syncConfig.shouldSync?.( objectType, objectId ) ) {
@@ -1057,12 +1059,14 @@ export function createIntentLogManager( debug = false ): SyncManager {
 		if ( 0 === providerCreators.length ) {
 			return;
 		}
+		const loadToken = Symbol();
+		pendingLoads.set( key, loadToken );
 
 		/*
 		 * This entity's synced properties: the static scalar whitelist plus
 		 * the post type's attached taxonomies (objectType is
-		 * `postType/<slug>`). Resolved before any state exists; re-check
-		 * for a racing load after the await.
+		 * `postType/<slug>`). Resolved before any state exists; check that
+		 * this load still owns the record after the await.
 		 */
 		const syncedProperties = [
 			...SYNCED_PROPERTIES,
@@ -1070,9 +1074,10 @@ export function createIntentLogManager( debug = false ): SyncManager {
 				objectType.split( '/' )[ 1 ] ?? ''
 			) ),
 		];
-		if ( entityStates.has( key ) ) {
+		if ( pendingLoads.get( key ) !== loadToken ) {
 			return;
 		}
+		pendingLoads.delete( key );
 
 		/*
 		 * The presence surface: the entity's syncConfig constructs the typed
@@ -2367,6 +2372,7 @@ export function createIntentLogManager( debug = false ): SyncManager {
 				return;
 			}
 			const key = entityKey( objectType, objectId );
+			pendingLoads.delete( key );
 			const state = entityStates.get( key );
 			if ( ! state ) {
 				return;
@@ -2382,6 +2388,7 @@ export function createIntentLogManager( debug = false ): SyncManager {
 		},
 
 		unloadAll() {
+			pendingLoads.clear();
 			for ( const [ , state ] of entityStates ) {
 				state.unloaded = true;
 				if ( state.syncTimer ) {

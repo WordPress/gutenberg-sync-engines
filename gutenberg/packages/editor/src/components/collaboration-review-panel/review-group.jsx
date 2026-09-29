@@ -33,10 +33,10 @@ export default function ReviewGroup( {
 		reason = restorable
 			? `${ reason } ${ __(
 					'Adopting it publishes the content under your account.'
-			  ) }`
+				) }`
 			: `${ reason } ${ __(
 					'Only someone allowed to publish unfiltered HTML can adopt it.'
-			  ) }`;
+				) }`;
 	}
 	const summaries = items
 		.map( ( item ) => item.summary ?? item.excerpt )

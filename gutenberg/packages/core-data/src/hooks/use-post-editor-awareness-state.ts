@@ -227,8 +227,7 @@ function useLastPostSave(
 					savedAt > setupTime
 				) {
 					const postStatus = recordMap.get( 'status' ) as
-						| string
-						| undefined;
+						string | undefined;
 					setLastSave( { savedAt, savedByClientId, postStatus } );
 				}
 			}

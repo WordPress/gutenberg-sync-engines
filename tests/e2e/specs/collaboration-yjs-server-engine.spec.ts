@@ -172,14 +172,42 @@ test.describe( 'Collaboration - yjs-server engine @engine-yjs-server', () => {
 		const { editor2, page2 } = collaborationUtils;
 		const page1 = editor.page;
 
-		await editor.canvas
-			.getByRole( 'document', { name: 'Add default block' } )
-			.click();
-		await page1.keyboard.type( 'First author paragraph' );
-		await editor2.canvas
-			.getByRole( 'document', { name: 'Add default block' } )
-			.click();
-		await page2.keyboard.type( 'Second author paragraph' );
+		// Hold the first user's updates until both users have started a
+		// paragraph. Otherwise the remote paragraph can replace the empty
+		// placeholder before the second user clicks it.
+		let releaseUpdates!: () => void;
+		const updatesReleased = new Promise< void >( ( resolve ) => {
+			releaseUpdates = resolve;
+		} );
+		const matchSyncUpdates = ( url: URL ) =>
+			decodeURIComponent( url.href ).includes( '/wp-sync/v1/updates' );
+		await page1.route( matchSyncUpdates, async ( route ) => {
+			await updatesReleased;
+			await route.continue();
+		} );
+
+		try {
+			await editor.canvas
+				.getByRole( 'document', { name: 'Add default block' } )
+				.click();
+			await page1.keyboard.type( 'First author paragraph' );
+			await editor2.canvas
+				.getByRole( 'document', { name: 'Add default block' } )
+				.click();
+			await page2.keyboard.type( 'Second' );
+		} finally {
+			releaseUpdates();
+		}
+
+		// The first remote sibling changes which element owns keyboard
+		// input. Continue typing without clicking again: focus and the
+		// caret must stay in the second user's paragraph.
+		await expect(
+			editor2.canvas.getByText( 'First author paragraph', {
+				exact: true,
+			} )
+		).toBeVisible( { timeout: 10000 } );
+		await page2.keyboard.type( ' author paragraph' );
 
 		for ( const currentEditor of [ editor, editor2 ] ) {
 			await expect( async () => {

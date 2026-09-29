@@ -17,7 +17,7 @@ import {
 	isNumericID,
 	getUserPermissionCacheKey,
 } from './utils';
-import { getSyncManager } from './sync';
+import { getEntitySyncManager } from './entity-sync';
 import type * as ET from './entity-types';
 import logEntityDeprecation from './utils/log-entity-deprecation';
 
@@ -333,8 +333,7 @@ export interface GetEntityRecord {
 	 */
 	<
 		EntityRecord extends
-			| ET.EntityRecord< any >
-			| Partial< ET.EntityRecord< any > >,
+			ET.EntityRecord< any > | Partial< ET.EntityRecord< any > >,
 	>(
 		state: State,
 		kind: string,
@@ -356,8 +355,7 @@ export interface GetEntityRecord {
 		): ET.EntityRecordOfQuery< Kind, Name, Query > | undefined;
 		<
 			EntityRecord extends
-				| ET.EntityRecord< any >
-				| Partial< ET.EntityRecord< any > >,
+				ET.EntityRecord< any > | Partial< ET.EntityRecord< any > >,
 		>(
 			kind: string,
 			name: string,
@@ -384,8 +382,7 @@ export interface GetEntityRecord {
 		): Promise< ET.EntityRecordOfQuery< Kind, Name, Query > | undefined >;
 		<
 			EntityRecord extends
-				| ET.EntityRecord< any >
-				| Partial< ET.EntityRecord< any > >,
+				ET.EntityRecord< any > | Partial< ET.EntityRecord< any > >,
 		>(
 			kind: string,
 			name: string,
@@ -393,7 +390,7 @@ export interface GetEntityRecord {
 			query?: GetRecordsHttpQuery
 		): Promise< EntityRecord | undefined >;
 	};
-	__unstableNormalizeArgs?: ( args: EntityRecordArgs ) => EntityRecordArgs;
+	normalizeArgs?: ( args: EntityRecordArgs ) => EntityRecordArgs;
 }
 
 /**
@@ -412,8 +409,7 @@ export interface GetEntityRecord {
  */
 export const getEntityRecord = ( <
 	EntityRecord extends
-		| ET.EntityRecord< any >
-		| Partial< ET.EntityRecord< any > >,
+		ET.EntityRecord< any > | Partial< ET.EntityRecord< any > >,
 >(
 	state: State,
 	kind: string,
@@ -452,7 +448,7 @@ export const getEntityRecord = ( <
  * @param args EntityRecordArgs the selector arguments.
  * @return EntityRecordArgs the normalized arguments.
  */
-getEntityRecord.__unstableNormalizeArgs = (
+getEntityRecord.normalizeArgs = (
 	args: EntityRecordArgs
 ): EntityRecordArgs => {
 	const newArgs = [ ...args ] as EntityRecordArgs;
@@ -654,8 +650,7 @@ export interface GetEntityRecords {
 	 */
 	<
 		EntityRecord extends
-			| ET.EntityRecord< any >
-			| Partial< ET.EntityRecord< any > >,
+			ET.EntityRecord< any > | Partial< ET.EntityRecord< any > >,
 	>(
 		state: State,
 		kind: string,
@@ -675,8 +670,7 @@ export interface GetEntityRecords {
 		): ET.EntityRecordOfQuery< Kind, Name, Query >[] | null;
 		<
 			EntityRecord extends
-				| ET.EntityRecord< any >
-				| Partial< ET.EntityRecord< any > >,
+				ET.EntityRecord< any > | Partial< ET.EntityRecord< any > >,
 		>(
 			kind: string,
 			name: string,
@@ -696,8 +690,7 @@ export interface GetEntityRecords {
 		): Promise< ET.EntityRecordOfQuery< Kind, Name, Query >[] | null >;
 		<
 			EntityRecord extends
-				| ET.EntityRecord< any >
-				| Partial< ET.EntityRecord< any > >,
+				ET.EntityRecord< any > | Partial< ET.EntityRecord< any > >,
 		>(
 			kind: string,
 			name: string,
@@ -719,8 +712,7 @@ export interface GetEntityRecords {
  */
 export const getEntityRecords = ( <
 	EntityRecord extends
-		| ET.EntityRecord< any >
-		| Partial< ET.EntityRecord< any > >,
+		ET.EntityRecord< any > | Partial< ET.EntityRecord< any > >,
 >(
 	state: State,
 	kind: string,
@@ -861,7 +853,7 @@ export const __experimentalGetDirtyEntityRecords = createSelector(
 							key: entityRecord
 								? entityRecord[
 										entityConfig.key || DEFAULT_ENTITY_KEY
-								  ]
+									]
 								: undefined,
 							title:
 								entityConfig?.getTitle?.( entityRecord ) || '',
@@ -914,7 +906,7 @@ export const __experimentalGetEntitiesBeingSaved = createSelector(
 							key: entityRecord
 								? entityRecord[
 										entityConfig.key || DEFAULT_ENTITY_KEY
-								  ]
+									]
 								: undefined,
 							title:
 								entityConfig?.getTitle?.( entityRecord ) || '',
@@ -1239,7 +1231,7 @@ export function getRedoEdit( state: State ): Optional< any > {
  * @return Whether there is a previous edit or not.
  */
 export function hasUndo( state: State ): boolean {
-	if ( getSyncManager()?.undoManager ) {
+	if ( getEntitySyncManager()?.undoManager ) {
 		return state.syncUndoManagerState.hasUndo;
 	}
 	return getUndoManager( state ).hasUndo();
@@ -1254,7 +1246,7 @@ export function hasUndo( state: State ): boolean {
  * @return Whether there is a next edit or not.
  */
 export function hasRedo( state: State ): boolean {
-	if ( getSyncManager()?.undoManager ) {
+	if ( getEntitySyncManager()?.undoManager ) {
 		return state.syncUndoManagerState.hasRedo;
 	}
 	return getUndoManager( state ).hasRedo();

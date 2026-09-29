@@ -52,6 +52,10 @@ module.exports = {
 	},
 	moduleNameMapper: {
 		...( defaultConfig.moduleNameMapper || {} ),
+		// The contract tests import core-data source. Match WordPress's single
+		// API-fetch instance and use the local CJS uuid with this Jest runner.
+		'^uuid$': require.resolve( 'uuid' ),
+		'^@wordpress/api-fetch$': require.resolve( '@wordpress/api-fetch' ),
 		'^@wordpress/sync$': SYNC_SRC,
 		// Stateless grammar parser used by the intent-log manager to read
 		// persisted syncIds out of loaded record content; resolved from the

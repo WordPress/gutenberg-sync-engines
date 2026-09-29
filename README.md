@@ -116,21 +116,24 @@ The plugin registers via:
 
 ## Development
 
-A modified copy of Gutenberg at runtime is vendored as a **git subtree** in
-`gutenberg/` and mounted by `.wp-env.json` so the local WordPress environment
-runs the exact Gutenberg the engines were built against. No separate checkout
-needed.
+The framework is maintained in a separate Gutenberg branch and copied into `gutenberg/` as a **squashed Git subtree**. Each plugin commit pins one exact
+framework commit. The plugin loads this bundled copy when no standalone
+Gutenberg plugin is active.
 
 ### Setup
 
 ```bash
-composer install          # PHP tooling (PHPCS/WPCS, PHPUnit + polyfills)
-npm install               # JS tooling (@wordpress/scripts, wp-env, Playwright)
-npm run build             # Build this plugin's client bundle
-
-# Build the vendored Gutenberg.
-cd gutenberg && npm install --ignore-scripts && npm run build && cd ..
+composer install          # PHP tooling
+npm install               # Plugin dependencies
+cd gutenberg && npm ci --ignore-scripts && npm run build && cd ..
+npm run build             # Plugin client bundle
 ```
+
+A normal clone includes the Gutenberg source. After switching plugin
+revisions, rebuild it if the bundled version changed.
+
+Framework development, rebasing, and updating the pin are described in
+[docs/gutenberg-subtree.md](docs/gutenberg-subtree.md).
 
 ### Environment
 

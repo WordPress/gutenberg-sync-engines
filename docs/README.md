@@ -27,6 +27,12 @@ Start here if you want to:
   outline and a badge instead of live cursors.
 - **Look up a term** → [glossary.md](glossary.md) — the project's own
   vocabulary in plain words.
+- **Understand the entity sync integration** →
+  [entity-sync-adapter.md](entity-sync-adapter.md) — the default
+  adapter, its checks, and the remaining migration limits.
+- **Update the bundled Gutenberg framework** →
+  [gutenberg-subtree.md](gutenberg-subtree.md) — setup, rebasing,
+  updating the pin, and release packaging.
 - **See what we plan to build next** → [plan/](plan/README.md) — one
   file per bug or feature, written in plain language with an example
   and a way to tell when it is done.
