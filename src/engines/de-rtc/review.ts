@@ -17,6 +17,11 @@ export interface DeRtcParkedProposal {
 	changedBlocks: Array< {
 		index: number;
 		html: string;
+		/**
+		 * The block as the proposal's base version had it ('' for a
+		 * proposed insertion; absent on rows older than this field).
+		 */
+		baseHtml?: string;
 		/** The block's durable identity (identity-merged parks). */
 		syncId?: string;
 		/** The block's path in the proposal (child indices from the root). */
@@ -33,6 +38,14 @@ export interface DeRtcParkedProposal {
 	/** proposalIds of superseded revisions — resolved with this task. */
 	supersededIds?: string[];
 }
+
+/**
+ * A parked proposal's terminal states: `restored` (the caller re-applied
+ * the parked content as ordinary local edits first), `dismissed`, and
+ * `accepted` (the server lands the reviewer's replacement content as an
+ * ordinary proposal and closes the record in the same request).
+ */
+export type DeRtcResolution = 'restored' | 'dismissed' | 'accepted';
 
 /**
  * The per-entity open-proposal ledger the session codec feeds (parked and
@@ -54,18 +67,21 @@ export interface DeRtcReviewState {
 		resolver:
 			| ( (
 					proposalId: string,
-					resolution: 'restored' | 'dismissed'
+					resolution: DeRtcResolution,
+					content?: string
 			  ) => Promise< unknown > )
 			| null
 	) => void;
 	/**
 	 * Optimistically closes a parked proposal and POSTs the resolution.
 	 * The `restored` resolution is sent AFTER the caller re-applied the
-	 * parked content as ordinary local edits.
+	 * parked content as ordinary local edits; `accepted` carries the
+	 * reviewer's replacement content for the server to apply.
 	 */
 	resolve: (
 		proposalId: string,
-		resolution: 'restored' | 'dismissed'
+		resolution: DeRtcResolution,
+		content?: string
 	) => void;
 }
 
@@ -81,7 +97,8 @@ export function createDeRtcReviewState(): DeRtcReviewState {
 	let restResolver:
 		| ( (
 				proposalId: string,
-				resolution: 'restored' | 'dismissed'
+				resolution: DeRtcResolution,
+				content?: string
 		  ) => Promise< unknown > )
 		| null = null;
 
@@ -165,11 +182,13 @@ export function createDeRtcReviewState(): DeRtcReviewState {
 			restResolver = nextResolver;
 		},
 
-		resolve( proposalId, resolution ) {
+		resolve( proposalId, resolution, content ) {
 			// Optimistic: the server acks idempotently, so an unknown id
 			// still resolves server-side. A folded task resolves EVERY
 			// revision it superseded with it (merge-not-stack: one
-			// decision closes the whole lineage).
+			// decision closes the whole lineage). An accepted replacement
+			// applies ONCE, on the task's latest revision; the superseded
+			// revisions close as dismissed.
 			const item = open.get( proposalId );
 			const ids = [ proposalId, ...( item?.supersededIds ?? [] ) ];
 			ids.forEach( ( id ) => resolvedIds.add( id ) );
@@ -183,7 +202,15 @@ export function createDeRtcReviewState(): DeRtcReviewState {
 				return;
 			}
 			Promise.all(
-				ids.map( ( id ) => resolver( id, resolution ) )
+				ids.map( ( id ) => {
+					if ( id === proposalId ) {
+						return resolver( id, resolution, content );
+					}
+					return resolver(
+						id,
+						'accepted' === resolution ? 'dismissed' : resolution
+					);
+				} )
 			).catch( () => {
 				// A failed POST must not strand the decision: reopen the
 				// task so the reviewer can decide again. Ids whose POST

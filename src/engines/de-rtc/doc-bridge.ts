@@ -383,6 +383,32 @@ export function stabilizeClientIds(
  * @param replacement The block to put in its place.
  * @return Whether a block was replaced.
  */
+/**
+ * The block carrying a durable identity, at any depth.
+ *
+ * @param blocks Blocks (JSON) to search.
+ * @param syncId The identity.
+ * @return The block, or undefined.
+ */
+export function findBlockBySyncId(
+	blocks: unknown[],
+	syncId: string
+): unknown | undefined {
+	for ( const block of blocks ) {
+		if ( syncIdOf( block ) === syncId ) {
+			return block;
+		}
+		const inner = ( block as { innerBlocks?: unknown[] } ).innerBlocks;
+		if ( Array.isArray( inner ) ) {
+			const found = findBlockBySyncId( inner, syncId );
+			if ( found ) {
+				return found;
+			}
+		}
+	}
+	return undefined;
+}
+
 export function replaceBlockBySyncId(
 	blocks: unknown[],
 	syncId: string,

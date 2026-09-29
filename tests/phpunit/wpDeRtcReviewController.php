@@ -152,6 +152,41 @@ class Tests_Collaboration_WpDeRtcReviewController extends WP_UnitTestCase {
 		return rest_get_server()->dispatch( $request );
 	}
 
+	public function test_accepts_a_parked_proposal_with_replacement_content() {
+		$this->escalate_conflict();
+		$response = $this->dispatch_resolve(
+			array(
+				'room'       => $this->room(),
+				'proposalId' => 'p-b',
+				'resolution' => 'accepted',
+				'client_id'  => 2,
+				'content'    => "<!-- wp:paragraph -->\n<p>Alpha block REVIEWED text.</p>\n<!-- /wp:paragraph -->",
+			)
+		);
+		$this->assertSame( 200, $response->get_status() );
+		$disposition = $response->get_data()['disposition'];
+		$this->assertSame( 'resolved', $disposition['status'] );
+		$this->assertSame( 'applied', $disposition['applied']['status'] );
+		$this->assertStringContainsString( 'Alpha block REVIEWED text.', $this->engine()->materialize( $this->room() ) );
+
+		$room_read = $this->engine()->get_updates_since( $this->room(), 3, 0, array() );
+		$resolved  = $this->rows_of_type( $room_read, WP_De_RTC_Engine::UPDATE_TYPE_RESOLVED );
+		$this->assertCount( 1, $resolved );
+		$this->assertSame( 'accepted', $resolved[0]['resolution'] );
+	}
+
+	public function test_accepted_without_content_is_a_bad_request() {
+		$this->escalate_conflict();
+		$response = $this->dispatch_resolve(
+			array(
+				'room'       => $this->room(),
+				'proposalId' => 'p-b',
+				'resolution' => 'accepted',
+			)
+		);
+		$this->assertSame( 400, $response->get_status() );
+	}
+
 	public function test_route_is_registered() {
 		$routes = rest_get_server()->get_routes();
 		$this->assertArrayHasKey( '/wp-sync/v1/de-rtc/resolve', $routes );

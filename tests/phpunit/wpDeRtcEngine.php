@@ -544,6 +544,164 @@ class Tests_Collaboration_WpDeRtcEngine extends WP_UnitTestCase {
 		$this->assertStringNotContainsString( '<', $row['excerpt'], 'the excerpt is plain text' );
 	}
 
+	public function test_parked_rows_carry_the_base_form_of_each_changed_block() {
+		$genesis = $this->escalate_conflict();
+
+		$response = $this->engine()->get_updates_since( $this->room(), 3, 0, array() );
+		$parked   = $this->rows_of_type( $response, WP_De_RTC_Engine::UPDATE_TYPE_PARKED );
+		$this->assertCount( 1, $parked );
+		$block = $parked[0]['changedBlocks'][0];
+
+		// The review UI's "base" side: the block as the proposal's base
+		// version had it (by identity, the block's serialized subtree),
+		// beside the proposed form.
+		$base_blocks = parse_blocks( wp_de_rtc_canonicalize_post_content_core_block_names( $genesis['content'] ) );
+		$this->assertSame( serialize_block( $base_blocks[ $block['index'] ] ), $block['baseHtml'] );
+		$this->assertStringContainsString( 'Alpha block original text', $block['baseHtml'] );
+		$this->assertStringContainsString( 'B-REWRITE', $block['html'] );
+	}
+
+	public function test_parked_insertion_carries_an_empty_base_form() {
+		wp_set_current_user( self::$author_id );
+		$engine   = $this->engine();
+		$response = $engine->get_updates_since( $this->room(), 1, 0, array() );
+		$latest   = $this->latest_from_response( $response );
+
+		$proposed = $latest['content'] . "\n\n<!-- wp:html -->\n<script>alert(1)</script>\n<!-- /wp:html -->";
+		$engine->handle_updates(
+			$this->room(),
+			3,
+			0,
+			array( $this->proposal( 'p-risky', $latest['version'], $latest['content'], $proposed ) ),
+			array()
+		);
+
+		$parked = $this->rows_of_type(
+			$this->engine()->get_updates_since( $this->room(), 4, 0, array() ),
+			WP_De_RTC_Engine::UPDATE_TYPE_PARKED
+		);
+		$this->assertCount( 1, $parked );
+		$this->assertSame( '', $parked[0]['changedBlocks'][0]['baseHtml'], 'a proposed insertion has no base form' );
+	}
+
+	public function test_accepted_resolution_replaces_the_parked_span_and_closes_the_record() {
+		$this->escalate_conflict();
+		$before = $this->latest_from_response( $this->engine()->get_updates_since( $this->room(), 3, 0, array() ) );
+
+		$replacement = "<!-- wp:paragraph -->\n<p>Alpha block REVIEWED text.</p>\n<!-- /wp:paragraph -->";
+		$disposition = $this->engine()->resolve_proposal( $this->room(), 'p-b', 'accepted', 5, $replacement );
+		$this->assertIsArray( $disposition );
+		$this->assertSame( 'resolved', $disposition['status'] );
+		// The replacement landed as an ordinary proposal under the reviewer.
+		$this->assertSame( 'applied', $disposition['applied']['status'] );
+
+		$content = $this->engine()->materialize( $this->room() );
+		$this->assertStringContainsString( 'Alpha block REVIEWED text.', $content );
+		$this->assertStringNotContainsString( 'A-REWRITE', $content, 'the parked span was replaced' );
+		$this->assertStringContainsString( 'Beta block original text.', $content, 'blocks outside the span are untouched' );
+
+		// Same request, both halves: a new canonical version and the closed record.
+		$read     = $this->engine()->get_updates_since( $this->room(), 6, 0, array() );
+		$after    = $this->latest_from_response( $read );
+		$resolved = $this->rows_of_type( $read, WP_De_RTC_Engine::UPDATE_TYPE_RESOLVED );
+		$this->assertNotSame( $before['version'], $after['version'] );
+		$this->assertCount( 1, $resolved );
+		$this->assertSame( 'p-b', $resolved[0]['proposalId'] );
+		$this->assertSame( 'accepted', $resolved[0]['resolution'] );
+		$this->assertSame( self::$editor_id, $resolved[0]['resolvedBy'] );
+	}
+
+	public function test_accepted_resolution_with_empty_content_removes_the_parked_span() {
+		$this->escalate_conflict();
+
+		$disposition = $this->engine()->resolve_proposal( $this->room(), 'p-b', 'accepted', 5, '' );
+		$this->assertSame( 'resolved', $disposition['status'] );
+
+		$content = $this->engine()->materialize( $this->room() );
+		$this->assertStringNotContainsString( 'Alpha block', $content, 'empty content removes the span' );
+		$this->assertStringContainsString( 'Beta block original text.', $content );
+	}
+
+	public function test_accepted_resolution_of_a_security_hold_needs_unfiltered_html() {
+		wp_set_current_user( self::$author_id );
+		$engine   = $this->engine();
+		$response = $engine->get_updates_since( $this->room(), 1, 0, array() );
+		$latest   = $this->latest_from_response( $response );
+		$proposed = $latest['content'] . "\n\n<!-- wp:html -->\n<script>alert(1)</script>\n<!-- /wp:html -->";
+		$engine->handle_updates(
+			$this->room(),
+			3,
+			0,
+			array( $this->proposal( 'p-risky', $latest['version'], $latest['content'], $proposed ) ),
+			array()
+		);
+		$parked = $this->rows_of_type(
+			$this->engine()->get_updates_since( $this->room(), 4, 0, array() ),
+			WP_De_RTC_Engine::UPDATE_TYPE_PARKED
+		);
+		$this->assertCount( 1, $parked );
+		$held = $parked[0]['changedBlocks'][0]['html'];
+
+		// A filtered user cannot accept it: the record stays open.
+		$rejected = $this->engine()->resolve_proposal( $this->room(), $parked[0]['proposalId'], 'accepted', 3, $held );
+		$this->assertWPError( $rejected );
+		$this->assertSame( 'rest_sync_forbidden', $rejected->get_error_code() );
+		$this->assertStringNotContainsString( '<script>', $this->engine()->materialize( $this->room() ) );
+
+		// A privileged reviewer can, and the markup lands under their account.
+		wp_set_current_user( self::$editor_id );
+		$accepted = $this->engine()->resolve_proposal( $this->room(), $parked[0]['proposalId'], 'accepted', 5, $held );
+		$this->assertSame( 'resolved', $accepted['status'] );
+		$this->assertSame( 'applied', $accepted['applied']['status'] );
+		$this->assertStringContainsString( '<script>alert(1)</script>', $this->engine()->materialize( $this->room() ) );
+	}
+
+	public function test_accepted_resolution_of_a_closed_record_acks_without_applying() {
+		$this->escalate_conflict();
+		$this->engine()->resolve_proposal( $this->room(), 'p-b', 'dismissed', 2 );
+		$before = $this->engine()->materialize( $this->room() );
+
+		$again = $this->engine()->resolve_proposal( $this->room(), 'p-b', 'accepted', 5, '<!-- wp:paragraph --><p>late</p><!-- /wp:paragraph -->' );
+		$this->assertSame( 'resolved', $again['status'] );
+		$this->assertArrayNotHasKey( 'applied', $again );
+		$this->assertSame( $before, $this->engine()->materialize( $this->room() ) );
+	}
+
+	public function test_accepted_resolution_of_a_property_conflict_sets_the_property() {
+		$engine   = $this->engine();
+		$response = $engine->get_updates_since( $this->room(), 1, 0, array() );
+		$latest   = $this->latest_from_response( $response );
+		$base     = $this->latest_properties( $response );
+
+		// Two clients change the title differently against the same base.
+		$engine->handle_updates(
+			$this->room(),
+			1,
+			0,
+			array( $this->property_proposal( 'p-t1', $latest['version'], $latest['content'], array( 'title' => 'Title from one' ) ) ),
+			array()
+		);
+		$this->engine()->handle_updates(
+			$this->room(),
+			2,
+			0,
+			array( $this->property_proposal( 'p-t2', $latest['version'], $latest['content'], array( 'title' => 'Title from two' ) ) ),
+			array()
+		);
+		$parked = $this->rows_of_type(
+			$this->engine()->get_updates_since( $this->room(), 3, 0, array() ),
+			WP_De_RTC_Engine::UPDATE_TYPE_PARKED
+		);
+		$this->assertCount( 1, $parked );
+		$this->assertSame( 'title', $parked[0]['property']['name'] );
+		$this->assertNotNull( $base );
+
+		$accepted = $this->engine()->resolve_proposal( $this->room(), $parked[0]['proposalId'], 'accepted', 5, 'Title the reviewer chose' );
+		$this->assertSame( 'resolved', $accepted['status'] );
+		$props = $this->latest_properties( $this->engine()->get_updates_since( $this->room(), 6, 0, array() ) );
+		$this->assertSame( 'Title the reviewer chose', $props['title'] );
+	}
+
 	public function test_kses_sequestration_drops_a_risky_new_block_and_parks_it() {
 		$engine   = $this->engine();
 		$response = $engine->get_updates_since( $this->room(), 3, 0, array() );

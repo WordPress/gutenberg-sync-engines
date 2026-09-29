@@ -117,6 +117,139 @@ describe( 'de-rtc review lane (client)', () => {
 		return { entity, session, sent };
 	}
 
+	it( 'publishes a parked row as a conflict record with base, proposed, and current sides', () => {
+		const { session } = makeEntity();
+		const changed = jest.fn();
+		engine.conflicts.subscribe( 'postType/book', '1', changed );
+
+		// The document holds Alpha and Beta; a collaborator's rewrite of
+		// Beta (index 1) parked against its base form.
+		session.receiveUpdate(
+			snapshotRow( 'v1', contentOf( BLOCK_A, BLOCK_B ) )
+		);
+		session.receiveUpdate( {
+			type: DE_RTC_PARKED_TYPE,
+			data: JSON.stringify( {
+				proposalId: 'p-9-1',
+				reason: 'manual-conflict-required',
+				authorClientId: 9,
+				author: 7,
+				at: 1000,
+				baseVersion: 'v1',
+				changedBlocks: [
+					{
+						index: 1,
+						html: contentOf( BLOCK_C ),
+						baseHtml: contentOf( BLOCK_B ),
+					},
+				],
+				excerpt: 'Gamma',
+			} ),
+		} );
+
+		expect( changed ).toHaveBeenCalled();
+		const [ conflict ] = engine.conflicts.getOpenConflicts(
+			'postType/book',
+			'1'
+		);
+		expect( conflict ).toMatchObject( {
+			id: 'p-9-1',
+			kind: 'merge',
+			authorId: 7,
+			target: { type: 'blocks', index: 1, count: 1 },
+			base: contentOf( BLOCK_B ),
+			proposed: contentOf( BLOCK_C ),
+		} );
+		// `current` is THIS client's document at the same span (the mock
+		// serializer renders one block as a one-element JSON array).
+		expect( conflict.current ).toBe( contentOf( BLOCK_B ) );
+	} );
+
+	it( 'leaves the base side null on parked rows that predate baseHtml', () => {
+		const { session } = makeEntity();
+		session.receiveUpdate( snapshotRow( 'v1', contentOf( BLOCK_A ) ) );
+		session.receiveUpdate(
+			parkedRow( 'p-old', 'manual-conflict-required', 9, [
+				{ index: 0, html: contentOf( BLOCK_C ) },
+			] )
+		);
+		const [ conflict ] = engine.conflicts.getOpenConflicts(
+			'postType/book',
+			'1'
+		);
+		expect( conflict.base ).toBeNull();
+		expect( conflict.proposed ).toBe( contentOf( BLOCK_C ) );
+		expect( conflict.current ).toBe( contentOf( BLOCK_A ) );
+	} );
+
+	it( 'maps a security hold to a sequestration record', () => {
+		const { session } = makeEntity();
+		session.receiveUpdate( snapshotRow( 'v1', contentOf( BLOCK_A ) ) );
+		session.receiveUpdate(
+			parkedRow( 'p-risky', 'requires-unfiltered-html', 9, [
+				{ index: 1, html: contentOf( BLOCK_C ) },
+			] )
+		);
+		expect(
+			engine.conflicts.getOpenConflicts( 'postType/book', '1' )[ 0 ]
+		).toMatchObject( { id: 'p-risky', kind: 'sequestration' } );
+	} );
+
+	it( 'accept sends the accepted resolution with the content; dismiss sends dismissed', async () => {
+		const { session } = makeEntity();
+		session.receiveUpdate(
+			snapshotRow( 'v1', contentOf( BLOCK_A, BLOCK_B ) )
+		);
+		session.receiveUpdate(
+			parkedRow( 'p-9-1', 'manual-conflict-required', 9, [
+				{ index: 1, html: contentOf( BLOCK_C ) },
+			] )
+		);
+		session.receiveUpdate(
+			parkedRow( 'p-9-2', 'manual-conflict-required', 9, [
+				{ index: 0, html: contentOf( BLOCK_C ) },
+			] )
+		);
+
+		engine.conflicts.resolveConflict( 'postType/book', '1', 'p-9-1', {
+			action: 'accept',
+			content: contentOf( BLOCK_A ),
+		} );
+		engine.conflicts.resolveConflict( 'postType/book', '1', 'p-9-2', {
+			action: 'dismiss',
+		} );
+		await Promise.resolve();
+
+		// Both close optimistically; the decisions ride the REST lane.
+		expect(
+			engine.conflicts.getOpenConflicts( 'postType/book', '1' )
+		).toEqual( [] );
+		expect( apiFetchMock ).toHaveBeenCalledWith(
+			expect.objectContaining( {
+				method: 'POST',
+				path: '/wp-sync/v1/de-rtc/resolve',
+				data: expect.objectContaining( {
+					proposalId: 'p-9-1',
+					resolution: 'accepted',
+					content: contentOf( BLOCK_A ),
+					room: 'postType/book:1',
+				} ),
+			} )
+		);
+		expect( apiFetchMock ).toHaveBeenCalledWith(
+			expect.objectContaining( {
+				data: expect.objectContaining( {
+					proposalId: 'p-9-2',
+					resolution: 'dismissed',
+				} ),
+			} )
+		);
+		const dismissedCall = apiFetchMock.mock.calls.find(
+			( [ options ]: any[] ) => 'p-9-2' === options.data.proposalId
+		)?.[ 0 ] as any;
+		expect( dismissedCall.data ).not.toHaveProperty( 'content' );
+	} );
+
 	it( 'presents a parked row as a review item with normalized reasons', () => {
 		const { session } = makeEntity();
 		const changed = jest.fn();

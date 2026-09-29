@@ -44,7 +44,11 @@ if ( ! class_exists( 'WP_De_RTC_Review_Controller' ) ) {
 						'resolution' => array(
 							'type'     => 'string',
 							'required' => true,
-							'enum'     => array( 'restored', 'dismissed' ),
+							'enum'     => array( 'restored', 'dismissed', 'accepted' ),
+						),
+						'content'    => array(
+							'type'        => 'string',
+							'description' => 'The replacement content of an accepted resolution (serialized blocks, or the property value).',
 						),
 						'client_id'  => array(
 							'type'    => 'integer',
@@ -94,7 +98,8 @@ if ( ! class_exists( 'WP_De_RTC_Review_Controller' ) ) {
 				$room,
 				(string) $request['proposalId'],
 				(string) $request['resolution'],
-				(int) $request['client_id']
+				(int) $request['client_id'],
+				isset( $request['content'] ) ? (string) $request['content'] : null
 			);
 			if ( is_wp_error( $disposition ) ) {
 				return $disposition;

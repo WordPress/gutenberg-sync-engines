@@ -42,6 +42,8 @@ import {
 	DE_RTC_REMOTE_ORIGIN,
 	DE_RTC_RESTORE_ORIGIN,
 	parseCanonicalBlocks,
+	findBlockBySyncId,
+	serializeBlock,
 	replaceBlockBySyncId,
 	syncIdOf,
 	unflattenProperties,
@@ -71,6 +73,24 @@ const REVIEW_REASON_MAP: Record< string, string > = {
 	'manual-conflict-required': 'frame-conflict',
 	'property-conflict': 'frame-conflict',
 };
+
+/**
+ * A property register's value as the text the review dialog shows and
+ * the `accepted` resolution sends back: strings as they are, anything
+ * else as JSON.
+ *
+ * @param value The register's value.
+ * @return The text.
+ */
+function propertyText( value: unknown ): string {
+	if ( 'string' === typeof value ) {
+		return value;
+	}
+	if ( undefined === value || null === value ) {
+		return '';
+	}
+	return JSON.stringify( value );
+}
 
 /**
  * An awareness-only codec for de-rtc collection rooms: presence flows,
@@ -270,12 +290,10 @@ export function createDeRtcEngine(): SyncEngine & {
 
 	/*
 	 * The conflict review lane: the same open tasks as SyncConflict
-	 * records, and the reviewer's decision mapped onto the review verbs.
-	 * PROVISIONAL (plan Phase 2): the sides are not reconstructed yet
-	 * (`base` null, `current` empty) and an accepted replacement only
-	 * restores or closes; Phase 3 carries `baseHtml` on parked rows,
-	 * reads `current` from the latest canonical content, and sends an
-	 * `accepted` resolution with the content.
+	 * records with their three sides (see getConflicts), and the
+	 * reviewer's decision mapped onto the review verbs: `accept` sends
+	 * the `accepted` resolution with the content, `dismiss` the
+	 * `dismissed` one; a contested block adopts or rejects.
 	 */
 	const conflictSource: SyncConflictSource = {
 		getOpenConflicts: ( objectType, objectId ) =>
@@ -301,30 +319,17 @@ export function createDeRtcEngine(): SyncEngine & {
 				}
 				return;
 			}
-			const parked = handle.review
-				.getOpen()
-				.find( ( candidate ) => candidate.proposalId === conflictId );
-			if ( ! parked ) {
+			if ( 'accept' === decision.action ) {
+				// The server lands the replacement as an ordinary proposal
+				// under the reviewer (kses and the merge run as for any
+				// edit) and closes the record in the same request.
+				handle.review.resolve(
+					conflictId,
+					'accepted',
+					decision.content
+				);
 				return;
 			}
-			const needsApproval =
-				'requires-approval' ===
-				( REVIEW_REASON_MAP[ parked.reason ] ?? parked.reason );
-			if (
-				'accept' === decision.action &&
-				needsApproval &&
-				'' !== decision.content
-			) {
-				// Approval: the restore lane overlays the parked blocks as
-				// an ordinary local edit under the reviewer's capability.
-				// PROVISIONAL: the reviewer's edited content is not
-				// honored yet (the parked markup lands as parked).
-				handle.restore( conflictId );
-				return;
-			}
-			// PROVISIONAL: an accepted replacement of a merge conflict,
-			// and an accepted removal (empty content), only close the
-			// task until Phase 3 sends the content.
 			handle.review.resolve( conflictId, 'dismissed' );
 		},
 	};
@@ -360,12 +365,13 @@ export function createDeRtcEngine(): SyncEngine & {
 			// type; the transport's resolution-row lane is gone and the
 			// server rejects client-sent resolved rows. The room string
 			// mirrors the providers' convention.
-			review.setRestResolver( ( proposalId, resolution ) =>
+			review.setRestResolver( ( proposalId, resolution, content ) =>
 				apiFetch( {
 					data: {
 						client_id: ydoc.clientID,
 						proposalId,
 						resolution,
+						...( undefined !== content ? { content } : {} ),
 						room: objectId
 							? `${ objectType }:${ objectId }`
 							: objectType,
@@ -588,6 +594,8 @@ export function createDeRtcEngine(): SyncEngine & {
 							.filter(
 								( id ): id is string => 'string' === typeof id
 							);
+						const byIdentity =
+							ids.length > 0 && ids.length === blocks.length;
 						const indexes = blocks.map( ( block ) => block.index );
 						const first = indexes.length
 							? Math.min( ...indexes )
@@ -595,6 +603,48 @@ export function createDeRtcEngine(): SyncEngine & {
 						const last = indexes.length
 							? Math.max( ...indexes )
 							: -1;
+						/*
+						 * The three sides, as the contract wants them:
+						 * `base` from the row's baseHtml (null on rows
+						 * that predate the field), `proposed` from the
+						 * parked blocks, `current` from THIS client's
+						 * document: the same blocks by identity, else the
+						 * covering top-level span.
+						 */
+						const local = localBlocks();
+						let current = '';
+						if ( byIdentity ) {
+							current = ids
+								.map( ( id ) => findBlockBySyncId( local, id ) )
+								.filter( Boolean )
+								.map( serializeBlock )
+								.join( '\n\n' );
+						} else if ( indexes.length ) {
+							current = local
+								.slice( first, last + 1 )
+								.map( serializeBlock )
+								.join( '\n\n' );
+						}
+						const base = blocks.every(
+							( block ) => 'string' === typeof block.baseHtml
+						)
+							? blocks
+									.map( ( block ) => block.baseHtml )
+									.join( '\n\n' )
+							: null;
+						if ( parked.property ) {
+							const name = parked.property.name;
+							const value: unknown = recordMap.toJSON()[ name ];
+							return {
+								id: parked.proposalId,
+								kind: 'merge',
+								authorId: parked.author ?? 0,
+								target: { type: 'property', name },
+								base: null,
+								proposed: propertyText( parked.property.value ),
+								current: propertyText( value ),
+							};
+						}
 						return {
 							id: parked.proposalId,
 							kind:
@@ -604,30 +654,20 @@ export function createDeRtcEngine(): SyncEngine & {
 									? 'sequestration'
 									: 'merge',
 							authorId: parked.author ?? 0,
-							target: parked.property
-								? {
-										type: 'property',
-										name: parked.property.name,
-								  }
-								: {
-										type: 'blocks',
-										// Identity wins when every changed
-										// block carries one; the span is
-										// the covering top-level run.
-										...( ids.length &&
-										ids.length === blocks.length
-											? { ids }
-											: {} ),
-										index: first,
-										count: last - first + 1,
-								  },
-							base: null,
-							proposed: parked.property
-								? String( parked.property.value ?? '' )
-								: blocks
-										.map( ( block ) => block.html )
-										.join( '\n\n' ),
-							current: '',
+							target: {
+								type: 'blocks',
+								// Identity wins when every changed block
+								// carries one; the span is the covering
+								// top-level run.
+								...( byIdentity ? { ids } : {} ),
+								index: first,
+								count: last - first + 1,
+							},
+							base,
+							proposed: blocks
+								.map( ( block ) => block.html )
+								.join( '\n\n' ),
+							current,
 						};
 					} ),
 					...Array.from( contested.entries() ).map(
