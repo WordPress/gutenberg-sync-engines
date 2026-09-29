@@ -1,7 +1,8 @@
 <?php
 /**
- * Drives this plugin's awareness against the REAL Presence API plugin, the
- * other half of a PHPUnit suite that can only use a stand-in.
+ * Drives this plugin's awareness and the advisory channel's tab list against
+ * the REAL Presence API plugin, the other half of a PHPUnit suite that can
+ * only use a stand-in.
  *
  * Usage (tests env, with the Presence API installed and active):
  *   npx wp-env --config .wp-env.tests.json run cli \
@@ -148,6 +149,46 @@ $gse_entries = $gse_awareness->forget( $gse_room, 7, 30 );
 gse_presence_check( array( 9 ) === array_column( $gse_entries, 'client_id' ), 'leaving removes one client' );
 gse_presence_check( null !== gse_presence_row( $gse_room, 'editor-' . $gse_user_id ), "the Presence API's own row survives" );
 
+$gse_tab_list = apply_filters( 'wp_sync_tab_list_backend', null );
+gse_presence_check( $gse_tab_list instanceof WP_Sync_Presence_API_Tab_List_Backend, 'the seam picked the Presence API tab list' );
+
+$gse_ttl = Gutenberg_Sync_Engines_Advisory_Presence::PRESENCE_TTL;
+$gse_tab = array(
+	'c' => 'Ada',
+	'j' => 1,
+);
+$gse_tab_list->put( $gse_room, 'tok-a', $gse_tab, $gse_user_id, $gse_ttl );
+$gse_tab_list->put( $gse_room, 'tok-b', array( 'c' => 'Grace' ), $gse_user_id, $gse_ttl );
+$gse_tabs = $gse_tab_list->tabs( $gse_room, $gse_ttl );
+gse_presence_check( array( 'tok-a', 'tok-b' ) === array_keys( $gse_tabs ), 'two tabs coexist', wp_json_encode( array_keys( $gse_tabs ) ) );
+gse_presence_check( $gse_tab === $gse_tabs['tok-a']['state'], 'tab state round trips' );
+gse_presence_check( $gse_user_id === $gse_tabs['tok-a']['user_id'], 'the tab user id round trips' );
+
+// The row lives as long as the channel asked, not the site's shorter default.
+$gse_row      = gse_presence_row( $gse_room, 'gsetab-tok-a' );
+$gse_lifetime = null === $gse_row ? 0 : strtotime( $gse_row->expires_gmt . ' UTC' ) - strtotime( $gse_row->date_gmt . ' UTC' );
+gse_presence_check( $gse_ttl === $gse_lifetime, 'a tab row lasts as long as asked', "lifetime={$gse_lifetime}s" );
+
+// A refresh the Presence API would skip as too recent is still written.
+// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+$wpdb->query(
+	$wpdb->prepare(
+		"UPDATE {$wpdb->presence} SET date_gmt = %s WHERE room = %s AND client_id = %s",
+		gmdate( 'Y-m-d H:i:s', time() - 5 ),
+		$gse_room,
+		'gsetab-tok-a'
+	)
+);
+$gse_tab_list->put( $gse_room, 'tok-a', $gse_tab, $gse_user_id, $gse_ttl );
+$gse_age = time() - (int) strtotime( gse_presence_row( $gse_room, 'gsetab-tok-a' )->date_gmt . ' UTC' );
+gse_presence_check( $gse_age <= 1, 'a tab refresh is always written', "age={$gse_age}s" );
+
+gse_presence_check( array( 9 ) === array_column( $gse_awareness->entries( $gse_room, 30 ), 'client_id' ), 'awareness ignores tab rows' );
+gse_presence_check( ! isset( $gse_tabs['9'] ) && 2 === count( $gse_tabs ), 'the tab list ignores awareness rows' );
+
+$gse_tab_list->forget( $gse_room, 'tok-b' );
+gse_presence_check( array( 'tok-a' ) === array_keys( $gse_tab_list->tabs( $gse_room, $gse_ttl ) ), 'leaving removes one tab' );
+
 // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->presence} WHERE room = %s", $gse_room ) );
 wp_delete_post( $gse_post_id, true );
@@ -156,4 +197,4 @@ if ( $gse_failures > 0 ) {
 	WP_CLI::error( $gse_failures . ' check(s) failed.' );
 }
 
-WP_CLI::success( 'Awareness works against the real Presence API.' );
+WP_CLI::success( 'Awareness and the tab list work against the real Presence API.' );

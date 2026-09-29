@@ -555,6 +555,37 @@ describe( 'rich-text coordinate capture', () => {
 		expect( derived.coarseBlockCount ).toBe( 0 );
 	} );
 
+	it.each( [ 'Hello', '' ] )(
+		'keeps an ambiguous empty new paragraph separate after %s',
+		( content ) => {
+			const doc = docFromBlocks( [ paragraph( 'p1', content ) ] );
+			const derived = deriveIntents( doc, [
+				paragraph( 'p1', content ),
+				idless( '' ),
+			] )!;
+			expect(
+				derived.intents.map( ( entry ) => entry.type )
+			).not.toContain( 'split_block' );
+			expect( derived.intents.map( ( entry ) => entry.type ) ).toContain(
+				'insert_block'
+			);
+		}
+	);
+
+	it( 'does not guess a split when typing was captured in the same snapshot', () => {
+		const doc = docFromBlocks( [ paragraph( 'p1', 'HelloWorld' ) ] );
+		const derived = deriveIntents( doc, [
+			paragraph( 'p1', 'Hello!' ),
+			idless( 'World' ),
+		] )!;
+		expect( derived.intents.map( ( entry ) => entry.type ) ).not.toContain(
+			'split_block'
+		);
+		expect( derived.intents.map( ( entry ) => entry.type ) ).toContain(
+			'insert_block'
+		);
+	} );
+
 	it( 'derives merge_blocks from the Backspace-join tree shape', () => {
 		const doc = docFromBlocks( [
 			paragraph( 'p1', 'Hello' ),

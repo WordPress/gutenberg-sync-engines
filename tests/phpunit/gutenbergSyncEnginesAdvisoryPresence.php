@@ -46,6 +46,15 @@ class Tests_Collaboration_GutenbergSyncEnginesAdvisoryPresence extends WP_UnitTe
 			$reflection->setAccessible( true );
 		}
 		$reflection->setValue( null, array() );
+
+		Fake_Presence_API::reset();
+		WP_Sync_Awareness::reset_backend_for_testing();
+	}
+
+	public function tear_down() {
+		Fake_Presence_API::reset();
+		WP_Sync_Awareness::reset_backend_for_testing();
+		parent::tear_down();
 	}
 
 	/**
@@ -340,6 +349,41 @@ class Tests_Collaboration_GutenbergSyncEnginesAdvisoryPresence extends WP_UnitTe
 		// A returning tab with the old token starts with an empty mailbox.
 		wp_set_current_user( self::$editor_id );
 		$this->assertSame( array(), $this->beat( 'tok-a' )['signals'] );
+	}
+
+	public function test_with_the_presence_api_each_tab_is_its_own_row_in_its_table() {
+		Fake_Presence_API::$enabled = true;
+		$room                       = $this->room();
+
+		$this->beat( 'tok-a' );
+		wp_set_current_user( self::$other_editor_id );
+		$answer = $this->beat( 'tok-b' );
+
+		$this->assertTrue( $answer['others'] );
+		$this->assertSame( array( 'tok-a' ), array_column( $answer['peers'], 'token' ) );
+		$this->assertSame( array( 'gsetab-tok-a', 'gsetab-tok-b' ), array_keys( Fake_Presence_API::$rows[ $room ] ) );
+		$this->assertFalse( get_transient( Gutenberg_Sync_Engines_Advisory_Presence::TOKENS_TRANSIENT_PREFIX . md5( $room ) ) );
+
+		// Awareness does not read the tab rows.
+		$awareness = new WP_Sync_Awareness( new WP_Sync_Post_Meta_Storage() );
+		$this->assertSame( array(), $awareness->entries( $room, 30 ) );
+
+		$request = new WP_REST_Request( 'POST', '/gutenberg-sync-engines/v1/advisory/leave' );
+		$request->set_param( 'room', $room );
+		$request->set_param( 'token', 'tok-b' );
+		$this->presence->handle_leave( $request );
+		$this->assertSame( array( 'gsetab-tok-a' ), array_keys( Fake_Presence_API::$rows[ $room ] ) );
+	}
+
+	public function test_without_the_filter_the_tab_list_stays_in_the_transient() {
+		Fake_Presence_API::$enabled = true;
+		remove_all_filters( 'wp_sync_tab_list_backend' );
+		$room = $this->room();
+
+		$this->beat( 'tok-a' );
+
+		$this->assertArrayNotHasKey( $room, Fake_Presence_API::$rows );
+		$this->assertSame( array( 'tok-a' ), array_keys( get_transient( Gutenberg_Sync_Engines_Advisory_Presence::TOKENS_TRANSIENT_PREFIX . md5( $room ) ) ) );
 	}
 
 	public function test_company_is_also_seen_through_live_sync_awareness() {

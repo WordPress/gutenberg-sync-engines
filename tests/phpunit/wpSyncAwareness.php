@@ -270,6 +270,22 @@ class Tests_Collaboration_WpSyncAwareness extends WP_UnitTestCase {
 	}
 
 	/**
+	 * A presence-table write wakes waiting streams without creating the room.
+	 */
+	public function test_presence_api_writes_wake_waiting_streams(): void {
+		Fake_Presence_API::$enabled = true;
+		$room                       = $this->room();
+		$changed                    = new MockAction();
+		add_action( 'gutenberg_sync_engines_room_changed', array( $changed, 'action' ) );
+
+		$this->awareness()->put( $room, 7, array( 'name' => 'Ada' ), self::$editor_id, 30 );
+		$this->awareness()->forget( $room, 7, 30 );
+
+		$this->assertSame( 2, $changed->get_call_count(), 'A put and a forget should each wake streams.' );
+		$this->assertFalse( ( new WP_Sync_Table_Storage() )->peek_room( $room )['found'], 'Awareness should not create the room.' );
+	}
+
+	/**
 	 * Without the presence table the Presence API can neither read nor
 	 * write, so the backend stands down and the room array serves.
 	 */

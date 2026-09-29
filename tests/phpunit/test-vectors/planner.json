@@ -10237,10 +10237,20 @@
               "syncId": "aafbec3af1fac5c5bd19858472db9fd0",
               "field": "content",
               "start": 25,
-              "end": 26,
+              "end": 29,
               "format": "em",
               "on": true
-            }
+            },
+            "textSlices": [
+              {
+                "syncId": "aafbec3af1fac5c5bd19858472db9fd0",
+                "field": "content",
+                "start": 25,
+                "end": 26,
+                "format": "em",
+                "on": true
+              }
+            ]
           },
           {
             "intentId": "actor-2#9",
@@ -22956,12 +22966,11 @@
             "reason": "content-replaced"
           },
           "actor-1#15": {
-            "status": "escalated",
-            "reason": "range-crosses-split"
+            "status": "applied"
           },
           "actor-1#16": {
             "status": "escalated",
-            "reason": "dependent-on-escalated"
+            "reason": "frame-conflict"
           },
           "actor-1#17": {
             "status": "applied"
@@ -23297,14 +23306,9 @@
             "reason": "content-replaced"
           },
           {
-            "intentId": "actor-1#15",
-            "actorId": "actor-1",
-            "reason": "range-crosses-split"
-          },
-          {
             "intentId": "actor-1#16",
             "actorId": "actor-1",
-            "reason": "dependent-on-escalated"
+            "reason": "frame-conflict"
           },
           {
             "intentId": "actor-1#20",
@@ -24126,6 +24130,36 @@
             }
           },
           {
+            "intentId": "actor-1#15",
+            "actorId": "actor-1",
+            "baseSeq": 19,
+            "txnId": null,
+            "type": "delete_text",
+            "payload": {
+              "syncId": "4a9346bb45c24c9e1924ba610d7e21c5",
+              "field": "content",
+              "start": 21,
+              "end": 23,
+              "removedText": "ee"
+            },
+            "textSlices": [
+              {
+                "syncId": "OBBLT4bXZXuQulrYjzjx-g",
+                "field": "content",
+                "start": 27,
+                "end": 28,
+                "removedText": "ee"
+              },
+              {
+                "syncId": "4f4582bd0ec7de816044b786903fa87b",
+                "field": "content",
+                "start": 6,
+                "end": 7,
+                "removedText": "ee"
+              }
+            ]
+          },
+          {
             "intentId": "actor-1#17",
             "actorId": "actor-1",
             "baseSeq": 19,
@@ -24632,7 +24666,7 @@
               },
               "fields": {
                 "content": {
-                  "text": " blöckWhich swept café u dolorp the stre",
+                  "text": " blöckWhich swept café u dolorp the str",
                   "formats": [
                     {
                       "start": 16,
@@ -24675,7 +24709,7 @@
               },
               "fields": {
                 "content": {
-                  "text": " doloret",
+                  "text": " dolort",
                   "formats": []
                 }
               },
@@ -32855,10 +32889,28 @@
               "syncId": "06cQ7T4HOD6bI2cZ8vR9Hg",
               "field": "content",
               "start": 6,
-              "end": 25,
+              "end": 40,
               "format": "code",
               "on": true
-            }
+            },
+            "textSlices": [
+              {
+                "syncId": "06cQ7T4HOD6bI2cZ8vR9Hg",
+                "field": "content",
+                "start": 6,
+                "end": 25,
+                "format": "code",
+                "on": true
+              },
+              {
+                "syncId": "6d20cb7d5b55abcfb9e88c2ae2b4c6b6",
+                "field": "content",
+                "start": 0,
+                "end": 15,
+                "format": "code",
+                "on": true
+              }
+            ]
           },
           {
             "intentId": "actor-2#22",
@@ -32892,10 +32944,28 @@
               "syncId": "06cQ7T4HOD6bI2cZ8vR9Hg",
               "field": "content",
               "start": 21,
-              "end": 25,
+              "end": 51,
               "format": "bold",
               "on": true
-            }
+            },
+            "textSlices": [
+              {
+                "syncId": "06cQ7T4HOD6bI2cZ8vR9Hg",
+                "field": "content",
+                "start": 21,
+                "end": 25,
+                "format": "bold",
+                "on": true
+              },
+              {
+                "syncId": "6d20cb7d5b55abcfb9e88c2ae2b4c6b6",
+                "field": "content",
+                "start": 0,
+                "end": 26,
+                "format": "bold",
+                "on": true
+              }
+            ]
           },
           {
             "intentId": "actor-2#30",
@@ -33775,7 +33845,18 @@
                   "fields": {
                     "content": {
                       "text": "violentu cafést.",
-                      "formats": []
+                      "formats": [
+                        {
+                          "start": 0,
+                          "end": 16,
+                          "format": "bold"
+                        },
+                        {
+                          "start": 0,
+                          "end": 16,
+                          "format": "code"
+                        }
+                      ]
                     }
                   },
                   "syncParent": "06cQ7T4HOD6bI2cZ8vR9Hg",
@@ -37281,6 +37362,1489 @@
             },
             {
               "syncId": "OBBLT4bXZXuQulrYjzjx-g",
+              "blockType": "core/paragraph",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "content": {
+                  "text": "Which swept up the streets.",
+                  "formats": []
+                }
+              },
+              "syncParent": null,
+              "children": []
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "text slices format",
+      "genesis": {
+        "postId": 99,
+        "revisionId": 3
+      },
+      "batches": [
+        [
+          {
+            "intentId": "slice-format-0",
+            "actorId": "alice",
+            "baseSeq": 0,
+            "txnId": null,
+            "type": "split_block",
+            "payload": {
+              "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+              "offset": 3,
+              "newSyncId": "slice-tail",
+              "field": "content"
+            }
+          }
+        ],
+        [
+          {
+            "intentId": "slice-format-1",
+            "actorId": "alice",
+            "baseSeq": 1,
+            "txnId": null,
+            "type": "split_block",
+            "payload": {
+              "syncId": "slice-tail",
+              "offset": 2,
+              "newSyncId": "slice-tail-2",
+              "field": "content"
+            }
+          }
+        ],
+        [
+          {
+            "intentId": "slice-format-2",
+            "actorId": "bob",
+            "baseSeq": 0,
+            "txnId": null,
+            "type": "format_text",
+            "payload": {
+              "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+              "start": 1,
+              "end": 6,
+              "format": "bold",
+              "on": true,
+              "field": "content"
+            }
+          }
+        ],
+        [
+          {
+            "intentId": "slice-format-2",
+            "actorId": "bob",
+            "baseSeq": 0,
+            "txnId": null,
+            "type": "format_text",
+            "payload": {
+              "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+              "start": 1,
+              "end": 6,
+              "format": "bold",
+              "on": true,
+              "field": "content"
+            }
+          }
+        ]
+      ],
+      "expected": {
+        "dispositions": {
+          "slice-format-0": {
+            "status": "applied"
+          },
+          "slice-format-1": {
+            "status": "applied"
+          },
+          "slice-format-2": {
+            "status": "applied"
+          }
+        },
+        "proposals": [],
+        "log": [
+          {
+            "intentId": "slice-format-0",
+            "actorId": "alice",
+            "baseSeq": 0,
+            "txnId": null,
+            "type": "split_block",
+            "payload": {
+              "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+              "offset": 3,
+              "newSyncId": "slice-tail",
+              "field": "content"
+            }
+          },
+          {
+            "intentId": "slice-format-1",
+            "actorId": "alice",
+            "baseSeq": 1,
+            "txnId": null,
+            "type": "split_block",
+            "payload": {
+              "syncId": "slice-tail",
+              "offset": 2,
+              "newSyncId": "slice-tail-2",
+              "field": "content"
+            }
+          },
+          {
+            "intentId": "slice-format-2",
+            "actorId": "bob",
+            "baseSeq": 0,
+            "txnId": null,
+            "type": "format_text",
+            "payload": {
+              "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+              "start": 1,
+              "end": 6,
+              "format": "bold",
+              "on": true,
+              "field": "content"
+            },
+            "textSlices": [
+              {
+                "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+                "start": 1,
+                "end": 3,
+                "format": "bold",
+                "on": true,
+                "field": "content"
+              },
+              {
+                "syncId": "slice-tail",
+                "start": 0,
+                "end": 2,
+                "format": "bold",
+                "on": true,
+                "field": "content"
+              },
+              {
+                "syncId": "slice-tail-2",
+                "start": 0,
+                "end": 1,
+                "format": "bold",
+                "on": true,
+                "field": "content"
+              }
+            ]
+          }
+        ],
+        "finalDoc": {
+          "root": [
+            {
+              "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+              "blockType": "core/paragraph",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "content": {
+                  "text": "It ",
+                  "formats": [
+                    {
+                      "start": 1,
+                      "end": 3,
+                      "format": "bold"
+                    }
+                  ]
+                }
+              },
+              "syncParent": null,
+              "children": []
+            },
+            {
+              "syncId": "slice-tail",
+              "blockType": "core/paragraph",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "content": {
+                  "text": "wa",
+                  "formats": [
+                    {
+                      "start": 0,
+                      "end": 2,
+                      "format": "bold"
+                    }
+                  ]
+                }
+              },
+              "syncParent": "WHRudoJFHtfI1pcZUOvNIA",
+              "children": []
+            },
+            {
+              "syncId": "slice-tail-2",
+              "blockType": "core/paragraph",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "content": {
+                  "text": "s a dark and stormy night.",
+                  "formats": [
+                    {
+                      "start": 0,
+                      "end": 1,
+                      "format": "bold"
+                    }
+                  ]
+                }
+              },
+              "syncParent": "slice-tail",
+              "children": []
+            },
+            {
+              "syncId": "r4DEHJ4e3EOHeUc1NET40Q",
+              "blockType": "core/quote",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "citation": {
+                  "text": "Bulwer-Lytton",
+                  "formats": []
+                },
+                "content": {
+                  "text": "The rain fell in torrents.",
+                  "formats": []
+                }
+              },
+              "syncParent": null,
+              "children": []
+            },
+            {
+              "syncId": "I340c_hKrFvCSK1RTBRCDw",
+              "blockType": "core/group",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "content": {
+                  "text": "",
+                  "formats": []
+                }
+              },
+              "syncParent": null,
+              "children": [
+                {
+                  "syncId": "CNP4pQ0kqaCyMkN0G7Aigg",
+                  "blockType": "core/paragraph",
+                  "attrs": {},
+                  "attrVersions": {},
+                  "fields": {
+                    "content": {
+                      "text": "Except at occasional intervals.",
+                      "formats": []
+                    }
+                  },
+                  "syncParent": null,
+                  "children": []
+                },
+                {
+                  "syncId": "paBwYEg4bZpLOGnbL4wA-Q",
+                  "blockType": "core/paragraph",
+                  "attrs": {},
+                  "attrVersions": {},
+                  "fields": {
+                    "content": {
+                      "text": "When it was checked by a violent gust.",
+                      "formats": []
+                    }
+                  },
+                  "syncParent": null,
+                  "children": []
+                }
+              ]
+            },
+            {
+              "syncId": "o8aAVJ-ruR1NUPCBS7WUnA",
+              "blockType": "core/paragraph",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "content": {
+                  "text": "Which swept up the streets.",
+                  "formats": []
+                }
+              },
+              "syncParent": null,
+              "children": []
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "text slices delete",
+      "genesis": {
+        "postId": 99,
+        "revisionId": 3
+      },
+      "batches": [
+        [
+          {
+            "intentId": "slice-delete-0",
+            "actorId": "alice",
+            "baseSeq": 0,
+            "txnId": null,
+            "type": "split_block",
+            "payload": {
+              "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+              "offset": 3,
+              "newSyncId": "slice-tail",
+              "field": "content"
+            }
+          }
+        ],
+        [
+          {
+            "intentId": "slice-delete-1",
+            "actorId": "alice",
+            "baseSeq": 1,
+            "txnId": null,
+            "type": "split_block",
+            "payload": {
+              "syncId": "slice-tail",
+              "offset": 2,
+              "newSyncId": "slice-tail-2",
+              "field": "content"
+            }
+          }
+        ],
+        [
+          {
+            "intentId": "slice-delete-2",
+            "actorId": "bob",
+            "baseSeq": 0,
+            "txnId": null,
+            "type": "delete_text",
+            "payload": {
+              "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+              "start": 1,
+              "end": 6,
+              "removedText": "t was",
+              "field": "content"
+            }
+          }
+        ],
+        [
+          {
+            "intentId": "slice-delete-2",
+            "actorId": "bob",
+            "baseSeq": 0,
+            "txnId": null,
+            "type": "delete_text",
+            "payload": {
+              "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+              "start": 1,
+              "end": 6,
+              "removedText": "t was",
+              "field": "content"
+            }
+          }
+        ],
+        [
+          {
+            "intentId": "slice-delete-3",
+            "actorId": "carol",
+            "baseSeq": 2,
+            "txnId": null,
+            "type": "insert_text",
+            "payload": {
+              "syncId": "slice-tail-2",
+              "offset": 3,
+              "text": "!",
+              "field": "content"
+            }
+          }
+        ]
+      ],
+      "expected": {
+        "dispositions": {
+          "slice-delete-0": {
+            "status": "applied"
+          },
+          "slice-delete-1": {
+            "status": "applied"
+          },
+          "slice-delete-2": {
+            "status": "applied"
+          },
+          "slice-delete-3": {
+            "status": "applied"
+          }
+        },
+        "proposals": [],
+        "log": [
+          {
+            "intentId": "slice-delete-0",
+            "actorId": "alice",
+            "baseSeq": 0,
+            "txnId": null,
+            "type": "split_block",
+            "payload": {
+              "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+              "offset": 3,
+              "newSyncId": "slice-tail",
+              "field": "content"
+            }
+          },
+          {
+            "intentId": "slice-delete-1",
+            "actorId": "alice",
+            "baseSeq": 1,
+            "txnId": null,
+            "type": "split_block",
+            "payload": {
+              "syncId": "slice-tail",
+              "offset": 2,
+              "newSyncId": "slice-tail-2",
+              "field": "content"
+            }
+          },
+          {
+            "intentId": "slice-delete-2",
+            "actorId": "bob",
+            "baseSeq": 0,
+            "txnId": null,
+            "type": "delete_text",
+            "payload": {
+              "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+              "start": 1,
+              "end": 6,
+              "removedText": "t was",
+              "field": "content"
+            },
+            "textSlices": [
+              {
+                "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+                "start": 1,
+                "end": 3,
+                "removedText": "t was",
+                "field": "content"
+              },
+              {
+                "syncId": "slice-tail",
+                "start": 0,
+                "end": 2,
+                "removedText": "t was",
+                "field": "content"
+              },
+              {
+                "syncId": "slice-tail-2",
+                "start": 0,
+                "end": 1,
+                "removedText": "t was",
+                "field": "content"
+              }
+            ]
+          },
+          {
+            "intentId": "slice-delete-3",
+            "actorId": "carol",
+            "baseSeq": 2,
+            "txnId": null,
+            "type": "insert_text",
+            "payload": {
+              "syncId": "slice-tail-2",
+              "offset": 2,
+              "text": "!",
+              "field": "content"
+            }
+          }
+        ],
+        "finalDoc": {
+          "root": [
+            {
+              "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+              "blockType": "core/paragraph",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "content": {
+                  "text": "I",
+                  "formats": []
+                }
+              },
+              "syncParent": null,
+              "children": []
+            },
+            {
+              "syncId": "slice-tail",
+              "blockType": "core/paragraph",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "content": {
+                  "text": "",
+                  "formats": []
+                }
+              },
+              "syncParent": "WHRudoJFHtfI1pcZUOvNIA",
+              "children": []
+            },
+            {
+              "syncId": "slice-tail-2",
+              "blockType": "core/paragraph",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "content": {
+                  "text": " a! dark and stormy night.",
+                  "formats": []
+                }
+              },
+              "syncParent": "slice-tail",
+              "children": []
+            },
+            {
+              "syncId": "r4DEHJ4e3EOHeUc1NET40Q",
+              "blockType": "core/quote",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "citation": {
+                  "text": "Bulwer-Lytton",
+                  "formats": []
+                },
+                "content": {
+                  "text": "The rain fell in torrents.",
+                  "formats": []
+                }
+              },
+              "syncParent": null,
+              "children": []
+            },
+            {
+              "syncId": "I340c_hKrFvCSK1RTBRCDw",
+              "blockType": "core/group",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "content": {
+                  "text": "",
+                  "formats": []
+                }
+              },
+              "syncParent": null,
+              "children": [
+                {
+                  "syncId": "CNP4pQ0kqaCyMkN0G7Aigg",
+                  "blockType": "core/paragraph",
+                  "attrs": {},
+                  "attrVersions": {},
+                  "fields": {
+                    "content": {
+                      "text": "Except at occasional intervals.",
+                      "formats": []
+                    }
+                  },
+                  "syncParent": null,
+                  "children": []
+                },
+                {
+                  "syncId": "paBwYEg4bZpLOGnbL4wA-Q",
+                  "blockType": "core/paragraph",
+                  "attrs": {},
+                  "attrVersions": {},
+                  "fields": {
+                    "content": {
+                      "text": "When it was checked by a violent gust.",
+                      "formats": []
+                    }
+                  },
+                  "syncParent": null,
+                  "children": []
+                }
+              ]
+            },
+            {
+              "syncId": "o8aAVJ-ruR1NUPCBS7WUnA",
+              "blockType": "core/paragraph",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "content": {
+                  "text": "Which swept up the streets.",
+                  "formats": []
+                }
+              },
+              "syncParent": null,
+              "children": []
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "text slices join",
+      "genesis": {
+        "postId": 99,
+        "revisionId": 3
+      },
+      "batches": [
+        [
+          {
+            "intentId": "slice-join-0",
+            "actorId": "alice",
+            "baseSeq": 0,
+            "txnId": null,
+            "type": "split_block",
+            "payload": {
+              "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+              "offset": 3,
+              "newSyncId": "slice-tail",
+              "field": "content"
+            }
+          }
+        ],
+        [
+          {
+            "intentId": "slice-join-1",
+            "actorId": "alice",
+            "baseSeq": 1,
+            "txnId": null,
+            "type": "split_block",
+            "payload": {
+              "syncId": "slice-tail",
+              "offset": 2,
+              "newSyncId": "slice-tail-2",
+              "field": "content"
+            }
+          }
+        ],
+        [
+          {
+            "intentId": "slice-join-2",
+            "actorId": "alice",
+            "baseSeq": 2,
+            "txnId": null,
+            "type": "merge_blocks",
+            "payload": {
+              "survivorId": "WHRudoJFHtfI1pcZUOvNIA",
+              "absorbedId": "slice-tail",
+              "joinOffset": 3,
+              "field": "content"
+            }
+          }
+        ],
+        [
+          {
+            "intentId": "slice-join-3",
+            "actorId": "bob",
+            "baseSeq": 0,
+            "txnId": null,
+            "type": "delete_text",
+            "payload": {
+              "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+              "start": 1,
+              "end": 6,
+              "removedText": "t was",
+              "field": "content"
+            }
+          }
+        ],
+        [
+          {
+            "intentId": "slice-join-3",
+            "actorId": "bob",
+            "baseSeq": 0,
+            "txnId": null,
+            "type": "delete_text",
+            "payload": {
+              "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+              "start": 1,
+              "end": 6,
+              "removedText": "t was",
+              "field": "content"
+            }
+          }
+        ]
+      ],
+      "expected": {
+        "dispositions": {
+          "slice-join-0": {
+            "status": "applied"
+          },
+          "slice-join-1": {
+            "status": "applied"
+          },
+          "slice-join-2": {
+            "status": "applied"
+          },
+          "slice-join-3": {
+            "status": "applied"
+          }
+        },
+        "proposals": [],
+        "log": [
+          {
+            "intentId": "slice-join-0",
+            "actorId": "alice",
+            "baseSeq": 0,
+            "txnId": null,
+            "type": "split_block",
+            "payload": {
+              "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+              "offset": 3,
+              "newSyncId": "slice-tail",
+              "field": "content"
+            }
+          },
+          {
+            "intentId": "slice-join-1",
+            "actorId": "alice",
+            "baseSeq": 1,
+            "txnId": null,
+            "type": "split_block",
+            "payload": {
+              "syncId": "slice-tail",
+              "offset": 2,
+              "newSyncId": "slice-tail-2",
+              "field": "content"
+            }
+          },
+          {
+            "intentId": "slice-join-2",
+            "actorId": "alice",
+            "baseSeq": 2,
+            "txnId": null,
+            "type": "merge_blocks",
+            "payload": {
+              "survivorId": "WHRudoJFHtfI1pcZUOvNIA",
+              "absorbedId": "slice-tail",
+              "joinOffset": 3,
+              "field": "content"
+            }
+          },
+          {
+            "intentId": "slice-join-3",
+            "actorId": "bob",
+            "baseSeq": 0,
+            "txnId": null,
+            "type": "delete_text",
+            "payload": {
+              "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+              "start": 1,
+              "end": 6,
+              "removedText": "t was",
+              "field": "content"
+            },
+            "textSlices": [
+              {
+                "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+                "start": 1,
+                "end": 3,
+                "removedText": "t was",
+                "field": "content"
+              },
+              {
+                "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+                "start": 3,
+                "end": 5,
+                "removedText": "t was",
+                "field": "content"
+              },
+              {
+                "syncId": "slice-tail-2",
+                "start": 0,
+                "end": 1,
+                "removedText": "t was",
+                "field": "content"
+              }
+            ]
+          }
+        ],
+        "finalDoc": {
+          "root": [
+            {
+              "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+              "blockType": "core/paragraph",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "content": {
+                  "text": "I",
+                  "formats": []
+                }
+              },
+              "syncParent": null,
+              "children": []
+            },
+            {
+              "syncId": "slice-tail-2",
+              "blockType": "core/paragraph",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "content": {
+                  "text": " a dark and stormy night.",
+                  "formats": []
+                }
+              },
+              "syncParent": "slice-tail",
+              "children": []
+            },
+            {
+              "syncId": "r4DEHJ4e3EOHeUc1NET40Q",
+              "blockType": "core/quote",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "citation": {
+                  "text": "Bulwer-Lytton",
+                  "formats": []
+                },
+                "content": {
+                  "text": "The rain fell in torrents.",
+                  "formats": []
+                }
+              },
+              "syncParent": null,
+              "children": []
+            },
+            {
+              "syncId": "I340c_hKrFvCSK1RTBRCDw",
+              "blockType": "core/group",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "content": {
+                  "text": "",
+                  "formats": []
+                }
+              },
+              "syncParent": null,
+              "children": [
+                {
+                  "syncId": "CNP4pQ0kqaCyMkN0G7Aigg",
+                  "blockType": "core/paragraph",
+                  "attrs": {},
+                  "attrVersions": {},
+                  "fields": {
+                    "content": {
+                      "text": "Except at occasional intervals.",
+                      "formats": []
+                    }
+                  },
+                  "syncParent": null,
+                  "children": []
+                },
+                {
+                  "syncId": "paBwYEg4bZpLOGnbL4wA-Q",
+                  "blockType": "core/paragraph",
+                  "attrs": {},
+                  "attrVersions": {},
+                  "fields": {
+                    "content": {
+                      "text": "When it was checked by a violent gust.",
+                      "formats": []
+                    }
+                  },
+                  "syncParent": null,
+                  "children": []
+                }
+              ]
+            },
+            {
+              "syncId": "o8aAVJ-ruR1NUPCBS7WUnA",
+              "blockType": "core/paragraph",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "content": {
+                  "text": "Which swept up the streets.",
+                  "formats": []
+                }
+              },
+              "syncParent": null,
+              "children": []
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "text slices conflict",
+      "genesis": {
+        "postId": 99,
+        "revisionId": 3
+      },
+      "batches": [
+        [
+          {
+            "intentId": "slice-conflict-0",
+            "actorId": "alice",
+            "baseSeq": 0,
+            "txnId": null,
+            "type": "split_block",
+            "payload": {
+              "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+              "offset": 3,
+              "newSyncId": "slice-tail",
+              "field": "content"
+            }
+          }
+        ],
+        [
+          {
+            "intentId": "slice-conflict-1",
+            "actorId": "alice",
+            "baseSeq": 1,
+            "txnId": null,
+            "type": "split_block",
+            "payload": {
+              "syncId": "slice-tail",
+              "offset": 2,
+              "newSyncId": "slice-tail-2",
+              "field": "content"
+            }
+          }
+        ],
+        [
+          {
+            "intentId": "slice-conflict-2",
+            "actorId": "carol",
+            "baseSeq": 2,
+            "txnId": null,
+            "type": "insert_text",
+            "payload": {
+              "syncId": "slice-tail",
+              "offset": 1,
+              "text": "PEER",
+              "field": "content"
+            }
+          }
+        ],
+        [
+          {
+            "intentId": "slice-conflict-3",
+            "actorId": "bob",
+            "baseSeq": 0,
+            "txnId": null,
+            "type": "delete_text",
+            "payload": {
+              "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+              "start": 1,
+              "end": 6,
+              "removedText": "t was",
+              "field": "content"
+            }
+          }
+        ],
+        [
+          {
+            "intentId": "slice-conflict-3",
+            "actorId": "bob",
+            "baseSeq": 0,
+            "txnId": null,
+            "type": "delete_text",
+            "payload": {
+              "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+              "start": 1,
+              "end": 6,
+              "removedText": "t was",
+              "field": "content"
+            }
+          }
+        ]
+      ],
+      "expected": {
+        "dispositions": {
+          "slice-conflict-0": {
+            "status": "applied"
+          },
+          "slice-conflict-1": {
+            "status": "applied"
+          },
+          "slice-conflict-2": {
+            "status": "applied"
+          },
+          "slice-conflict-3": {
+            "status": "escalated",
+            "reason": "concurrent-insert-in-range"
+          }
+        },
+        "proposals": [
+          {
+            "intentId": "slice-conflict-3",
+            "actorId": "bob",
+            "reason": "concurrent-insert-in-range"
+          }
+        ],
+        "log": [
+          {
+            "intentId": "slice-conflict-0",
+            "actorId": "alice",
+            "baseSeq": 0,
+            "txnId": null,
+            "type": "split_block",
+            "payload": {
+              "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+              "offset": 3,
+              "newSyncId": "slice-tail",
+              "field": "content"
+            }
+          },
+          {
+            "intentId": "slice-conflict-1",
+            "actorId": "alice",
+            "baseSeq": 1,
+            "txnId": null,
+            "type": "split_block",
+            "payload": {
+              "syncId": "slice-tail",
+              "offset": 2,
+              "newSyncId": "slice-tail-2",
+              "field": "content"
+            }
+          },
+          {
+            "intentId": "slice-conflict-2",
+            "actorId": "carol",
+            "baseSeq": 2,
+            "txnId": null,
+            "type": "insert_text",
+            "payload": {
+              "syncId": "slice-tail",
+              "offset": 1,
+              "text": "PEER",
+              "field": "content"
+            }
+          }
+        ],
+        "finalDoc": {
+          "root": [
+            {
+              "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+              "blockType": "core/paragraph",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "content": {
+                  "text": "It ",
+                  "formats": []
+                }
+              },
+              "syncParent": null,
+              "children": []
+            },
+            {
+              "syncId": "slice-tail",
+              "blockType": "core/paragraph",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "content": {
+                  "text": "wPEERa",
+                  "formats": []
+                }
+              },
+              "syncParent": "WHRudoJFHtfI1pcZUOvNIA",
+              "children": []
+            },
+            {
+              "syncId": "slice-tail-2",
+              "blockType": "core/paragraph",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "content": {
+                  "text": "s a dark and stormy night.",
+                  "formats": []
+                }
+              },
+              "syncParent": "slice-tail",
+              "children": []
+            },
+            {
+              "syncId": "r4DEHJ4e3EOHeUc1NET40Q",
+              "blockType": "core/quote",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "citation": {
+                  "text": "Bulwer-Lytton",
+                  "formats": []
+                },
+                "content": {
+                  "text": "The rain fell in torrents.",
+                  "formats": []
+                }
+              },
+              "syncParent": null,
+              "children": []
+            },
+            {
+              "syncId": "I340c_hKrFvCSK1RTBRCDw",
+              "blockType": "core/group",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "content": {
+                  "text": "",
+                  "formats": []
+                }
+              },
+              "syncParent": null,
+              "children": [
+                {
+                  "syncId": "CNP4pQ0kqaCyMkN0G7Aigg",
+                  "blockType": "core/paragraph",
+                  "attrs": {},
+                  "attrVersions": {},
+                  "fields": {
+                    "content": {
+                      "text": "Except at occasional intervals.",
+                      "formats": []
+                    }
+                  },
+                  "syncParent": null,
+                  "children": []
+                },
+                {
+                  "syncId": "paBwYEg4bZpLOGnbL4wA-Q",
+                  "blockType": "core/paragraph",
+                  "attrs": {},
+                  "attrVersions": {},
+                  "fields": {
+                    "content": {
+                      "text": "When it was checked by a violent gust.",
+                      "formats": []
+                    }
+                  },
+                  "syncParent": null,
+                  "children": []
+                }
+              ]
+            },
+            {
+              "syncId": "o8aAVJ-ruR1NUPCBS7WUnA",
+              "blockType": "core/paragraph",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "content": {
+                  "text": "Which swept up the streets.",
+                  "formats": []
+                }
+              },
+              "syncParent": null,
+              "children": []
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "text slices unicode",
+      "genesis": {
+        "postId": 99,
+        "revisionId": 3
+      },
+      "batches": [
+        [
+          {
+            "intentId": "slice-unicode-0",
+            "actorId": "alice",
+            "baseSeq": 0,
+            "txnId": null,
+            "type": "replace_attr_content",
+            "payload": {
+              "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+              "newText": "A😀éBC",
+              "observedVersion": 0,
+              "field": "content"
+            }
+          }
+        ],
+        [
+          {
+            "intentId": "slice-unicode-1",
+            "actorId": "alice",
+            "baseSeq": 1,
+            "txnId": null,
+            "type": "split_block",
+            "payload": {
+              "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+              "offset": 3,
+              "newSyncId": "slice-tail",
+              "field": "content"
+            }
+          }
+        ],
+        [
+          {
+            "intentId": "slice-unicode-2",
+            "actorId": "alice",
+            "baseSeq": 2,
+            "txnId": null,
+            "type": "split_block",
+            "payload": {
+              "syncId": "slice-tail",
+              "offset": 2,
+              "newSyncId": "slice-tail-2",
+              "field": "content"
+            }
+          }
+        ],
+        [
+          {
+            "intentId": "slice-unicode-3",
+            "actorId": "bob",
+            "baseSeq": 1,
+            "txnId": null,
+            "type": "format_text",
+            "payload": {
+              "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+              "start": 1,
+              "end": 6,
+              "format": "bold",
+              "on": true,
+              "field": "content"
+            }
+          }
+        ],
+        [
+          {
+            "intentId": "slice-unicode-3",
+            "actorId": "bob",
+            "baseSeq": 1,
+            "txnId": null,
+            "type": "format_text",
+            "payload": {
+              "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+              "start": 1,
+              "end": 6,
+              "format": "bold",
+              "on": true,
+              "field": "content"
+            }
+          }
+        ]
+      ],
+      "expected": {
+        "dispositions": {
+          "slice-unicode-0": {
+            "status": "applied"
+          },
+          "slice-unicode-1": {
+            "status": "applied"
+          },
+          "slice-unicode-2": {
+            "status": "applied"
+          },
+          "slice-unicode-3": {
+            "status": "applied"
+          }
+        },
+        "proposals": [],
+        "log": [
+          {
+            "intentId": "slice-unicode-0",
+            "actorId": "alice",
+            "baseSeq": 0,
+            "txnId": null,
+            "type": "replace_attr_content",
+            "payload": {
+              "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+              "newText": "A😀éBC",
+              "observedVersion": 0,
+              "field": "content"
+            }
+          },
+          {
+            "intentId": "slice-unicode-1",
+            "actorId": "alice",
+            "baseSeq": 1,
+            "txnId": null,
+            "type": "split_block",
+            "payload": {
+              "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+              "offset": 3,
+              "newSyncId": "slice-tail",
+              "field": "content"
+            }
+          },
+          {
+            "intentId": "slice-unicode-2",
+            "actorId": "alice",
+            "baseSeq": 2,
+            "txnId": null,
+            "type": "split_block",
+            "payload": {
+              "syncId": "slice-tail",
+              "offset": 2,
+              "newSyncId": "slice-tail-2",
+              "field": "content"
+            }
+          },
+          {
+            "intentId": "slice-unicode-3",
+            "actorId": "bob",
+            "baseSeq": 1,
+            "txnId": null,
+            "type": "format_text",
+            "payload": {
+              "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+              "start": 1,
+              "end": 6,
+              "format": "bold",
+              "on": true,
+              "field": "content"
+            },
+            "textSlices": [
+              {
+                "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+                "start": 1,
+                "end": 3,
+                "format": "bold",
+                "on": true,
+                "field": "content"
+              },
+              {
+                "syncId": "slice-tail",
+                "start": 0,
+                "end": 2,
+                "format": "bold",
+                "on": true,
+                "field": "content"
+              },
+              {
+                "syncId": "slice-tail-2",
+                "start": 0,
+                "end": 1,
+                "format": "bold",
+                "on": true,
+                "field": "content"
+              }
+            ]
+          }
+        ],
+        "finalDoc": {
+          "root": [
+            {
+              "syncId": "WHRudoJFHtfI1pcZUOvNIA",
+              "blockType": "core/paragraph",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "content": {
+                  "text": "A😀",
+                  "formats": [
+                    {
+                      "start": 1,
+                      "end": 3,
+                      "format": "bold"
+                    }
+                  ]
+                }
+              },
+              "syncParent": null,
+              "children": []
+            },
+            {
+              "syncId": "slice-tail",
+              "blockType": "core/paragraph",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "content": {
+                  "text": "é",
+                  "formats": [
+                    {
+                      "start": 0,
+                      "end": 2,
+                      "format": "bold"
+                    }
+                  ]
+                }
+              },
+              "syncParent": "WHRudoJFHtfI1pcZUOvNIA",
+              "children": []
+            },
+            {
+              "syncId": "slice-tail-2",
+              "blockType": "core/paragraph",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "content": {
+                  "text": "BC",
+                  "formats": [
+                    {
+                      "start": 0,
+                      "end": 1,
+                      "format": "bold"
+                    }
+                  ]
+                }
+              },
+              "syncParent": "slice-tail",
+              "children": []
+            },
+            {
+              "syncId": "r4DEHJ4e3EOHeUc1NET40Q",
+              "blockType": "core/quote",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "citation": {
+                  "text": "Bulwer-Lytton",
+                  "formats": []
+                },
+                "content": {
+                  "text": "The rain fell in torrents.",
+                  "formats": []
+                }
+              },
+              "syncParent": null,
+              "children": []
+            },
+            {
+              "syncId": "I340c_hKrFvCSK1RTBRCDw",
+              "blockType": "core/group",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "content": {
+                  "text": "",
+                  "formats": []
+                }
+              },
+              "syncParent": null,
+              "children": [
+                {
+                  "syncId": "CNP4pQ0kqaCyMkN0G7Aigg",
+                  "blockType": "core/paragraph",
+                  "attrs": {},
+                  "attrVersions": {},
+                  "fields": {
+                    "content": {
+                      "text": "Except at occasional intervals.",
+                      "formats": []
+                    }
+                  },
+                  "syncParent": null,
+                  "children": []
+                },
+                {
+                  "syncId": "paBwYEg4bZpLOGnbL4wA-Q",
+                  "blockType": "core/paragraph",
+                  "attrs": {},
+                  "attrVersions": {},
+                  "fields": {
+                    "content": {
+                      "text": "When it was checked by a violent gust.",
+                      "formats": []
+                    }
+                  },
+                  "syncParent": null,
+                  "children": []
+                }
+              ]
+            },
+            {
+              "syncId": "o8aAVJ-ruR1NUPCBS7WUnA",
               "blockType": "core/paragraph",
               "attrs": {},
               "attrVersions": {},

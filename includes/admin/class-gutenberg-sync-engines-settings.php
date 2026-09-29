@@ -230,7 +230,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
 		 * it before the change keep push delivery without a visit to the
 		 * settings screen).
 		 *
-		 * @since n.e.x.t
+		 * @since 0.0.2
 		 *
 		 * @return string The transport slug, or '' when none is stored.
 		 */

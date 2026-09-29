@@ -3,13 +3,13 @@
  * Redis carries wake notices; room tables remain the durable source of truth.
  *
  * @package GutenbergSyncEngines
- * @since n.e.x.t
+ * @since 0.0.2
  */
 
 /**
  * Publishes changes after the writer finishes.
  *
- * @since n.e.x.t
+ * @since 0.0.2
  */
 class WP_Sync_Redis_Notifications {
 	/**
@@ -31,7 +31,7 @@ class WP_Sync_Redis_Notifications {
 		/**
 		 * Filters the Redis address the SSE transport publishes and subscribes on.
 		 *
-		 * @since n.e.x.t
+		 * @since 0.0.2
 		 * @param string $url `redis://`, `rediss://`, or `unix://` address; '' for none.
 		 */
 		return (string) apply_filters( 'wp_sync_sse_redis_url', '' !== $configured ? $configured : self::object_cache_url() );

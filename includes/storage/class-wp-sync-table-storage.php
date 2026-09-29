@@ -97,7 +97,7 @@ if ( ! class_exists( 'WP_Sync_Table_Storage' ) ) {
 		 * with one lookup. With a persistent object cache it lives only
 		 * there (an atomic increment), never in a row.
 		 *
-		 * @since n.e.x.t
+		 * @since 0.0.2
 		 * @var string
 		 */
 		const VERSION_KEY = '_version';
@@ -105,7 +105,7 @@ if ( ! class_exists( 'WP_Sync_Table_Storage' ) ) {
 		/**
 		 * How long an untouched version counter stays in the object cache.
 		 *
-		 * @since n.e.x.t
+		 * @since 0.0.2
 		 * @var int
 		 */
 		const VERSION_CACHE_TTL = MONTH_IN_SECONDS;
@@ -169,7 +169,7 @@ if ( ! class_exists( 'WP_Sync_Table_Storage' ) ) {
 		 * Notify transports only after a successful write: bump the room's
 		 * version counter, then fire the action.
 		 *
-		 * @since n.e.x.t
+		 * @since 0.0.2
 		 * @param string $room   Changed room.
 		 * @param bool   $stored Write result.
 		 * @param bool   $bump   Whether to bump the version counter (a reset
@@ -186,7 +186,7 @@ if ( ! class_exists( 'WP_Sync_Table_Storage' ) ) {
 				 * Fires after room data changes. Subscribers must treat this as
 				 * a wake hint and read durable state after the writer finishes.
 				 *
-				 * @since n.e.x.t
+				 * @since 0.0.2
 				 * @param string $room Room name.
 				 */
 				do_action( 'gutenberg_sync_engines_room_changed', $room );
@@ -203,7 +203,7 @@ if ( ! class_exists( 'WP_Sync_Table_Storage' ) ) {
 		 * a reader whose snapshot fell between two bumps sleep through the
 		 * second write until its catch-up read.
 		 *
-		 * @since n.e.x.t
+		 * @since 0.0.2
 		 *
 		 * @global wpdb $wpdb WordPress database abstraction object.
 		 *
@@ -237,7 +237,7 @@ if ( ! class_exists( 'WP_Sync_Table_Storage' ) ) {
 		 * waiting on "did anything change?". Not part of the WP_Sync_Storage
 		 * contract; the SSE stream uses it when this storage is active.
 		 *
-		 * @since n.e.x.t
+		 * @since 0.0.2
 		 *
 		 * @global wpdb $wpdb WordPress database abstraction object.
 		 *

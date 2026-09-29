@@ -61,7 +61,7 @@ export const INTENT_LOG_ENGINE_SLUG = 'intent-log';
  * Protocol version of the intent-log engine. Must match
  * WP_Intent_Log_Engine::PROTOCOL_VERSION on the PHP side.
  */
-export const INTENT_LOG_ENGINE_PROTOCOL = 1;
+export const INTENT_LOG_ENGINE_PROTOCOL = 2;
 
 /**
  * Wire kinds, matching WP_Intent_Log_Engine::UPDATE_TYPE_*.
