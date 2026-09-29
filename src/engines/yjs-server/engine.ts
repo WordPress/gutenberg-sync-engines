@@ -6,6 +6,7 @@ import * as Y from 'yjs';
 /**
  * WordPress dependencies
  */
+import apiFetch from '@wordpress/api-fetch';
 // eslint-disable-next-line import/no-unresolved -- Provided at runtime as wp.sync.
 import type {
 	EngineCollection,
@@ -36,6 +37,8 @@ import {
 	YJS_SERVER_ENGINE_PROTOCOL,
 	YJS_SERVER_ENGINE_SLUG,
 } from './session';
+import { createYjsServerHolds, type YjsServerHolds } from './holds';
+import type { SyncConflict, SyncConflictSource } from '../../review/types';
 
 /**
  * The server-authoritative Yjs engine, client half.
@@ -65,15 +68,101 @@ import {
  *
  * @return {SyncEngine} The yjs-server engine.
  */
-export function createYjsServerEngine(): SyncEngine {
+export function createYjsServerEngine(): SyncEngine & {
+	/** The plugin's conflict review lane (src/review/): security holds. */
+	conflicts: SyncConflictSource;
+} {
+	/*
+	 * Security holds, per entity. A CRDT merge detects no conflicts to
+	 * set aside, so this engine has no MERGE records; what it has is
+	 * markup the server's kses lane stripped from a filtered author's
+	 * block and kept for approval. Subscriptions are keyed at the engine
+	 * level so they are valid before, and across, an entity's lifetime.
+	 */
+	const entityHolds = new Map< string, YjsServerHolds >();
+	const keyListeners = new Map< string, Set< () => void > >();
+	const holdsKey = ( objectType: string, objectId: unknown ) =>
+		`${ objectType }:${ String( objectId ) }`;
+	const notifyKey = ( key: string ) =>
+		keyListeners.get( key )?.forEach( ( listener ) => listener() );
+
+	const conflictSource: SyncConflictSource = {
+		getOpenConflicts: ( objectType, objectId ) =>
+			(
+				entityHolds
+					.get( holdsKey( objectType, objectId ) )
+					?.getOpen() ?? []
+			).map(
+				( hold ): SyncConflict => ( {
+					id: hold.holdId,
+					kind: 'sequestration',
+					authorId: hold.author,
+					target: {
+						type: 'blocks',
+						// The sanitized block's id, which the editor
+						// adopts as the block's client id. A hold that
+						// left no block behind is a proposed insertion.
+						...( hold.blockId ? { ids: [ hold.blockId ] } : {} ),
+						index: hold.index,
+						count: hold.blockId ? 1 : 0,
+					},
+					base: hold.base,
+					proposed: hold.held,
+					// The canonical document holds the sanitized block,
+					// and every client converges on it.
+					current: hold.sanitized,
+				} )
+			),
+		subscribe: ( objectType, objectId, listener ) => {
+			const key = holdsKey( objectType, objectId );
+			if ( ! keyListeners.has( key ) ) {
+				keyListeners.set( key, new Set() );
+			}
+			keyListeners.get( key )?.add( listener );
+			return () => {
+				keyListeners.get( key )?.delete( listener );
+			};
+		},
+		resolveConflict: ( objectType, objectId, conflictId, decision ) => {
+			const holds = entityHolds.get( holdsKey( objectType, objectId ) );
+			if ( 'accept' === decision.action ) {
+				// The server lands the content in place of the sanitized
+				// block, under the reviewer's capability, and closes the
+				// hold in the same request.
+				holds?.resolve( conflictId, 'accepted', decision.content );
+				return;
+			}
+			holds?.resolve( conflictId, 'dismissed' );
+		},
+	};
+
 	return {
 		slug: YJS_SERVER_ENGINE_SLUG,
 		protocolVersion: YJS_SERVER_ENGINE_PROTOCOL,
+		conflicts: conflictSource,
 		// Same per-peer Yjs undo as the relay: undo is client-local
 		// machinery, orthogonal to where the canonical merge happens.
 		createUndoManager,
 		createEntity( { syncConfig, objectType, objectId } ): EngineEntity {
 			const ydoc = createYjsDoc( { objectType } );
+			const holds = createYjsServerHolds();
+			const entityKey = holdsKey( objectType, objectId );
+			entityHolds.set( entityKey, holds );
+			holds.onChange( () => notifyKey( entityKey ) );
+			holds.setRestResolver( ( holdId, resolution, content ) =>
+				apiFetch( {
+					data: {
+						holdId,
+						resolution,
+						...( undefined !== content ? { content } : {} ),
+						room: objectId
+							? `${ objectType }:${ objectId }`
+							: objectType,
+					},
+					method: 'POST',
+					path: '/wp-sync/v1/yjs-server/resolve',
+				} )
+			);
 			const recordMap = ydoc.getMap( CRDT_RECORD_MAP_KEY );
 			const stateMap = ydoc.getMap( CRDT_STATE_MAP_KEY );
 			const now = Date.now();
@@ -159,7 +248,11 @@ export function createYjsServerEngine(): SyncEngine {
 				awareness,
 
 				createSession: () =>
-					createYjsServerSessionCodec( { awareness, doc: ydoc } ),
+					createYjsServerSessionCodec( {
+						awareness,
+						doc: ydoc,
+						holds,
+					} ),
 
 				hydrate() {
 					// Deliberately empty: the server's genesis snapshot is

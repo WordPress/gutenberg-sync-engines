@@ -19,6 +19,7 @@ import {
 	base64ToUint8Array,
 	createSyncUpdate,
 } from '../../providers/http-polling/utils';
+import type { YjsServerHolds } from './holds';
 
 /**
  * Origin tag for Yjs transactions applied by this session, so updates the
@@ -45,6 +46,18 @@ export const YJS_SERVER_ENGINE_PROTOCOL = 1;
  * clients never send it.
  */
 export const YJS_SERVER_SNAPSHOT_TYPE = 'snapshot';
+
+/**
+ * Update type for a security hold (JSON). Matches
+ * WP_Yjs_Server_Engine::UPDATE_TYPE_HELD. Receive-only.
+ */
+export const YJS_SERVER_HELD_TYPE = 'held';
+
+/**
+ * Update type closing a security hold (JSON). Matches
+ * WP_Yjs_Server_Engine::UPDATE_TYPE_HELD_RESOLVED. Receive-only.
+ */
+export const YJS_SERVER_HELD_RESOLVED_TYPE = 'held-resolved';
 
 /**
  * The yjs-server session codec: EngineSessionCodec plus the transport
@@ -77,6 +90,9 @@ export interface YjsServerSessionOptions {
 
 	/** The Yjs document holding the entity state. */
 	doc: Y.Doc;
+
+	/** The entity's hold ledger, fed by the review rows. */
+	holds?: YjsServerHolds;
 }
 
 /**
@@ -170,6 +186,46 @@ export function createYjsServerSessionCodec(
 					base64ToUint8Array( update.data ),
 					YJS_SERVER_SESSION_ORIGIN
 				);
+				return;
+			}
+
+			// Review rows carry no document content; they feed the hold
+			// ledger.
+			case YJS_SERVER_HELD_TYPE: {
+				try {
+					const decoded = JSON.parse( update.data );
+					if (
+						'string' === typeof decoded?.holdId &&
+						'' !== decoded.holdId &&
+						'string' === typeof decoded?.held
+					) {
+						options.holds?.noteHeld( {
+							...decoded,
+							blockId:
+								'string' === typeof decoded.blockId
+									? decoded.blockId
+									: null,
+							index: Number( decoded.index ) || 0,
+							sanitized: String( decoded.sanitized ?? '' ),
+							base: String( decoded.base ?? '' ),
+							author: Number( decoded.author ) || 0,
+						} );
+					}
+				} catch {
+					// A malformed row announces nothing.
+				}
+				return;
+			}
+
+			case YJS_SERVER_HELD_RESOLVED_TYPE: {
+				try {
+					const decoded = JSON.parse( update.data );
+					if ( 'string' === typeof decoded?.holdId ) {
+						options.holds?.noteResolved( decoded.holdId );
+					}
+				} catch {
+					// A malformed row closes nothing.
+				}
 			}
 		}
 	}

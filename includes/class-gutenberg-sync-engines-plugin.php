@@ -148,6 +148,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Plugin' ) ) {
 			require_once $engines . 'de-rtc/class-wp-de-rtc-base-version-preflight.php';
 			require_once $engines . 'de-rtc/class-wp-de-rtc-autosave-commits.php';
 			require_once $engines . 'de-rtc/class-wp-de-rtc-review-controller.php';
+			require_once $engines . 'yjs-server/class-wp-yjs-server-review-controller.php';
 
 			$transports = GUTENBERG_SYNC_ENGINES_PATH . 'includes/transports/';
 			require_once $transports . 'class-wp-http-polling-sync-server.php';
@@ -214,6 +215,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Plugin' ) ) {
 			WP_De_RTC_Base_Version_Preflight::register();
 			WP_De_RTC_Autosave_Commits::register();
 			add_action( 'rest_api_init', array( new WP_De_RTC_Review_Controller(), 'register_routes' ) );
+			add_action( 'rest_api_init', array( new WP_Yjs_Server_Review_Controller(), 'register_routes' ) );
 			WP_Intent_Log_Base_Seq_Preflight::register();
 			// A reset room must not resume from de-rtc's out-of-row canonical.
 			add_action( 'gutenberg_sync_engines_room_reset', array( 'WP_De_RTC_Engine', 'forget_room_state' ) );

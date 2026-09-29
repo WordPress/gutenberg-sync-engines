@@ -35,7 +35,10 @@ import { privateApis } from '@wordpress/sync';
  */
 import { unlock } from './lock-unlock';
 import { createIntentLogEngineAdapter } from './engines/intent-log-adapter';
-import { createYjsServerEngineAdapter } from './engines/yjs-server-adapter';
+import {
+	createYjsServerEngineAdapter,
+	yjsServerConflictSource,
+} from './engines/yjs-server-adapter';
 import {
 	createDeRtcEngineAdapter,
 	deRtcConflictSource,
@@ -65,10 +68,11 @@ registerSyncEngine( createYjsServerEngineAdapter() );
 registerSyncEngine( createDeRtcEngineAdapter() );
 
 // Conflict review: the in-canvas cards and dialogs (src/review/) render
-// from the engines' conflict sources. yjs-server has no review lane by
-// design (a CRDT merge detects no conflicts to park).
+// from the engines' conflict sources. yjs-server publishes security holds
+// only (a CRDT merge detects no conflicts to set aside).
 registerConflictSource( intentLogConflictSource );
 registerConflictSource( deRtcConflictSource );
+registerConflictSource( yjsServerConflictSource );
 
 // Transports: how updates move. Each carries the slug + protocol the server
 // announces and negotiates against.

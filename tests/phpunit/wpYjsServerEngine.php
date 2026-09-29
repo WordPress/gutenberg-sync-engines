@@ -94,9 +94,10 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 			if ( WP_Yjs_Server_Engine::UPDATE_TYPE_SNAPSHOT === $update['type'] ) {
 				$decoded = json_decode( $update['data'], true );
 				\Yjs\applyUpdateV2( $doc, \Yjs\Lib0\Buffer::fromBase64( $decoded['doc'] ) );
-			} else {
+			} elseif ( WP_Yjs_Server_Engine::UPDATE_TYPE_UPDATE === $update['type'] ) {
 				\Yjs\applyUpdateV2( $doc, \Yjs\Lib0\Buffer::fromBase64( $update['data'] ) );
 			}
+			// Review rows (held, held-resolved) carry no document content.
 		}
 	}
 
@@ -128,7 +129,7 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 		$engine = $this->engine();
 		$this->assertSame( 'yjs-server', $engine->get_slug() );
 		$this->assertSame( 1, $engine->get_protocol_version() );
-		$this->assertSame( array( 'update', 'snapshot' ), $engine->get_update_types() );
+		$this->assertSame( array( 'update', 'snapshot', 'held', 'held-resolved' ), $engine->get_update_types() );
 	}
 
 	public function test_room_size_ceiling_rejects_writes_but_not_reads() {
@@ -1314,6 +1315,252 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 		);
 		$this->assertSame( array( array( 'status' => 'applied' ) ), $result['dispositions'] );
 		$this->assertStringContainsString( 'Onward: ', (string) $this->engine()->materialize( $this->room() ) );
+	}
+
+	/**
+	 * Decoded rows of a type from a room response.
+	 *
+	 * @param array  $response Room response.
+	 * @param string $type     Update type.
+	 * @return array Decoded row payloads.
+	 */
+	private function rows_of_type( array $response, string $type ): array {
+		$rows = array();
+		foreach ( $response['updates'] as $update ) {
+			if ( $type === $update['type'] ) {
+				$rows[] = json_decode( $update['data'], true );
+			}
+		}
+		return $rows;
+	}
+
+	/**
+	 * A filtered author writes a script into the first block: the kses
+	 * lane sanitizes it and holds what it stripped.
+	 *
+	 * @param string $markup The markup the author types.
+	 * @return array The open hold.
+	 */
+	private function raise_hold( string $markup = ' <script>alert(1)</script>' ): array {
+		$response = $this->engine()->get_updates_since( $this->room(), 101, 0, array() );
+		$doc      = $this->client_doc_from_response( $response );
+
+		wp_set_current_user( self::$author_id );
+		$update = $this->encode_edit(
+			$doc,
+			function ( $doc ) use ( $markup ) {
+				$this->first_block_content( $doc )->insert( 11, $markup );
+			}
+		);
+		$this->engine()->handle_updates(
+			$this->room(),
+			101,
+			(int) $response['end_cursor'],
+			array(
+				array(
+					'type' => 'update',
+					'data' => $update,
+				),
+			),
+			array()
+		);
+
+		$holds = $this->engine()->get_open_holds( $this->room() );
+		$this->assertCount( 1, $holds, 'the sanitized block must be held' );
+		return array_values( $holds )[0];
+	}
+
+	public function test_kses_lane_holds_the_markup_it_strips() {
+		$hold = $this->raise_hold();
+
+		$this->assertStringContainsString( '<script>alert(1)</script>', $hold['held'] );
+		$this->assertStringNotContainsString( '<script>', $hold['sanitized'] );
+		$this->assertStringContainsString( 'Hello world', $hold['base'] );
+		$this->assertStringNotContainsString( 'alert', $hold['base'], 'the base is the block before the batch' );
+		$this->assertSame( 0, $hold['index'] );
+		$this->assertSame( self::$author_id, $hold['author'] );
+		$this->assertSame( 101, $hold['authorClientId'] );
+		$this->assertIsString( $hold['blockId'] );
+
+		// The hold is announced to every client, the author included, and
+		// names the sanitized block in the canonical document.
+		$read = $this->engine()->get_updates_since( $this->room(), 202, 0, array() );
+		$held = $this->rows_of_type( $read, WP_Yjs_Server_Engine::UPDATE_TYPE_HELD );
+		$this->assertCount( 1, $held );
+		$this->assertSame( $hold['holdId'], $held[0]['holdId'] );
+		$doc = $this->client_doc_from_response( $read );
+		$this->assertSame(
+			$hold['blockId'],
+			$doc->getMap( 'document' )->get( 'blocks' )->get( 0 )->get( 'clientId' )
+		);
+		$this->assertNotEmpty(
+			$this->rows_of_type(
+				$this->engine()->get_updates_since( $this->room(), 101, 0, array() ),
+				WP_Yjs_Server_Engine::UPDATE_TYPE_HELD
+			)
+		);
+	}
+
+	public function test_accepting_a_hold_lands_the_held_markup_for_every_client() {
+		$hold = $this->raise_hold();
+
+		wp_set_current_user( self::$editor_id );
+		$disposition = $this->engine()->resolve_hold( $this->room(), $hold['holdId'], 'accepted' );
+		$this->assertSame( 'resolved', $disposition['status'] );
+		$this->assertTrue( $disposition['applied'] );
+
+		$this->assertStringContainsString( '<script>alert(1)</script>', (string) $this->engine()->materialize( $this->room() ) );
+		$this->assertSame( array(), $this->engine()->get_open_holds( $this->room() ) );
+
+		// A fresh peer converges on the approved markup and sees the hold closed.
+		$read     = $this->engine()->get_updates_since( $this->room(), 303, 0, array() );
+		$doc      = $this->client_doc_from_response( $read );
+		$resolved = $this->rows_of_type( $read, WP_Yjs_Server_Engine::UPDATE_TYPE_HELD_RESOLVED );
+		$this->assertStringContainsString( '<script>', $this->first_block_content( $doc )->toString() );
+		$this->assertCount( 1, $resolved );
+		$this->assertSame( $hold['holdId'], $resolved[0]['holdId'] );
+		$this->assertSame( 'accepted', $resolved[0]['resolution'] );
+		$this->assertSame( self::$editor_id, $resolved[0]['resolvedBy'] );
+	}
+
+	public function test_accepting_a_hold_with_edited_content_lands_that_content() {
+		$hold = $this->raise_hold();
+
+		wp_set_current_user( self::$editor_id );
+		$edited = "<!-- wp:paragraph -->\n<p>Hello world, <em>reviewed</em></p>\n<!-- /wp:paragraph -->";
+		$this->engine()->resolve_hold( $this->room(), $hold['holdId'], 'accepted', $edited );
+
+		$materialized = (string) $this->engine()->materialize( $this->room() );
+		$this->assertStringContainsString( '<em>reviewed</em>', $materialized );
+		$this->assertStringNotContainsString( 'alert', $materialized, 'the content replaces the sanitized block' );
+	}
+
+	public function test_accepting_a_hold_needs_unfiltered_html() {
+		$hold = $this->raise_hold();
+
+		// Still the filtered author.
+		$rejected = $this->engine()->resolve_hold( $this->room(), $hold['holdId'], 'accepted' );
+		$this->assertWPError( $rejected );
+		$this->assertSame( 'rest_sync_forbidden', $rejected->get_error_code() );
+		$this->assertCount( 1, $this->engine()->get_open_holds( $this->room() ), 'the hold stays open' );
+		$this->assertStringNotContainsString( '<script>', (string) $this->engine()->materialize( $this->room() ) );
+	}
+
+	public function test_dismissing_a_hold_keeps_the_sanitized_block() {
+		$hold   = $this->raise_hold();
+		$before = (string) $this->engine()->materialize( $this->room() );
+
+		// Anyone who can edit may discard, the author included.
+		$disposition = $this->engine()->resolve_hold( $this->room(), $hold['holdId'], 'dismissed' );
+		$this->assertSame( 'resolved', $disposition['status'] );
+		$this->assertArrayNotHasKey( 'applied', $disposition );
+		$this->assertSame( $before, (string) $this->engine()->materialize( $this->room() ) );
+		$this->assertSame( array(), $this->engine()->get_open_holds( $this->room() ) );
+
+		// Deciding it again acks without changing anything.
+		wp_set_current_user( self::$editor_id );
+		$again = $this->engine()->resolve_hold( $this->room(), $hold['holdId'], 'accepted' );
+		$this->assertSame( 'resolved', $again['status'] );
+		$this->assertSame( $before, (string) $this->engine()->materialize( $this->room() ) );
+	}
+
+	public function test_a_newer_hold_by_the_same_author_over_the_same_block_supersedes_the_open_one() {
+		$first = $this->raise_hold();
+
+		// The author catches up on the sanitized block and tries again.
+		$response = $this->engine()->get_updates_since( $this->room(), 101, 0, array() );
+		$doc      = $this->client_doc_from_response( $response );
+		$update   = $this->encode_edit(
+			$doc,
+			function ( $doc ) {
+				$this->first_block_content( $doc )->insert( 0, '<script>alert(2)</script>' );
+			}
+		);
+		$this->engine()->handle_updates(
+			$this->room(),
+			101,
+			(int) $response['end_cursor'],
+			array(
+				array(
+					'type' => 'update',
+					'data' => $update,
+				),
+			),
+			array()
+		);
+
+		$holds = array_values( $this->engine()->get_open_holds( $this->room() ) );
+		$this->assertCount( 1, $holds, 'one review task per author and block' );
+		$this->assertNotSame( $first['holdId'], $holds[0]['holdId'] );
+		$this->assertStringContainsString( 'alert(2)', $holds[0]['held'] );
+		// The reviewer still compares against the block before the author's first attempt.
+		$this->assertSame( $first['base'], $holds[0]['base'] );
+
+		$resolved = $this->rows_of_type(
+			$this->engine()->get_updates_since( $this->room(), 202, 0, array() ),
+			WP_Yjs_Server_Engine::UPDATE_TYPE_HELD_RESOLVED
+		);
+		$this->assertCount( 1, $resolved );
+		$this->assertSame( $first['holdId'], $resolved[0]['holdId'] );
+		$this->assertSame( 'superseded', $resolved[0]['resolution'] );
+	}
+
+	public function test_privileged_markup_raises_no_hold() {
+		$response = $this->engine()->get_updates_since( $this->room(), 101, 0, array() );
+		$doc      = $this->client_doc_from_response( $response );
+		$update   = $this->encode_edit(
+			$doc,
+			function ( $doc ) {
+				$this->first_block_content( $doc )->insert( 11, ' <script>alert(1)</script>' );
+			}
+		);
+		$this->engine()->handle_updates(
+			$this->room(),
+			101,
+			(int) $response['end_cursor'],
+			array(
+				array(
+					'type' => 'update',
+					'data' => $update,
+				),
+			),
+			array()
+		);
+		$this->assertSame( array(), $this->engine()->get_open_holds( $this->room() ) );
+	}
+
+	public function test_hold_decisions_travel_over_the_rest_review_lane() {
+		$hold = $this->raise_hold();
+		$this->assertArrayHasKey( '/wp-sync/v1/yjs-server/resolve', rest_get_server()->get_routes() );
+
+		$dispatch = function ( array $params ) {
+			$request = new WP_REST_Request( 'POST', '/wp-sync/v1/yjs-server/resolve' );
+			$request->set_body_params( $params );
+			return rest_get_server()->dispatch( $request );
+		};
+
+		// The filtered author cannot approve.
+		$forbidden = $dispatch(
+			array(
+				'room'       => $this->room(),
+				'holdId'     => $hold['holdId'],
+				'resolution' => 'accepted',
+			)
+		);
+		$this->assertSame( 403, $forbidden->get_status() );
+
+		wp_set_current_user( self::$editor_id );
+		$accepted = $dispatch(
+			array(
+				'room'       => $this->room(),
+				'holdId'     => $hold['holdId'],
+				'resolution' => 'accepted',
+				'content'    => $hold['held'],
+			)
+		);
+		$this->assertSame( 200, $accepted->get_status() );
+		$this->assertSame( 'resolved', $accepted->get_data()['disposition']['status'] );
+		$this->assertStringContainsString( '<script>alert(1)</script>', (string) $this->engine()->materialize( $this->room() ) );
 	}
 
 	public function test_kses_lane_leaves_untouched_privileged_blocks_alone() {

@@ -2,98 +2,20 @@
  * Internal dependencies
  */
 import { createSyncManager } from '../framework';
+import { createConflictFanOut } from '../review/fan-out';
 import {
 	createDeRtcEngine,
 	DE_RTC_ENGINE_PROTOCOL,
 	DE_RTC_ENGINE_SLUG,
 } from './de-rtc';
-import type { SyncConflictSource } from '../review/types';
 
-type DeRtcEngine = ReturnType< typeof createDeRtcEngine >;
-
-/*
- * The conflict review lane (src/review/) takes the engine's conflict
- * source at module load, but engines are created per session (the
- * framework asks the adapter for a manager). So the registered source is
- * a fan-out over every engine this adapter created: reads union them,
- * subscriptions attach to each, and an engine created after a
- * subscription started is attached on creation.
- */
-const engines = new Set< DeRtcEngine >();
-
-interface Subscription {
-	objectType: string;
-	objectId: string | null;
-	listener: () => void;
-	unsubscribes: Map< DeRtcEngine, () => void >;
-}
-
-const subscriptions = new Set< Subscription >();
-
-function attach( subscription: Subscription, engine: DeRtcEngine ): void {
-	if ( subscription.unsubscribes.has( engine ) ) {
-		return;
-	}
-	subscription.unsubscribes.set(
-		engine,
-		engine.conflicts.subscribe(
-			subscription.objectType,
-			subscription.objectId,
-			subscription.listener
-		)
-	);
-}
-
-function registerEngine( engine: DeRtcEngine ): void {
-	engines.add( engine );
-	subscriptions.forEach( ( subscription ) => {
-		attach( subscription, engine );
-		subscription.listener();
-	} );
-}
+const conflicts = createConflictFanOut();
 
 /**
- * The de-rtc engine's conflict source, registered from src/index.ts.
+ * The de-rtc engine's conflict source, registered from src/index.ts: every
+ * engine this adapter created, as one source (see src/review/fan-out.ts).
  */
-export const deRtcConflictSource: SyncConflictSource = {
-	getOpenConflicts: ( objectType, objectId ) =>
-		Array.from( engines ).flatMap( ( engine ) =>
-			engine.conflicts.getOpenConflicts( objectType, objectId )
-		),
-	subscribe: ( objectType, objectId, listener ) => {
-		const subscription: Subscription = {
-			objectType,
-			objectId,
-			listener,
-			unsubscribes: new Map(),
-		};
-		engines.forEach( ( engine ) => attach( subscription, engine ) );
-		subscriptions.add( subscription );
-		return () => {
-			subscription.unsubscribes.forEach( ( unsubscribe ) =>
-				unsubscribe()
-			);
-			subscriptions.delete( subscription );
-		};
-	},
-	resolveConflict: ( objectType, objectId, conflictId, decision ) => {
-		for ( const engine of engines ) {
-			const open = engine.conflicts.getOpenConflicts(
-				objectType,
-				objectId
-			);
-			if ( open.some( ( conflict ) => conflict.id === conflictId ) ) {
-				engine.conflicts.resolveConflict(
-					objectType,
-					objectId,
-					conflictId,
-					decision
-				);
-				return;
-			}
-		}
-	},
-};
+export const deRtcConflictSource = conflicts.source;
 
 /**
  * The de-rtc engine adapter: Distributed Editing's save-centric model on
@@ -116,7 +38,7 @@ export function createDeRtcEngineAdapter() {
 		protocolVersion: DE_RTC_ENGINE_PROTOCOL,
 		createManager: ( debug?: boolean ) => {
 			const engine = createDeRtcEngine();
-			registerEngine( engine );
+			conflicts.add( engine.conflicts );
 			return createSyncManager(
 				{ ...engine, review: undefined },
 				{ debug }

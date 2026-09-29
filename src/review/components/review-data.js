@@ -48,10 +48,12 @@ export function useCurrentPost() {
 /**
  * The conflict records whose target is a given block. A record covering a
  * span of blocks matches its FIRST block only, so a span presents as one
- * card. Durable ids win over the position; a positional target matches
- * the block at that index among its parent's children (the top level
- * when the target names no parent). Proposed insertions (`count` 0)
- * never match: they propose a block that does not exist yet.
+ * card. Durable ids win over the position: an id is the block's
+ * `metadata.syncId`, or, for an engine whose documents carry the editor's
+ * own block ids (yjs-server), the block's client id. A positional target
+ * matches the block at that index among its parent's children (the top
+ * level when the target names no parent). Proposed insertions (`count`
+ * 0) never match: they propose a block that does not exist yet.
  *
  * @param {Function} select    Registry select (inside a useSelect).
  * @param {Array}    conflicts Open conflict records.
@@ -75,7 +77,10 @@ export function conflictsTargetingBlock( select, conflicts, clientId ) {
 		}
 
 		if ( target.ids?.length ) {
-			return !! syncId && target.ids[ 0 ] === syncId;
+			return (
+				( !! syncId && target.ids[ 0 ] === syncId ) ||
+				target.ids[ 0 ] === clientId
+			);
 		}
 
 		if ( target.parentId ) {
