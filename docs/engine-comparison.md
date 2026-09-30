@@ -397,7 +397,7 @@ their own (open work lives in GitHub Issues), grouped by engine.
   parked as post-v1 work.
 - **Container blocks can come back broken after a reload** — a Group
   block occasionally returns as invalid-content recovery with an empty
-  saved copy ([#38](https://github.com/Automattic/gutenberg-sync-engines/issues/38)).
+  saved copy ([#38](https://github.com/WordPress/gutenberg-sync-engines/issues/38)).
   Materialization fidelity itself is fixed: each block now carries its
   own saved HTML, and the genesis rich-text defect was fixed by the
   selector-sourced split.
