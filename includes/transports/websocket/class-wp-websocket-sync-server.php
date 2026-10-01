@@ -227,6 +227,9 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 		 *                  handshake (the cookie may then be absent: the
 		 *                  sweep still re-checks the user's capability but
 		 *                  cannot see a logout before the socket closes).
+		 * - access_token_rooms: string[]|null The access token's `rooms`
+		 *                  claim, checked before the socket first follows an
+		 *                  advisory room; null for a cookie socket.
 		 * - ip:            string Peer IP address, used for per-IP caps.
 		 * - rooms:         array<string, array{client_id: int, cursor: int}>
 		 *                  The rooms this socket syncs (the websocket TRANSPORT).
@@ -753,6 +756,9 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 			$this->clients[ $key ]['user_id']      = $auth['user_id'];
 			$this->clients[ $key ]['cookie']       = $auth['cookie'];
 			$this->clients[ $key ]['access_token'] = ! empty( $auth['access_token'] );
+			// The access token's `rooms` claim, enforced on every advisory
+			// follow; null for a cookie socket.
+			$this->clients[ $key ]['access_token_rooms'] = $auth['rooms'];
 			// Echo the base subprotocol the client offered alongside its
 			// token entry (browsers enforce the echo matches an offer).
 			$offered_protocols = (string) ( $headers['sec-websocket-protocol'] ?? '' );
@@ -905,11 +911,12 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 		 * @since 7.4.0
 		 *
 		 * @param array{headers: array<string, string>, query: array<string, mixed>} $request Parsed handshake request.
-		 * @return array{user_id: int, cookie: string, access token: bool}|WP_Error
+		 * @return array{user_id: int, cookie: string, access_token: bool, rooms: string[]|null}|WP_Error
 		 *         Authenticated user ID, the raw logged_in cookie value
 		 *         (retained for periodic re-validation; '' when an access token
-		 *         stood alone), and whether an access token authenticated it, or
-		 *         WP_Error on failure.
+		 *         stood alone), whether an access token authenticated it and
+		 *         the rooms it allows (null for a cookie), or WP_Error on
+		 *         failure.
 		 */
 		private function authenticate_handshake( array $request ) {
 			$headers = $request['headers'];
@@ -973,6 +980,7 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 				return array(
 					'cookie'       => $cookie_user && (int) $cookie_user === $claims['user_id'] ? $cookie_value : '',
 					'access_token' => true,
+					'rooms'        => $claims['rooms'],
 					'user_id'      => $claims['user_id'],
 				);
 			}
@@ -1003,6 +1011,7 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 			return array(
 				'cookie'       => $cookie_value,
 				'access_token' => false,
+				'rooms'        => null,
 				'user_id'      => (int) $cookie_user,
 			);
 		}
@@ -1072,27 +1081,9 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 				// Per-room permission checks when the socket first references
 				// the room, mirroring the REST permission callback.
 				if ( ! isset( $this->clients[ $key ]['rooms'][ $room ] ) ) {
-					if ( ! current_user_can( 'edit_posts' ) ) {
-						$this->send_error(
-							$key,
-							new WP_Error(
-								'rest_cannot_edit',
-								'You do not have permission to perform this action',
-								array( 'rooms' => array( $room ) )
-							)
-						);
-						continue;
-					}
-
-					if ( ! $this->sync->can_user_sync_room( $room ) ) {
-						$this->send_error(
-							$key,
-							new WP_Error(
-								'rest_cannot_edit',
-								'You do not have permission to sync this room.',
-								array( 'rooms' => array( $room ) )
-							)
-						);
+					$refused = $this->check_subscription( $key, $room, $validated['client_id'] );
+					if ( is_wp_error( $refused ) ) {
+						$this->send_error( $key, $refused );
 						continue;
 					}
 
@@ -1208,15 +1199,22 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 
 			$roster_changed = false;
 			if ( ! isset( $this->clients[ $key ]['advisory'][ $room ] ) ) {
-				if ( ! current_user_can( 'edit_posts' ) || ! $this->sync->can_user_sync_room( $room ) ) {
-					$this->send_error(
-						$key,
-						new WP_Error(
-							'rest_cannot_edit',
-							'You do not have permission to sync this room.',
-							array( 'rooms' => array( $room ) )
-						)
-					);
+				/*
+				 * An access token names the rooms its tab may follow, and
+				 * every relay refuses the rest (WP_WebSocket_Access_Token::allows()),
+				 * so the daemon does too: capabilities alone would let a
+				 * token minted for one post follow another. Sync rooms are
+				 * not held to the claim: the websocket transport's token
+				 * names no post (one socket syncs every room the editor
+				 * opens, some after it connects), so its sync rooms rest
+				 * on the capability checks below.
+				 */
+				$granted = $this->clients[ $key ]['access_token_rooms'] ?? null;
+				$refused = is_array( $granted ) && ! WP_WebSocket_Access_Token::allows( $granted, $room )
+					? new WP_Error( 'rest_cannot_edit', 'The access token does not allow this room.', array( 'rooms' => array( $room ) ) )
+					: $this->check_subscription( $key, $room, $validated['client_id'] );
+				if ( is_wp_error( $refused ) ) {
+					$this->send_error( $key, $refused );
 					return;
 				}
 
@@ -1260,6 +1258,38 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 					$this->broadcast_room( $validated['announce'] );
 				}
 			}
+		}
+
+		/**
+		 * The checks a socket passes before it first syncs or follows a
+		 * room, mirroring the REST permission callback: the user may edit
+		 * posts and sync this room, and no other user's live awareness
+		 * already holds the client id. Expects the socket's user to be the
+		 * current user.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param int    $key       Client key.
+		 * @param string $room      Room identifier.
+		 * @param int    $client_id The client id the socket names for the room.
+		 * @return true|WP_Error True when allowed, otherwise why not.
+		 */
+		private function check_subscription( int $key, string $room, int $client_id ) {
+			$data = array( 'rooms' => array( $room ) );
+
+			if ( ! current_user_can( 'edit_posts' ) ) {
+				return new WP_Error( 'rest_cannot_edit', 'You do not have permission to perform this action', $data );
+			}
+
+			if ( ! $this->sync->can_user_sync_room( $room ) ) {
+				return new WP_Error( 'rest_cannot_edit', 'You do not have permission to sync this room.', $data );
+			}
+
+			if ( $this->sync->is_client_id_owned_by_another_user( $room, $client_id, (int) $this->clients[ $key ]['user_id'] ) ) {
+				return new WP_Error( 'rest_cannot_edit', 'Client ID is already in use by another user.', $data );
+			}
+
+			return true;
 		}
 
 		/**
