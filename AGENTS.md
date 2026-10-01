@@ -32,9 +32,11 @@ This plugin provides:
 - **Engines:** `intent-log` (server-authoritative log of typed intents; merges
   by transform, sets genuine conflicts aside for review), `yjs-server`
   (server-authoritative CRDT: the vendored y-php library merges every update
-  into a canonical room document server-side, compacts by itself, and
-  materializes post content — lock-free ingest; it inherited the retired
-  naive-relay yjs-relay engine's client CRDT machinery and wire format), and
+  into a canonical room document server-side and compacts by itself —
+  lock-free ingest; the editor saves its own serialized blocks, and the
+  server-side `materialize()` serves only the rooms CLI, benchmarks, and
+  tests; it inherited the retired naive-relay yjs-relay engine's client
+  CRDT machinery and wire format), and
   `de-rtc` (Distributed Editing's save-centric model on the room protocol:
   clients propose whole content against a named base version; the server
   three-way-merges every proposal with the merge core ported verbatim from
@@ -855,10 +857,12 @@ applies.
   own accepted canonical rows, proposed as ordinary new changes).
 - **Conflict review is cross-engine**: intent-log through its bespoke
   manager; de-rtc parks escalations as durable `parked` rows and
-  presents them through the framework review panel via
-  `src/engines/review-manager-decorator.ts` (the plumbing any
-  createSyncManager-composed engine can reuse); yjs-server has NO review
-  lane by design (CRDT merge detects no conflicts to park).
+  presents them through the framework review panel via the engine's
+  optional `review` member (`SyncReviewSource` in the subtree's
+  `packages/sync/src/types.ts`, which createSyncManager drives for any
+  composed engine; the old `review-manager-decorator.ts` is gone since
+  #49); yjs-server has NO review lane by design (CRDT merge detects no
+  conflicts to park).
 - **Shared genesis property seed**: all three engines seed
   `WP_Sync_Post_Genesis_Props::for_post()` (REST-shaped scalars,
   taxonomies by rest_base, `meta.<key>`), so joiners see identical field

@@ -31,9 +31,10 @@ never-lose-work guarantee across ten seeds per engine.
   of auto-merging them.
 - **yjs-server**: The server owns the document AND it is a CRDT. The
   vendored y-php library merges every update into a canonical room
-  document server-side, the server compacts by itself and materializes
-  post content, while clients keep the CRDT machinery inherited from the
-  retired relay engine (same wire documents, same undo).
+  document server-side and the server compacts by itself, while clients
+  keep the CRDT machinery inherited from the retired relay engine (same
+  wire documents, same undo). The editor still saves the post content
+  itself.
 - **de-rtc**: The server owns the document and clients never merge.
   Each client proposes its WHOLE content against the version it last
   incorporated, and the server three-way-merges every proposal. Most
@@ -170,14 +171,14 @@ without it. It is an integrity check, which makes it really a P1 concern.
 | Conflict handling | Transform on the server; genuine conflicts park in the editor's review panel (escalation notice, marker chip, durable resolutions — e2e-verified) | Silent CRDT auto-merge, but ON THE SERVER — outcomes observable, still no review lane (conflict DETECTION is the undesigned prerequisite) | Three-way merge on the server; genuine conflicts PARK as durable `parked` rows and present in the same review panel (restore re-proposes under the reviewer; dismiss resolves; retention survives compaction — e2e-verified) |
 | Collaborative undo | Inverse intents over the accepted log (`src/engines/intent-log-undo.ts`): per-user undo/redo, transformed over peers' rows, conflicts park for review. Armed immediately: a still-pending unit CANCELS (outbox + a wire-chasing `cancel` row; a lost race resurrects the unit as a settled candidate), a settled unit inverts | Per-peer undo manager (`src/engines/yjs/undo.ts`, inherited from the retired relay) | Revert-edit undo (the vision's model): undo derives a revert from the client's own accepted canonical rows (per-block, untouched-since guard) and proposes it as an ordinary new change; redo re-applies the reverted delta |
 | Refresh/offline recovery | Server materializes the document; queued intents are memory-only. Solo edits go out one request after the first queued update (the transport never holds a lone editor's queue), and discarded unsent work surfaces an editor notice | Server holds the canonical doc; a rejoining client re-bootstraps from the retained snapshot + tail and uploads its own state idempotently. Solo edits go out one request after the first queued update — REQUIRED here, not an optimization: a page reload holds no local state to upload, so a room that never saw the solo session's updates would bootstrap the editor back to its stale snapshot, wiping the freshly loaded record (e2e-covered: the solo save-and-reload spec) | Server holds canonical content + version snapshots; a rejoining client re-bootstraps from the retained snapshot and fetches one canonical snapshot when the announced version is ahead of it. Un-acked local edits re-propose (the server merges); the save-centric model keeps the room tracking saves, so a solo save-and-reload survives regardless (verified) |
-| Error recovery | Exact re-send; ingest is idempotent by intentId | Full-state recovery update, IDEMPOTENT server-side (the server diffs out what it already has — redelivery settles as a benign `already-merged` void); the server explicitly requests it with a `resync-required` void when an update's dependencies are missing from the room | Recovery re-proposes the doc's current state; if the lost send landed, the re-proposal merges as a no-op |
+| Error recovery | Exact re-send; ingest is idempotent by intentId | Full-state recovery update, IDEMPOTENT server-side (the server diffs out what it already has — redelivery settles as a benign `already-merged` void); the client sends it after a failed request whose outcome is unknown, and when it rejoins. The server also requests it with a `resync-required` void when an update's dependencies are missing from the room, but the browser client does not act on that void yet (only the benchmark does) | Recovery re-proposes the doc's current state; if the lost send landed, the re-proposal merges as a no-op |
 | History compaction | Server checkpoints every 500 intent rows and trims (live-authoring-sized: coarse captures cost ~3 rows per keystroke, and a trim crossing mid-burst voided the burst's tail — V1 A15) | Server checkpoints every 100 rows and trims — abandoned rooms stay bounded | Server checkpoints every 100 rows and trims (same retention invariant) |
 | Genesis | Server, from post content | Server, from post content — deterministic build, so racing initializers merge idempotently | Server, from post content — deterministic, and ADOPTS an upstream DE-RTC sync-meta block if one is embedded (version lineage continues) |
 | Capability enforcement | At ingest (kses lane; escalation for `unfiltered_html`-gated content parks for approval — restore by a privileged reviewer IS the approval) | At ingest, sanitize-and-compensate: blocks a filtered author's batch touched that kses would rewrite are REPLACED with their sanitized form and the compensating delta broadcasts (filter-on-save semantics; nothing parks — coarser than intent-log by design) | At ingest, per-block SEQUESTRATION (upstream's model): risky blocks revert to their base form and park for review while the safe remainder of the proposal merges and lands; markup-bearing property values park per property; restore under a privileged reviewer approves. Whole-proposal escalation remains the fallback (freeform boundaries) |
 | Synced entity properties | The framework's full set as per-name registers: the scalar whitelist (title, excerpt, slug, status, comment_status, ping_status, format, sticky, author, featured_media, date, template), attached taxonomies (whole term-ID arrays by rest_base), and registered post meta (per-key `meta.<key>` registers, `_crdt_document` excluded). Collection rooms implement the framework's save-notification contract (per-client save registers), so a newly created term reaches every peer's term list by refetch | Whatever the sync config maps into the CRDT (the full framework set, including per-key post meta and taxonomies), and genesis seeds the same shared REST-shaped property map the other engines seed; collection rooms carry the savedAt state key for the same refetch contract | The full flattened register map rides every proposal beside the content (title, scalars, taxonomies, `meta.<key>`); the server three-way-merges per property against the base version — sole-writer changes and agreements apply, concurrent divergent writes park per property for review. Genesis seeds the shared property map |
 | Presence/awareness | Yes (shared Yjs-free awareness doc) | Yes (Yjs awareness, relayed opaquely — the server does not decode it) | Yes (Yjs awareness over the doc bridge, relayed opaquely) |
 | Server observability | Dispositions, debug envelope, benchmark quality metrics | Per-update dispositions, CRDT convergence oracle, materialization | Per-proposal dispositions (applied/escalated/voided with reasons), version lineage, materialization |
-| Materialize to post_content | Yes (server-side; block identity persists as `metadata.syncId` and round-trips genesis) | Yes (server-side, from the canonical doc) | Trivially — the canonical document IS post content |
+| Materialize to post_content | Server-side, but only for writers outside the editor that send `base_seq` (and the rooms CLI and benchmarks); the editor saves its own blocks, whose `metadata.syncId` round-trips genesis | Server-side `materialize()` exists, but only the rooms CLI, benchmarks and tests call it; the editor saves its own blocks | The canonical content (an options row) is already serialized blocks; an editor save carrying `base_version` merges through the room and the merged result replaces the saved content |
 | Wire format | Small human-readable JSON intents | Opaque base64 binary (V2) + JSON snapshot rows | Human-readable JSON: whole-content commits up (via the autosave endpoint), constant-size announce advisories down, with on-demand synthesized snapshots for behind clients (upload bytes scale with document size; rows do not) |
 
 ## Text moving between paragraphs
@@ -336,12 +337,16 @@ retained tail is fixed-size advisories, and the joiner's actual content
 arrives as one synthesized snapshot, rather than the full-content tail
 that used to make this read the largest by a wide margin.
 
-**The save path** — `materialize()` on a cold engine, the way a real save
-request runs it. Cheap under intent-log. Near-zero under de-rtc, because
-the canonical document *is* the post content. Most expensive under
-yjs-server, which decodes the whole canonical document from scratch. The
-ingest figures never show that cost, because within a single request the
-engine keeps the decoded document cached.
+**The materialize path** — `materialize()` on a cold engine: building
+post content from the room. No editor save runs it — in every engine the
+editor saves its own blocks. Intent-log runs it for writers outside the
+editor that send `base_seq`, and de-rtc's save check runs it when it
+merges a save through the room; yjs-server runs it only in the rooms CLI,
+benchmarks and tests. Cheap under intent-log. Near-zero under de-rtc,
+because the canonical content is already serialized blocks. Most
+expensive under yjs-server, which decodes the whole canonical document
+from scratch. The ingest figures never show that cost, because within a
+single request the engine keeps the decoded document cached.
 
 The benchmark also reports peak memory per ingest request. That is the
 number a constrained PHP-FPM pool actually runs out of memory on.
@@ -368,8 +373,11 @@ their own (open work lives in GitHub Issues), grouped by engine.
 - **Under heavy write concurrency the server can ask a client to
   resync** ([scenario G](scenarios.md)). Measured with
   `npm run bench -- --concurrency=8`: most runs settle fully applied with
-  zero voids, the occasional run a handful of benign `resync-required`
-  voids that heal by full-state upload. intent-log showed zero voids
+  zero voids, the occasional run a handful of `resync-required` voids.
+  The benchmark heals them with a full-state upload, but the browser
+  client has no handler for this void yet: a tab that receives it keeps
+  the voided edit only locally until it sends its full state for another
+  reason (a failed request, or a reload). intent-log showed zero voids
   under the same load, paying with measured lock queueing instead.
   De-rtc has no lock, so it pays by re-merging and retrying. At hammer
   cadence some of those contenders end up held for review or thrown
@@ -377,11 +385,12 @@ their own (open work lives in GitHub Issues), grouped by engine.
   visible and retryable, and the same check confirms nothing is lost.
   It is exactly what an optimistic validate-and-retry design does under
   contention it was never meant to queue. The benchmark treats
-  `resync-required` as benign and `invalid-payload` as real loss that
-  fails the run.
-- **Ingest cost is real and scales with document size**, and the save
-  path is worse (a cold request decodes the whole canonical doc;
-  `materialize_us` in the benchmark). This used to be an order of
+  `resync-required` as benign (because it models the full-state upload
+  the browser client does not make yet) and `invalid-payload` as real
+  loss that fails the run.
+- **Ingest cost is real and scales with document size**, and the
+  materialize path is worse (a cold request decodes the whole canonical
+  doc; `materialize_us` in the benchmark), though no editor save runs it. This used to be an order of
   magnitude worse: the dominant cost was a quadratic in the vendored
   y-php V2 string decoder, fixed 2026-08-18 by a marked DELTA in
   `includes/lib/y-php/src/Lib0/StringDecoder.php` (held to byte-parity
