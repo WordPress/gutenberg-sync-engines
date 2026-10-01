@@ -15,8 +15,10 @@ class Tests_Collaboration_WpWebSocketAdvisory extends WP_UnitTestCase {
 	const GENESIS_CONTENT = "<!-- wp:paragraph -->\n<p>Advisory room.</p>\n<!-- /wp:paragraph -->";
 
 	protected static int $editor_id;
+	protected static int $other_editor_id;
 	protected static int $subscriber_id;
 	protected static int $post_id;
+	protected static int $other_post_id;
 
 	/**
 	 * @var WP_WebSocket_Sync_Server
@@ -41,9 +43,16 @@ class Tests_Collaboration_WpWebSocketAdvisory extends WP_UnitTestCase {
 	private $connections = array();
 
 	public static function wpSetUpBeforeClass( WP_UnitTest_Factory $factory ) {
-		self::$editor_id     = $factory->user->create( array( 'role' => 'editor' ) );
-		self::$subscriber_id = $factory->user->create( array( 'role' => 'subscriber' ) );
-		self::$post_id       = $factory->post->create(
+		self::$editor_id       = $factory->user->create( array( 'role' => 'editor' ) );
+		self::$other_editor_id = $factory->user->create( array( 'role' => 'editor' ) );
+		self::$subscriber_id   = $factory->user->create( array( 'role' => 'subscriber' ) );
+		self::$post_id         = $factory->post->create(
+			array(
+				'post_author'  => self::$editor_id,
+				'post_content' => self::GENESIS_CONTENT,
+			)
+		);
+		self::$other_post_id   = $factory->post->create(
 			array(
 				'post_author'  => self::$editor_id,
 				'post_content' => self::GENESIS_CONTENT,
@@ -53,8 +62,10 @@ class Tests_Collaboration_WpWebSocketAdvisory extends WP_UnitTestCase {
 
 	public static function wpTearDownAfterClass() {
 		self::delete_user( self::$editor_id );
+		self::delete_user( self::$other_editor_id );
 		self::delete_user( self::$subscriber_id );
 		wp_delete_post( self::$post_id, true );
+		wp_delete_post( self::$other_post_id, true );
 	}
 
 	public function set_up() {
@@ -124,26 +135,30 @@ class Tests_Collaboration_WpWebSocketAdvisory extends WP_UnitTestCase {
 	/**
 	 * Adds an authenticated client to the daemon.
 	 *
-	 * @param int $key     Client key.
-	 * @param int $user_id The user the handshake authenticated.
+	 * @param int           $key     Client key.
+	 * @param int           $user_id The user the handshake authenticated.
+	 * @param string[]|null $granted The access token's `rooms` claim, or
+	 *                               null for a cookie socket.
 	 */
-	private function add_client( int $key, int $user_id ): void {
+	private function add_client( int $key, int $user_id, ?array $granted = null ): void {
 		$conn                      = $this->recording_connection();
 		$this->connections[ $key ] = $conn;
 		$clients                   = new ReflectionProperty( WP_WebSocket_Sync_Server::class, 'clients' );
 		$clients->setAccessible( true );
 		$all         = $clients->getValue( $this->server );
 		$all[ $key ] = array(
-			'advisory'      => array(),
-			'closing'       => false,
-			'conn'          => $conn,
-			'connected_at'  => microtime( true ),
-			'cookie'        => '',
-			'ip'            => '127.0.0.1',
-			'last_seen'     => microtime( true ),
-			'message_times' => array(),
-			'rooms'         => array(),
-			'user_id'       => $user_id,
+			'advisory'           => array(),
+			'closing'            => false,
+			'conn'               => $conn,
+			'connected_at'       => microtime( true ),
+			'cookie'             => '',
+			'ip'                 => '127.0.0.1',
+			'last_seen'          => microtime( true ),
+			'message_times'      => array(),
+			'rooms'              => array(),
+			'access_token'       => null !== $granted,
+			'access_token_rooms' => $granted,
+			'user_id'            => $user_id,
 		);
 		$clients->setValue( $this->server, $all );
 	}
@@ -386,5 +401,115 @@ class Tests_Collaboration_WpWebSocketAdvisory extends WP_UnitTestCase {
 			)
 		);
 		$this->assertTrue( $this->connections[2]->closed );
+	}
+
+	/**
+	 * A sync frame naming a room and client id, with awareness.
+	 *
+	 * @param string $room      Room identifier.
+	 * @param int    $client_id Client id.
+	 * @param array  $awareness Awareness state.
+	 * @return array The frame.
+	 */
+	private function sync_frame( string $room, int $client_id, array $awareness ): array {
+		return array(
+			'type'  => 'sync',
+			'rooms' => array(
+				array(
+					'room'      => $room,
+					'client_id' => $client_id,
+					'after'     => 0,
+					'awareness' => $awareness,
+					'updates'   => array(),
+				),
+			),
+		);
+	}
+
+	/**
+	 * The live awareness entries of a room, keyed by client id.
+	 *
+	 * @param string $room Room identifier.
+	 * @return array<int, array> Entries.
+	 */
+	private function awareness_by_client( string $room ): array {
+		$entries = ( new WP_Sync_Awareness( $this->storage ) )->entries( $room, WP_HTTP_Polling_Sync_Server::AWARENESS_TIMEOUT );
+		return array_column( $entries, null, 'client_id' );
+	}
+
+	public function test_a_client_id_another_user_holds_is_refused_like_the_rest_route_refuses_it() {
+		$room = $this->room();
+		$this->bootstrap_room();
+		$this->sync->update_awareness( $room, 7, array( 'name' => 'victim' ) );
+
+		// Another editor of the post names the victim's client id: refused
+		// on both lanes, and the victim's entry is untouched.
+		$this->add_client( 1, self::$other_editor_id );
+		$this->message( 1, $this->sync_frame( $room, 7, array( 'name' => 'impostor' ) ) );
+		$this->message(
+			1,
+			array(
+				'type'      => 'advisory',
+				'room'      => $room,
+				'client_id' => 7,
+			)
+		);
+		$frames = $this->take_frames( 1 );
+		$this->assertCount( 2, $frames );
+		foreach ( $frames as $frame ) {
+			$this->assertSame( 'error', $frame['type'] );
+			$this->assertSame( 'rest_cannot_edit', $frame['code'] );
+			$this->assertSame( 'Client ID is already in use by another user.', $frame['message'] );
+		}
+
+		// Nor does the socket's close remove the victim's entry.
+		$disconnect = new ReflectionMethod( WP_WebSocket_Sync_Server::class, 'disconnect' );
+		$disconnect->setAccessible( true );
+		$disconnect->invoke( $this->server, 1 );
+		$entries = $this->awareness_by_client( $room );
+		$this->assertSame( array( 'name' => 'victim' ), $entries[7]['state'] );
+		$this->assertSame( self::$editor_id, (int) $entries[7]['wp_user_id'] );
+
+		// The owner itself (a reload on a new socket) keeps its client id.
+		$this->add_client( 2, self::$editor_id );
+		$this->message( 2, $this->sync_frame( $room, 7, array( 'name' => 'victim again' ) ) );
+		$this->assertSame( array( 'sync' ), array_column( $this->take_frames( 2 ), 'type' ) );
+	}
+
+	public function test_an_access_token_socket_follows_only_the_rooms_its_token_names() {
+		$room       = $this->room();
+		$other_room = 'postType/post:' . self::$other_post_id;
+		$follow     = function ( int $key, string $room ): array {
+			$this->message(
+				$key,
+				array(
+					'type'      => 'advisory',
+					'room'      => $room,
+					'client_id' => 40 + $key,
+				)
+			);
+			return $this->take_frames( $key );
+		};
+
+		// A token minted for one post follows that post and the collection
+		// rooms, but not another post its user may also edit.
+		$this->add_client( 1, self::$editor_id, WP_WebSocket_Access_Token::grants( $room ) );
+		$this->assertSame( 'roster', $follow( 1, $room )[0]['event'] );
+		$this->assertSame( 'roster', $follow( 1, 'taxonomy/category' )[0]['event'] );
+		$refused = $follow( 1, $other_room );
+		$this->assertCount( 1, $refused );
+		$this->assertSame( 'error', $refused[0]['type'] );
+		$this->assertSame( 'rest_cannot_edit', $refused[0]['code'] );
+		$this->assertSame( array( $other_room ), $refused[0]['rooms'] );
+
+		// A cookie socket has no claim; its capabilities decide.
+		$this->add_client( 2, self::$editor_id );
+		$this->assertSame( 'roster', $follow( 2, $other_room )[0]['event'] );
+
+		// Sync rooms rest on capabilities alone: the websocket transport's
+		// token names no post, yet its socket syncs the editor's post.
+		$this->add_client( 3, self::$editor_id, WP_WebSocket_Access_Token::grants( null ) );
+		$this->message( 3, $this->sync_frame( $room, 43, array( 'name' => 'transport tab' ) ) );
+		$this->assertSame( array( 'sync' ), array_column( $this->take_frames( 3 ), 'type' ) );
 	}
 }
