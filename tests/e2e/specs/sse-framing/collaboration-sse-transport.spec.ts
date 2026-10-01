@@ -9,12 +9,17 @@ import type { Locator, Page } from '@playwright/test';
 import { test, expect } from '../../config/collaboration-fixtures';
 
 /**
- * Runs with the SSE transport selected on the tests site (see
- * playwright.rtc-sse.config.ts): each tab holds one long-lived stream
- * response that the server writes to when Redis announces a change, and
- * sends its own edits through the ordinary updates request BESIDE the
- * stream, marked `rows_received_separately: true`, so the stream stays open while it
+ * How a tab behaves around an open receive stream: each holds one
+ * long-lived stream response, and sends its own edits through the
+ * ordinary updates request BESIDE the stream, marked
+ * `rows_received_separately: true`, so the stream stays open while it
  * types.
+ *
+ * Both SSE transports run this file — the web tier under
+ * `playwright.rtc-sse.config.ts`, the sync daemon under
+ * `playwright.rtc-sse-daemon.config.ts` — because the framing and the
+ * send path are the same for both, and only the process writing the
+ * stream differs.
  */
 
 interface SseDebugState {

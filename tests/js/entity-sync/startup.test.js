@@ -47,6 +47,9 @@ jest.mock(
 jest.mock( '../../../src/providers/sse/sse-provider', () => ( {
 	createSseProvider: jest.fn(),
 } ) );
+jest.mock( '../../../src/providers/sse-daemon/sse-daemon-provider', () => ( {
+	createSseDaemonProvider: jest.fn(),
+} ) );
 jest.mock( '../../../src/providers/websocket/websocket-provider', () => ( {
 	createWebSocketProvider: jest.fn(),
 } ) );
@@ -92,7 +95,7 @@ it( 'registers the adapter from normal startup after all engines and transports'
 		syncApis.registerSyncTransport.mock.calls.map(
 			( [ transport ] ) => transport.slug
 		)
-	).toEqual( [ 'http-polling', 'websocket', 'sse' ] );
+	).toEqual( [ 'http-polling', 'websocket', 'sse', 'sse-daemon' ] );
 	expect(
 		Math.max( ...syncApis.registerSyncTransport.mock.invocationCallOrder )
 	).toBeLessThan(

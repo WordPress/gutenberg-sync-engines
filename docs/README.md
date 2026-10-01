@@ -18,7 +18,11 @@ Start here if you want to:
   typing, same-paragraph conflicts, machine writes, deep lag…) traced
   through all three engines.
 - **Compare transports** → [transports.md](transports.md) — polling vs
-  server-sent events vs websocket, and the operational notes for both.
+  server-sent events vs websocket, and the operational notes for each.
+- **Run the receive stream from the sync daemon** →
+  [sse-daemon.md](sse-daemon.md) — how the `sse-daemon` transport
+  shares the daemon with the websocket transport, and where it differs
+  from `sse`.
 - **Understand de-rtc's relationship to its upstream design** →
   [de-rtc-fidelity.md](de-rtc-fidelity.md) — the audit of our port
   against the Distributed Editing vision.

@@ -89,10 +89,12 @@ const PORT = Number.isNaN( WS_PORT ) ? DEFAULT_PORT : WS_PORT;
 function parseMode() {
 	const mode = CLI.mode;
 	if (
-		! [ 'websockets', 'daemon', 'http', 'doctor', 'cache' ].includes( mode )
+		! [ 'websockets', 'sse-daemon', 'daemon', 'http', 'doctor', 'cache' ].includes(
+			mode
+		)
 	) {
 		throw new Error(
-			`Unknown --mode=${ mode }. Expected "websockets", "daemon", "http", "doctor", or "cache".`
+			`Unknown --mode=${ mode }. Expected "websockets", "sse-daemon", "daemon", "http", "doctor", or "cache".`
 		);
 	}
 	return mode;
@@ -447,7 +449,9 @@ async function runWebSocketsMode( mode ) {
 
 	await ensurePluginsReady();
 
-	if ( 'websockets' === mode ) {
+	if ( 'websockets' === mode || 'sse-daemon' === mode ) {
+		const transport = 'websockets' === mode ? 'websocket' : 'sse-daemon';
+
 		process.stdout.write(
 			'Deactivating the e2e test provider plugin (if active)... '
 		);
@@ -456,9 +460,9 @@ async function runWebSocketsMode( mode ) {
 		} );
 		process.stdout.write( 'done\n' );
 
-		process.stdout.write( 'Selecting the websocket transport... ' );
+		process.stdout.write( `Selecting the ${ transport } transport... ` );
 		await enableCollaborationExperiment();
-		await runWpCli( [ 'option', 'update', TRANSPORT_OPTION, 'websocket' ] );
+		await runWpCli( [ 'option', 'update', TRANSPORT_OPTION, transport ] );
 		process.stdout.write( 'done\n' );
 	}
 
@@ -514,7 +518,9 @@ async function runWebSocketsMode( mode ) {
 			`Websocket sync daemon running detached at ws://localhost:${ PORT }.\n` +
 				( 'websockets' === mode
 					? `RTC is on the websocket transport: open two windows at http://localhost:${ sitePort }/wp-admin and edit the same post.\n`
-					: 'The site transport selection was left untouched; `npm run rtc:ws` switches the site onto the websocket transport.\n' ) +
+					: 'sse-daemon' === mode
+						? `RTC is on the sse-daemon transport (the same daemon, streaming over HTTP): open two windows at http://localhost:${ sitePort }/wp-admin and edit the same post.\n`
+						: 'The site transport selection was left untouched; `npm run rtc:ws` switches the site onto the websocket transport.\n' ) +
 				'Stop the daemon with `npm run rtc:http` (or `docker rm -f ' +
 				DAEMON_CONTAINER_NAME +
 				'`).\n'

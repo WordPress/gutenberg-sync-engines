@@ -10,6 +10,13 @@ release, which the release script generates from the commit history.
 
 ## Unreleased
 
+### Added
+
+- New `sse-daemon` transport: the same receive stream as `sse`, written
+  by the sync daemon instead of a PHP worker, so a tab holds no worker
+  and the stream passes proxies that block WebSocket upgrades
+  ([#132](https://github.com/WordPress/gutenberg-sync-engines/pull/132)).
+
 ### Changed
 
 - The bundled Gutenberg includes the entity sync interface from
