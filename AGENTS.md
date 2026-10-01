@@ -388,10 +388,11 @@ active. Dependencies and built assets are generated locally. A normal clone
 includes the source; CI needs no submodule setup. Release ZIPs include the
 built framework.
 
-The bundled framework commit is `89bea5705f66172e80a7b0c88598052d378595ce`,
-above trunk `0d3eefe596560204e99bb1047df65e2e666a9ad1`. It includes PR #83410
-and the default adapter integration. Retain the private API exports,
-post-lock fallback, and conflict-review integration on updates.
+`gutenberg-pin.json` records the bundled framework commit, the trunk it
+sits on, and its source tree ID; it is the only place that names them. The
+framework includes PR #83410 and the default adapter integration. Retain
+the private API exports, post-lock fallback, and conflict-review
+integration on updates.
 See `docs/gutenberg-subtree.md` and `docs/entity-sync-adapter.md`.
 
 ## Setup (from a clean checkout)
