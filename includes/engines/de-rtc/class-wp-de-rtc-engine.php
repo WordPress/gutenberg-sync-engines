@@ -10,11 +10,16 @@
  * against the current canonical content with the ported DE-RTC merge core
  * (includes/engines/de-rtc/merge-core.php); most edits merge cleanly, and
  * genuine conflicts are escalated for human decision instead of silently
- * merged. Peers receive the merged canonical content as server-authored
- * rows.
+ * merged. Peers receive small server-authored announce rows and fetch
+ * the merged canonical content as a one-off snapshot when they are
+ * behind.
  *
- * The server keeps its working copy in sync-storage room meta, but it
- * also writes the sync metadata back into post_content on every save
+ * The server keeps its working copy in a chained options row (one per
+ * room, `{prefix}sync_de_rtc_canonical_<md5(room)>`, written by
+ * compare-and-swap; see save_canonical()), not in sync-storage room
+ * meta. The editor's own save writes post_content: it is merged through
+ * the room first (WP_De_RTC_Base_Version_Preflight), and the sync
+ * metadata is written back into post_content on every save
  * (the wp:sync-meta pseudo-block — see
  * class-wp-de-rtc-sync-meta-colocation.php), the way the upstream
  * prototype did. That write-back is what lets the server notice when a

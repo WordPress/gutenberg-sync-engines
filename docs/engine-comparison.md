@@ -31,9 +31,10 @@ never-lose-work guarantee across ten seeds per engine.
   of auto-merging them.
 - **yjs-server**: The server owns the document AND it is a CRDT. The
   vendored y-php library merges every update into a canonical room
-  document server-side, the server compacts by itself and materializes
-  post content, while clients keep the CRDT machinery inherited from the
-  retired relay engine (same wire documents, same undo).
+  document server-side and the server compacts by itself, while clients
+  keep the CRDT machinery inherited from the retired relay engine (same
+  wire documents, same undo). The editor still saves the post content
+  itself.
 - **de-rtc**: The server owns the document and clients never merge.
   Each client proposes its WHOLE content against the version it last
   incorporated, and the server three-way-merges every proposal. Most
@@ -177,7 +178,7 @@ without it. It is an integrity check, which makes it really a P1 concern.
 | Synced entity properties | The framework's full set as per-name registers: the scalar whitelist (title, excerpt, slug, status, comment_status, ping_status, format, sticky, author, featured_media, date, template), attached taxonomies (whole term-ID arrays by rest_base), and registered post meta (per-key `meta.<key>` registers, `_crdt_document` excluded). Collection rooms implement the framework's save-notification contract (per-client save registers), so a newly created term reaches every peer's term list by refetch | Whatever the sync config maps into the CRDT (the full framework set, including per-key post meta and taxonomies), and genesis seeds the same shared REST-shaped property map the other engines seed; collection rooms carry the savedAt state key for the same refetch contract | The full flattened register map rides every proposal beside the content (title, scalars, taxonomies, `meta.<key>`); the server three-way-merges per property against the base version — sole-writer changes and agreements apply, concurrent divergent writes park per property for review. Genesis seeds the shared property map |
 | Presence/awareness | Yes (shared Yjs-free awareness doc) | Yes (Yjs awareness, relayed opaquely — the server does not decode it) | Yes (Yjs awareness over the doc bridge, relayed opaquely) |
 | Server observability | Dispositions, debug envelope, benchmark quality metrics | Per-update dispositions, CRDT convergence oracle, materialization | Per-proposal dispositions (applied/escalated/voided with reasons), version lineage, materialization |
-| Materialize to post_content | Yes (server-side; block identity persists as `metadata.syncId` and round-trips genesis) | Yes (server-side, from the canonical doc) | Trivially — the canonical document IS post content |
+| Materialize to post_content | Server-side, but only for writers outside the editor that send `base_seq` (and the rooms CLI and benchmarks); the editor saves its own blocks, whose `metadata.syncId` round-trips genesis | Server-side `materialize()` exists, but only the rooms CLI, benchmarks and tests call it; the editor saves its own blocks | The canonical content (an options row) is already serialized blocks; an editor save carrying `base_version` merges through the room and the merged result replaces the saved content |
 | Wire format | Small human-readable JSON intents | Opaque base64 binary (V2) + JSON snapshot rows | Human-readable JSON: whole-content commits up (via the autosave endpoint), constant-size announce advisories down, with on-demand synthesized snapshots for behind clients (upload bytes scale with document size; rows do not) |
 
 ## Text moving between paragraphs
@@ -336,12 +337,16 @@ retained tail is fixed-size advisories, and the joiner's actual content
 arrives as one synthesized snapshot, rather than the full-content tail
 that used to make this read the largest by a wide margin.
 
-**The save path** — `materialize()` on a cold engine, the way a real save
-request runs it. Cheap under intent-log. Near-zero under de-rtc, because
-the canonical document *is* the post content. Most expensive under
-yjs-server, which decodes the whole canonical document from scratch. The
-ingest figures never show that cost, because within a single request the
-engine keeps the decoded document cached.
+**The materialize path** — `materialize()` on a cold engine: building
+post content from the room. No editor save runs it — in every engine the
+editor saves its own blocks. Intent-log runs it for writers outside the
+editor that send `base_seq`, and de-rtc's save check runs it when it
+merges a save through the room; yjs-server runs it only in the rooms CLI,
+benchmarks and tests. Cheap under intent-log. Near-zero under de-rtc,
+because the canonical content is already serialized blocks. Most
+expensive under yjs-server, which decodes the whole canonical document
+from scratch. The ingest figures never show that cost, because within a
+single request the engine keeps the decoded document cached.
 
 The benchmark also reports peak memory per ingest request. That is the
 number a constrained PHP-FPM pool actually runs out of memory on.
@@ -379,9 +384,9 @@ their own (open work lives in GitHub Issues), grouped by engine.
   contention it was never meant to queue. The benchmark treats
   `resync-required` as benign and `invalid-payload` as real loss that
   fails the run.
-- **Ingest cost is real and scales with document size**, and the save
-  path is worse (a cold request decodes the whole canonical doc;
-  `materialize_us` in the benchmark). This used to be an order of
+- **Ingest cost is real and scales with document size**, and the
+  materialize path is worse (a cold request decodes the whole canonical
+  doc; `materialize_us` in the benchmark), though no editor save runs it. This used to be an order of
   magnitude worse: the dominant cost was a quadratic in the vendored
   y-php V2 string decoder, fixed 2026-08-18 by a marked DELTA in
   `includes/lib/y-php/src/Lib0/StringDecoder.php` (held to byte-parity
