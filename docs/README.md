@@ -2,6 +2,10 @@
 
 Start here if you want to:
 
+- **See the proposal in one page** → [data-flow.md](data-flow.md) —
+  how an edit reaches other editors in the Gutenberg trunk experiment
+  and under each engine and transport here, from the block editor's
+  side and from the network and security side.
 - **Pick an engine or transport** →
   [engine-comparison.md](engine-comparison.md) — what each engine is,
   how they score against the principles, feature parity, resource
