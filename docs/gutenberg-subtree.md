@@ -5,9 +5,16 @@ subtree. This keeps proposed Gutenberg changes visible in plugin reviews.
 A separate Gutenberg branch, `try/sync-engines`, holds the framework changes
 as commits above upstream trunk. Use that branch for rebases.
 
-The bundled version is `89bea5705f66172e80a7b0c88598052d378595ce`, based on
-trunk `0d3eefe596560204e99bb1047df65e2e666a9ad1`. The tag
-`sync-engines/pins/89bea5705f66` identifies this version in Gutenberg.
+`gutenberg-pin.json` at the repository root records the bundled version.
+It is the only place that names it:
+
+- `commit`: the framework commit on `branch` that `gutenberg/` matches.
+- `trunk`: the upstream trunk commit that the framework commits sit on.
+- `tree`: the Git tree ID of that commit's source. It must equal
+  `git rev-parse HEAD:gutenberg`, so you can check the pin without a
+  Gutenberg checkout.
+
+Other docs point to this file instead of repeating the IDs.
 
 ## Clone and build
 
@@ -47,14 +54,16 @@ IDs, but a squashed subtree import compares source trees. Resolve any import
 conflicts and confirm that the resulting `gutenberg/` source tree matches
 the selected framework commit. Keep commit signing enabled.
 
-Update the framework and trunk IDs in this guide, `AGENTS.md`, and
-`entity-sync-adapter.md`. Rebuild Gutenberg, then run the plugin type check,
+Update `gutenberg-pin.json`: set `commit` and `trunk`, and set `tree` to
+the output of `git rev-parse HEAD:gutenberg`. Rebuild Gutenberg, then run the plugin type check,
 JavaScript tests, and browser checks. Review the source diff in this repo
 before publishing. Imports from a local framework checkout do not require
 that branch to be published first.
 
-The tag preserves a useful reference after rebases, but plugin clones and
-CI do not depend on fetching it: the source is stored here.
+Rebases change framework commit IDs. To keep a reference to the pinned
+commit, you can tag it in Gutenberg (for example,
+`sync-engines/pins/<short-id>`). Plugin clones and CI do not depend on that
+tag: the source is stored here.
 
 ## Releases
 
