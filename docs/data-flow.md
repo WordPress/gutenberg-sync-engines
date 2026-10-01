@@ -5,7 +5,7 @@ collaborative editing. It covers today's Gutenberg experiment
 (including the WPVIP WebSocket transport, which can stand in for its
 polling) and what this plugin proposes.
 
-## The short version
+## Short version
 
 In the Gutenberg experiment, **browsers merge updates and WordPress
 is just a relay**. WordPress stores the updates as bytes, but cannot
@@ -29,11 +29,11 @@ separate: any engine runs over any transport.
 | How edits travel                            | Short polling, or WPVIP's WebSocket | Short polling, server-sent events, or WebSocket                            |
 | Where edits are stored                      | Post meta on a custom post type     | Two custom tables                                                          |
 
-A **room** is one shared document, usually one post. A **row** is one
+A **room** is one shared document, usually a post. A **row** is one
 stored entry in a room's history. Every browser remembers the last row
 it has seen, and asks for the rows after it.
 
-## The block editor view
+## Block editor data flow
 
 ### Gutenberg experiment
 
@@ -189,7 +189,7 @@ sequenceDiagram
     WP->>WP: Merge as above,<br/>then save post_content
 ```
 
-### What the engines do with the same situation
+### Engine comparison
 
 |                                                     | Gutenberg experiment      | intent-log             | yjs-server                            | de-rtc                          |
 | --------------------------------------------------- | ------------------------- | ---------------------- | ------------------------------------- | ------------------------------- |
@@ -201,69 +201,7 @@ sequenceDiagram
 | Who writes `post_content`                           | The editor's save         | The editor's save      | The editor's save                     | The editor's save, merged first |
 | New room starts from                                | Saved entity              | Saved entity           | Saved entity                          | Saved entity                    |
 
-## Inside the editor: one keystroke, step by step
-
-This section follows one keystroke through the editor's code. The first
-and last steps are the same for the Gutenberg experiment and for every
-engine in this plugin. Only the middle steps differ.
-
-### Sending side
-
-1. The user types in a contenteditable. The `onInput` listener that
-   `useRichText` attaches picks up the change.
-2. Rich text calls the block's `onChange`. The block's
-   `setAttributes( { content: ... } )` updates the block in the
-   block-editor store.
-3. `useBlockSync` watches the block-editor store and passes the new
-   block tree to core-data through `onInput` or `onChange` (from
-   `useEntityBlockEditor`). Repeated changes to the same attribute go
-   to `onInput`. The first keystroke, and the change after a pause in
-   typing, go to `onChange`, which starts a new undo step.
-4. core-data records the edit with `editEntityRecord`.
-5. `editEntityRecord` hands the edit to the sync manager right before
-   it dispatches the `EDIT_ENTITY_RECORD` action.
-6. **Gutenberg experiment:** the sync manager writes the edit into the
-   Yjs document: at once when a peer is present, otherwise on the next
-   tick. `updateCRDTDoc` calls `applyPostChangesToCRDTDoc`, which merges
-   the new blocks into the existing document with `mergeCrdtBlocks`.
-7. **Gutenberg experiment:** Yjs emits a binary update. The polling
-   provider listens to the document's `updateV2` event and puts the
-   update in a queue.
-8. **Gutenberg experiment:** the next poll sends the queue to
-   `/wp-sync/v1/updates`. The queue stays paused until a collaborator
-   first appears, and then every poll sends it.
-
-### Receiving side
-
-1. **Gutenberg experiment:** the peer's next poll returns the update,
-   along with any from other peers.
-2. **Gutenberg experiment:** `processDocUpdate` calls `Y.applyUpdateV2`,
-   which merges the changes into the peer's Yjs document.
-3. **Gutenberg experiment:** the document's listener calls
-   `onRecordUpdate` in the sync manager.
-4. **Gutenberg experiment:** `_updateEntityRecord` calls
-   `getChangesFromCRDTDoc`, which compares the Yjs document with the
-   current edited record. It returns the full block list, any other
-   properties that differ, and, when the change moved text under the
-   peer's cursor, a corrected cursor position.
-5. An `EDIT_ENTITY_RECORD` action is dispatched locally. It skips
-   `editEntityRecord`, so the change is not sent back to sync. It stays
-   out of the peer's undo history because undo records only the peer's
-   own edits.
-6. The editor re-renders. `useBlockSync` sees new blocks coming from
-   core-data and replaces the blocks in the block-editor store. Rich
-   text then updates the contenteditable.
-
-### How the middle steps differ in this plugin
-
-| Step                      | yjs-server                                                                                                                | de-rtc                                                                                                                                      | intent-log                                                                                                                                        |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 6: record the edit        | Same as the Gutenberg experiment                                                                                          | Same: the tab keeps a Yjs document for the editor and undo, but WordPress does not                                                          | No Yjs document. The tab compares the editor's blocks with the version they show, turns the difference into typed edits, and applies them locally |
-| 7: queue it               | Same                                                                                                                      | The edit only marks the document as changed. At most every 10 s, the tab builds a proposal: the whole post plus the version it started from | The typed edits go into the same polling queue as JSON                                                                                            |
-| 8: send it                | The queue is held whenever the tab is alone, and released when a collaborator appears, on save, or when the tab is hidden | Posts and pages send the proposal to the autosave endpoint, then tell peers to poll. Other types send it through the transport. Never held  | Same as yjs-server                                                                                                                                |
-| Receive 1–2: apply it     | Same                                                                                                                      | A poll returns a short notice of the new version. The tab asks for that version, then writes it into its Yjs document once typing pauses    | The tab adds the new rows to its local history and recomputes its own pending edits on top                                                        |
-| Receive 3–4: find changes | Same                                                                                                                      | Same                                                                                                                                        | Once typing pauses, the tab pushes the merged block list to the editor. It sends no cursor correction                                             |
-| Receive 5: dispatch       | Same                                                                                                                      | Same                                                                                                                                        | Same dispatch. It stays out of undo because intent-log's undo records only edits this tab wrote                                                   |
+If you'd like a more detailed breakdown of the data flow, see the [fine-grained data flow](#fine-grained-data-flow) section below.
 
 ## Transports
 
@@ -294,3 +232,67 @@ extra polls or show false presence.
 | Long-lived process  | No                                           | No                                           | One PHP worker per connection | One long-running process                   |
 | Typical latency     | 1 s                                          | <1 s with advisory channel, else 5 s         | <1 s                          | <1 s                                       |
 | If it fails         | Retry with backoff, then a disconnect notice | Retry with backoff, then a disconnect notice | Falls back to polling         | Falls back to polling                      |
+
+## Fine-grained data flow
+
+This section follows one keystroke through the editor's code. The first
+and last steps are the same for the Gutenberg experiment and for every
+engine in this plugin. Only the middle steps differ.
+
+### Sending side
+
+1. The user types in a contenteditable. The `onInput` listener that
+   `useRichText` attaches picks up the change.
+2. Rich text calls the block's `onChange`. The block's
+   `setAttributes( { content: ... } )` updates the block in the
+   block-editor store.
+3. `useBlockSync` watches the block-editor store and passes the new
+   block tree to core-data through `onInput` or `onChange` (from
+   `useEntityBlockEditor`). Repeated changes to the same attribute go
+   to `onInput`. The first keystroke, and the change after a pause in
+   typing, go to `onChange`, which starts a new undo step.
+4. core-data records the edit with `editEntityRecord`.
+5. `editEntityRecord` hands the edit to the sync manager right before
+   it dispatches the `EDIT_ENTITY_RECORD` action.
+6. **Gutenberg experiment:** The sync manager writes the edit into the
+   Yjs document: at once when a peer is present, otherwise on the next
+   tick. `updateCRDTDoc` calls `applyPostChangesToCRDTDoc`, which merges
+   the new blocks into the existing document with `mergeCrdtBlocks`.
+7. **Gutenberg experiment:** Yjs emits a binary update. The polling
+   provider listens to the document's `updateV2` event and puts the
+   update in a queue.
+8. **Gutenberg experiment:** The next poll sends the queue to
+   `/wp-sync/v1/updates`. The queue stays paused until a collaborator
+   first appears, and then every poll sends it.
+
+### Receiving side
+
+1. **Gutenberg experiment:** The peer's next poll returns the update,
+   along with any from other peers.
+2. **Gutenberg experiment:** `processDocUpdate` calls `Y.applyUpdateV2`,
+   which merges the changes into the peer's Yjs document.
+3. **Gutenberg experiment:** The document's listener calls
+   `onRecordUpdate` in the sync manager.
+4. **Gutenberg experiment:** `_updateEntityRecord` calls
+   `getChangesFromCRDTDoc`, which compares the Yjs document with the
+   current edited record. It returns the full block list, any other
+   properties that differ, and, when the change moved text under the
+   peer's cursor, a corrected cursor position.
+5. An `EDIT_ENTITY_RECORD` action is dispatched locally. It skips
+   `editEntityRecord`, so the change is not sent back to sync. It stays
+   out of the peer's undo history because undo records only the peer's
+   own edits.
+6. The editor re-renders. `useBlockSync` sees new blocks coming from
+   core-data and replaces the blocks in the block-editor store. Rich
+   text then updates the contenteditable.
+
+### How the middle steps differ in this plugin
+
+| Step                      | yjs-server                                                                                                                | de-rtc                                                                                                                                      | intent-log                                                                                                                                        |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 6: record the edit        | Same as the Gutenberg experiment                                                                                          | Same: the tab keeps a Yjs document for the editor and undo, but WordPress does not                                                          | No Yjs document. The tab compares the editor's blocks with the version they show, turns the difference into typed edits, and applies them locally |
+| 7: queue it               | Same                                                                                                                      | The edit only marks the document as changed. At most every 10 s, the tab builds a proposal: the whole post plus the version it started from | The typed edits go into the same polling queue as JSON                                                                                            |
+| 8: send it                | The queue is held whenever the tab is alone, and released when a collaborator appears, on save, or when the tab is hidden | Posts and pages send the proposal to the autosave endpoint, then tell peers to poll. Other types send it through the transport. Never held  | Same as yjs-server                                                                                                                                |
+| Receive 1–2: apply it     | Same                                                                                                                      | A poll returns a short notice of the new version. The tab asks for that version, then writes it into its Yjs document once typing pauses    | The tab adds the new rows to its local history and recomputes its own pending edits on top                                                        |
+| Receive 3–4: find changes | Same                                                                                                                      | Same                                                                                                                                        | Once typing pauses, the tab pushes the merged block list to the editor. It sends no cursor correction                                             |
+| Receive 5: dispatch       | Same                                                                                                                      | Same                                                                                                                                        | Same dispatch. It stays out of undo because intent-log's undo records only edits this tab wrote                                                   |
