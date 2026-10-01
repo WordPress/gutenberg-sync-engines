@@ -1,12 +1,13 @@
 # Data flow
 
 This page shows how one person's update reaches everyone else during
-collaborative editing. It covers today's Gutenberg `trunk` experiment,
-the WPVIP WebSocket transport, and what this plugin proposes.
+collaborative editing. It covers today's Gutenberg experiment
+(including the WPVIP WebSocket transport, which can stand in for its
+polling) and what this plugin proposes.
 
 ## The short version
 
-In the Gutenberg RTC experiment, **browsers merge updates and WordPress
+In the Gutenberg experiment, **browsers merge updates and WordPress
 is just a relay**. WordPress stores the updates as bytes, but cannot
 read them, validate them, sanitize them, or notice that two people
 changed the same thing. It sees the updates only when someone saves the
@@ -19,14 +20,14 @@ server accepted. All three engines work this way, and they differ only
 in how the merge works. The engine choice and the transport choice are
 separate: any engine runs over any transport.
 
-|                                             | Experiment                      | This plugin                                                                |
-| ------------------------------------------- | ------------------------------- | -------------------------------------------------------------------------- |
-| Who merges                                  | Browsers                        | WordPress (yjs-server: also browsers)                                      |
-| What WordPress can read                     | Nothing until the post is saved | Every edit as it arrives                                                   |
-| Markup safety checks (`kses`) on live edits | None                            | Every edit as it arrives                                                   |
-| Same-spot conflicts                         | Settled silently                | Set aside for review (intent-log, de-rtc) or settled silently (yjs-server) |
-| How edits travel                            | Short polling or WebSocket      | Short polling, server-sent events, or WebSocket                            |
-| Where edits are stored                      | Post meta on a custom post type | Two custom tables                                                          |
+|                                             | Gutenberg experiment                | This plugin                                                                |
+| ------------------------------------------- | ----------------------------------- | -------------------------------------------------------------------------- |
+| Who merges                                  | Browsers                            | WordPress (yjs-server: also browsers)                                      |
+| What WordPress can read                     | Nothing until the post is saved     | Every edit as it arrives                                                   |
+| Markup safety checks (`kses`) on live edits | None                                | Every edit as it arrives                                                   |
+| Same-spot conflicts                         | Settled silently                    | Set aside for review (intent-log, de-rtc) or settled silently (yjs-server) |
+| How edits travel                            | Short polling, or WPVIP's WebSocket | Short polling, server-sent events, or WebSocket                            |
+| Where edits are stored                      | Post meta on a custom post type     | Two custom tables                                                          |
 
 A **room** is one shared document, usually one post. A **row** is one
 stored entry in a room's history. Every browser remembers the last row
@@ -71,6 +72,16 @@ What this means:
 -   Two people changing the same thing at once do not see a conflict. Yjs
     merges the changes silently. For single values, one edit wins (chosen
     by client ID, not by time). For text, both people's typing is kept.
+
+**The WPVIP WebSocket transport** works the same way. It replaces only
+the WordPress polling provider, through Gutenberg's `sync.providers`
+filter. Each browser asks WordPress for a short-lived signed token,
+which WordPress issues only if the user can edit the post. The browser
+then opens a WebSocket to a separate Node.js server. That server checks
+the token and relays Yjs updates and presence between browsers. It
+keeps rooms in memory only and stores nothing, so WordPress still sees
+the content only when the post is saved, along with the copy of the
+CRDT doc saved with it.
 
 ### This plugin, intent-log engine
 
@@ -180,11 +191,11 @@ sequenceDiagram
 
 ### What the engines do with the same situation
 
-|                                                     | Experiment                | intent-log             | yjs-server                            | de-rtc                          |
+|                                                     | Gutenberg experiment      | intent-log             | yjs-server                            | de-rtc                          |
 | --------------------------------------------------- | ------------------------- | ---------------------- | ------------------------------------- | ------------------------------- |
 | What a browser sends                                | Yjs updates               | Small typed edits      | Yjs updates                           | The whole post, on timer        |
 | Who merges                                          | Browsers                  | WordPress              | WordPress and browsers                | WordPress                       |
-| Two people change the same spot                     | One wins silently         | Set aside for review   | One wins silently                     | Set aside for review            |
+| Two people change the same spot                     | Merged silently           | Set aside for review   | Merged silently                       | Set aside for review            |
 | Unsafe markup from a user without `unfiltered_html` | Reaches peers, vulnerable | Set aside for approval | Cleaned by the server                 | Set aside for approval          |
 | Server cost per edit                                | Store and forward         | Lock, adjust, store    | Decode, merge, and re-encode CRDT doc | Merge the whole post            |
 | Who writes `post_content`                           | The editor's save         | The editor's save      | The editor's save                     | The editor's save, merged first |
@@ -193,13 +204,29 @@ sequenceDiagram
 ## Transports
 
 A transport is how updates travel between the server and peers. This
-plugin provides multiple transport options.
+plugin provides multiple transport options. Any engine runs over any
+transport.
 
-|                     | Experiment short-polling                     | Short-polling                        | SSE                           | WebSocket                                  |
-| ------------------- | -------------------------------------------- | ------------------------------------ | ----------------------------- | ------------------------------------------ |
-| Advisory transport  | No                                           | WebRTC or WebSocket                  | Ignored                       | Ignored                                    |
-| New services to run | None                                         | None                                 | None, Redis optional          | Separate PHP daemon                        |
-| Credentials         | Cookie + nonce                               | Cookie + nonce                       | Cookie + nonce                | One-time token + cookie, or a signed token |
-| Long-lived process  | No                                           | No                                   | One PHP worker per connection | One long-running process                   |
-| Typical latency     | 1 s                                          | <1 s with advisory channel, else 5 s | <1 s                          | <1 s                                       |
-| If it fails         | Retry with backoff, then a disconnect notice | Retry with backoff                   | Falls back to polling         | Falls back to polling                      |
+Short polling also opens an **advisory channel** in each editor tab: a
+side channel that carries only presence ("who is here") and "something
+changed, go and poll" notices. It never carries content, which always
+comes from WordPress. When every tab in a room can reach every other
+tab, tabs poll only when told that something changed, so an idle room
+makes almost no requests and a change arrives in under a second. A tab
+that cannot reach a peer falls back to polling on a timer.
+
+The channel runs over one of two links, chosen on the settings screen:
+a direct browser-to-browser WebRTC connection, set up through the
+WordPress Heartbeat (the default), or a WebSocket to the plugin's sync
+server or to a relay the host runs. Only users who can edit the post
+join a room's channel, and the worst a misbehaving peer can do is cause
+extra polls or show false presence.
+
+|                     | Gutenberg experiment short polling           | Short-polling                                | SSE                           | WebSocket                                  |
+| ------------------- | -------------------------------------------- | -------------------------------------------- | ----------------------------- | ------------------------------------------ |
+| Advisory channel    | No                                           | WebRTC or WebSocket                          | Off while the stream is open  | Not used                                   |
+| New services to run | None                                         | None                                         | None, Redis optional          | Separate PHP daemon                        |
+| Credentials         | Cookie + nonce                               | Cookie + nonce                               | Cookie + nonce                | One-time token + cookie, or a signed token |
+| Long-lived process  | No                                           | No                                           | One PHP worker per connection | One long-running process                   |
+| Typical latency     | 1 s                                          | <1 s with advisory channel, else 5 s         | <1 s                          | <1 s                                       |
+| If it fails         | Retry with backoff, then a disconnect notice | Retry with backoff, then a disconnect notice | Falls back to polling         | Falls back to polling                      |
