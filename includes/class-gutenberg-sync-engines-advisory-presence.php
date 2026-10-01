@@ -419,7 +419,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Advisory_Presence' ) ) {
 			}
 			$room  = (string) $probe['room'];
 			$token = (string) $probe['token'];
-			if ( ! self::is_enabled() || ! $this->valid_token( $token ) || ! $this->can_probe_room( $room ) ) {
+			if ( ! self::is_enabled() || ! $this->valid_token( $token ) || ! $this->can_probe_room( $room ) || $this->is_token_owned_by_another_user( $room, $token ) ) {
 				return null;
 			}
 
@@ -660,7 +660,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Advisory_Presence' ) ) {
 		 * @return bool Whether the room was reset.
 		 */
 		public function note_sync_request( string $room, string $token, int $client_id ): bool {
-			if ( ! $this->valid_token( $token ) || ! $this->is_entity_room( $room ) ) {
+			if ( ! $this->valid_token( $token ) || ! $this->is_entity_room( $room ) || $this->is_token_owned_by_another_user( $room, $token ) ) {
 				return false;
 			}
 
@@ -693,6 +693,9 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Advisory_Presence' ) ) {
 		 * @return bool Whether the room was reset.
 		 */
 		public function leave( string $room, string $token, int $client_id ): bool {
+			if ( $this->is_token_owned_by_another_user( $room, $token ) ) {
+				return false;
+			}
 			$this->forget_token( $room, $token );
 			if ( ! $this->is_entity_room( $room ) ) {
 				return false;
@@ -845,6 +848,25 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Advisory_Presence' ) ) {
 				return false;
 			}
 			return WP_Sync_Config::can_user_sync_entity_type( $parsed['entity_kind'], $parsed['entity_name'], $parsed['object_id'] );
+		}
+
+		/**
+		 * Whether a live token in the room belongs to a user other than the
+		 * current one. A token belongs to the user it was first recorded
+		 * for, and every probe answer hands each tab its peers' tokens, so
+		 * without this check another editor of the post could present a
+		 * peer's token to read and empty that tab's handshake mailbox, send
+		 * handshake messages in its name, or make it leave the room.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param string $room  The room name.
+		 * @param string $token The token presented.
+		 * @return bool Whether another user owns the token.
+		 */
+		private function is_token_owned_by_another_user( string $room, string $token ): bool {
+			$owner = (int) ( $this->read_tokens( $room )[ $token ]['u'] ?? 0 );
+			return $owner > 0 && get_current_user_id() !== $owner;
 		}
 
 		/**
