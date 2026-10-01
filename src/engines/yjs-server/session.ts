@@ -53,14 +53,12 @@ export const YJS_SERVER_SNAPSHOT_TYPE = 'snapshot';
 export interface YjsServerSessionCodec
 	extends EngineSessionCodec,
 		Pick< TransportSessionExtensions, 'onRoomRestart' > {
-	/**
-	 * Transport capability: flush queued updates even with no collaborator
-	 * present. The SERVER's document is the source of truth for every
-	 * (re)joining client, so the room must track a solo session too: updates
-	 * held back while solo are invisible to the client's own next page load,
-	 * which bootstraps from the server snapshot and would wipe the editor
-	 * back to the room's stale state. Ingest is idempotent (redelivered
-	 * updates settle as benign already-merged voids), so solo sends are safe.
+	/*
+	 * No `sendsWhileAlone`: when the advisory channel says this tab is
+	 * alone, the polling manager holds this engine's queued updates in the
+	 * browser. A collaborator arriving, a save (flushHeldUpdates, through
+	 * the entity sync adapter's beforeSave), or the tab going hidden
+	 * releases them. Only de-rtc declares the capability.
 	 */
 }
 
