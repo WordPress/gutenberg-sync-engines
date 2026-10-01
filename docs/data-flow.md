@@ -1,13 +1,16 @@
 # Data flow
 
-This page shows how one person's update reaches everyone else during collaborative editing. It covers today's Gutenberg `trunk` experiment, the WPVIP WebSocket transport, and what this plugin proposes.
+This page shows how one person's update reaches everyone else during
+collaborative editing. It covers today's Gutenberg `trunk` experiment,
+the WPVIP WebSocket transport, and what this plugin proposes.
 
 ## The short version
 
-In the Gutenberg RTC experiment, **browsers merge updates and
-WordPress is just a relay**. WordPress stores the updates as bytes, but cannot read them, validate them, sanitize them, or notice that two
-people changed the same thing. It sees the updates only when someone
-saves the post.
+In the Gutenberg RTC experiment, **browsers merge updates and WordPress
+is just a relay**. WordPress stores the updates as bytes, but cannot
+read them, validate them, sanitize them, or notice that two people
+changed the same thing. It sees the updates only when someone saves the
+post.
 
 This plugin proposes that **WordPress takes part in every update**. The
 server receives each edit, checks who sent it and what it contains,
@@ -33,7 +36,10 @@ it has seen, and asks for the rows after it.
 
 ### Gutenberg experiment
 
-Each browser keeps its own copy of the post as a CRDT (Yjs) document. Browsers send Yjs updates (binary data) to WordPress. WordPress stores them and relays them to the other browsers, which merge them into their copy.
+Each browser keeps its own copy of the post as a CRDT (Yjs) document.
+Browsers send Yjs updates (binary data) to WordPress. WordPress stores
+them and relays them to the other browsers, which merge them into their
+copy.
 
 ```mermaid
 sequenceDiagram
@@ -42,7 +48,7 @@ sequenceDiagram
     participant WP as WordPress
     participant B as Bob's editor
     Note over A,B: Each browser has its own CRDT document
-    A->>A: Compare blocks before and after,<br>capture edit and apply to Alice's CRDT doc
+    A->>A: Compare blocks before and after,<br/>capture edit and apply to Alice's CRDT doc
     A->>WP: Send: binary update
     WP->>WP: Store the bytes as a post meta row
     B->>WP: Anything new?
@@ -70,8 +76,11 @@ What this means:
 
 The browser turns each change into a small, readable description, such
 as "insert 'x' at position 4 in paragraph 2". Each description records
-which point in the history it was made against (base sequence). WordPress puts edits in order one room at a time. If there are newer updates, it attempts to adjust the update so that it can be cleanly merged. If it cannot adjust an edit safely, it sets it aside
-for a human to review.
+which point in the history it was made against (base sequence).
+WordPress puts edits in order one room at a time. If there are newer
+updates, it attempts to adjust the update so that it can be cleanly
+merged. If it cannot adjust an edit safely, it sets it aside for a human
+to review.
 
 ```mermaid
 sequenceDiagram
@@ -102,9 +111,11 @@ sequenceDiagram
 
 ### This plugin, yjs-server engine
 
-The browser side is the same as the Gutenberg experiment: each browser maintains a
-CRDT document and sends binary Yjs updates. The difference is that WordPress has a full Yjs library, holds its own canonical CRDT document, and merges every update into it. Because
-the server can read the merged result, it can check content.
+The browser side is the same as the Gutenberg experiment: each browser
+maintains a CRDT document and sends binary Yjs updates. The difference
+is that WordPress has a full Yjs library, holds its own canonical CRDT
+document, and merges every update into it. Because the server can read
+the merged result, it can check content.
 
 ```mermaid
 sequenceDiagram
@@ -113,7 +124,7 @@ sequenceDiagram
     participant WP as WordPress
     participant DB as Room storage
     participant B as Bob's editor
-    A->>A: Compare blocks before and after,<br>capture edit and apply to Alice's CRDT doc
+    A->>A: Compare blocks before and after,<br/>capture edit and apply to Alice's CRDT doc
     A->>WP: Send: binary update
     WP->>WP: Authorize the user
     WP->>DB: Load the server's CRDT doc
@@ -132,11 +143,12 @@ sequenceDiagram
 
 ### This plugin, de-rtc engine
 
-A save-based merging engine where the browser sends
-the whole post, plus its base version, through the ordinary autosave endpoint. WordPress compares three versions: the
-base version, the newest version (if it exists), and the proposed version. It merges them
-block by block and announces the new version number. Other browsers
-then fetch and apply the new version.
+A save-based merging engine where the browser sends the whole post, plus
+its base version, through the ordinary autosave endpoint. WordPress
+compares three versions: the base version, the newest version (if it
+exists), and the proposed version. It merges them block by block and
+announces the new version number. Other browsers then fetch and apply
+the new version.
 
 ```mermaid
 sequenceDiagram
@@ -180,7 +192,8 @@ sequenceDiagram
 
 ## Transports
 
-A transport is how updates travel between the server and peers. This plugin provides multiple transport options.
+A transport is how updates travel between the server and peers. This
+plugin provides multiple transport options.
 
 |                     | Experiment short-polling                     | Short-polling                        | SSE                           | WebSocket                                  |
 | ------------------- | -------------------------------------------- | ------------------------------------ | ----------------------------- | ------------------------------------------ |
