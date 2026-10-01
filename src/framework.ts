@@ -31,6 +31,10 @@ export const resolveEngineAdapter = api.resolveEngineAdapter;
 // and its tests).
 export const LOCAL_EDITOR_ORIGIN = api.LOCAL_EDITOR_ORIGIN;
 
+// Origin marker for editor updates that must sync but never become undo
+// steps (core-data's `undoIgnore` edits and save responses).
+export const LOCAL_UNDO_IGNORED_ORIGIN = api.LOCAL_UNDO_IGNORED_ORIGIN;
+
 // Test-support: reset the shared framework registries between unit tests.
 export const getEngineAdapters = api.getEngineAdapters;
 export const resetEngineAdaptersForTesting = api.resetEngineAdaptersForTesting;
