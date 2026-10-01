@@ -45,6 +45,12 @@ engine as a feature plugin for wider testing.
   change to (server-sent events), woken by Redis when a Redis address is
   configured and by half-second storage checks otherwise. Needs a proxy
   that passes streams through unbuffered.
+- **sse-daemon**: the same stream, written by the sync daemon that the
+  websocket transport runs, on the same port. It holds no PHP worker per
+  tab, and it works where a proxy blocks the WebSocket upgrade. A change
+  that lands through WordPress reaches the stream within about a second.
+  For local dev, `npm run rtc:sse` starts the daemon and selects it. See
+  [docs/sse-daemon.md](docs/sse-daemon.md).
 - **websocket**: the server pushes updates over a persistent connection
   served by a bundled PHP daemon (`wp collaboration sync-server`). For
   local dev, `npm run rtc:ws` starts everything in one command (and

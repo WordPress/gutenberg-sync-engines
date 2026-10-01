@@ -29,7 +29,7 @@ separate: any engine runs over any transport.
 | What WordPress can read                     | Nothing until the post is saved     | Every edit as it arrives                                                   |
 | Markup safety checks (`kses`) on live edits | None                                | Every edit as it arrives                                                   |
 | Same-spot conflicts                         | Settled silently                    | Set aside for review (intent-log, de-rtc) or settled silently (yjs-server) |
-| How edits travel                            | Short polling, or WPVIP's WebSocket | Short polling, server-sent events, or WebSocket                            |
+| How edits travel                            | Short polling, or WPVIP's WebSocket | Short polling, server-sent events (web tier or daemon), or WebSocket       |
 | Where edits are stored                      | Post meta on a custom post type     | Two custom tables                                                          |
 
 A **room** is one shared document, usually a post. A **row** is one
@@ -228,14 +228,14 @@ server or to a relay the host runs. Only users who can edit the post
 join a room's channel, and the worst a misbehaving peer can do is cause
 extra polls or show false presence.
 
-|                     | Gutenberg experiment short polling           | Short-polling                                | SSE                           | WebSocket                                  |
-| ------------------- | -------------------------------------------- | -------------------------------------------- | ----------------------------- | ------------------------------------------ |
-| Advisory channel    | No                                           | WebRTC or WebSocket                          | Off while the stream is open  | Not used                                   |
-| New services to run | None                                         | None                                         | None, Redis optional          | Separate PHP daemon                        |
-| Credentials         | Cookie + nonce                               | Cookie + nonce                               | Cookie + nonce                | One-time token + cookie, or a signed token |
-| Long-lived process  | No                                           | No                                           | One PHP worker per connection | One long-running process                   |
-| Typical latency     | 1 s                                          | <1 s with advisory channel, else 5 s         | <1 s                          | <1 s                                       |
-| If it fails         | Retry with backoff, then a disconnect notice | Retry with backoff, then a disconnect notice | Falls back to polling         | Falls back to polling                      |
+|                     | Gutenberg experiment short polling           | Short-polling                                | SSE                           | SSE from the daemon                     | WebSocket                                  |
+| ------------------- | -------------------------------------------- | -------------------------------------------- | ----------------------------- | --------------------------------------- | ------------------------------------------ |
+| Advisory channel    | No                                           | WebRTC or WebSocket                          | Off while the stream is open  | Off while the stream is open            | Not used                                   |
+| New services to run | None                                         | None                                         | None, Redis optional          | Separate PHP daemon (the WebSocket one) | Separate PHP daemon                        |
+| Credentials         | Cookie + nonce                               | Cookie + nonce                               | Cookie + nonce                | One-time token + cookie                 | One-time token + cookie, or a signed token |
+| Long-lived process  | No                                           | No                                           | One PHP worker per connection | One long-running process                | One long-running process                   |
+| Typical latency     | 1 s                                          | <1 s with advisory channel, else 5 s         | <1 s                          | About 1 s                               | <1 s                                       |
+| If it fails         | Retry with backoff, then a disconnect notice | Retry with backoff, then a disconnect notice | Falls back to polling         | Falls back to polling                   | Falls back to polling                      |
 
 ## Fine-grained data flow
 

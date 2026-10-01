@@ -296,8 +296,9 @@ The framework/plugin split is complete: the framework ships **neither** engines
     snapshot helpers, `undo.ts`, vendored `y-utilities/` — the latter ignored
     by eslint), inherited from the retired yjs-relay engine and used by
     yjs-server.
-  - `providers/{http-polling,sse,websocket}/` — transports (sse reuses the
-    polling manager, swapping only its receive half for the stream).
+  - `providers/{http-polling,sse,sse-daemon,websocket}/` — transports
+    (sse and sse-daemon reuse the polling manager, swapping only its
+    receive half for the stream).
   - `awareness/` — SLOW AWARENESS (`docs/awareness-high-latency.md`),
     on when the "Awareness interval" setting is above 0: each tab
     publishes the block its selection is in (`metadata.syncId`, else the
@@ -364,7 +365,7 @@ The framework/plugin split is complete: the framework ships **neither** engines
   `engine-comparison.md` (the decision guide: scorecard, parity table,
   resource profiles, per-engine known gaps), `principles.md` (P1-P7),
   `scenarios.md` (the A-G wire narratives), `transports.md`,
-  `de-rtc-fidelity.md` (the audit against the upstream vision),
+  `sse-daemon.md`, `de-rtc-fidelity.md` (the audit against the upstream vision),
   `architecture-decisions.md`, and `glossary.md` (the project's
   vocabulary in plain words). The set is the interpretation layer over
   both benchmark harnesses; deliberately number-free (run `npm run

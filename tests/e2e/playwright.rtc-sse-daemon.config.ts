@@ -63,8 +63,7 @@ export default defineConfig( {
 	],
 	testIgnore: [],
 	globalTeardown: fileURLToPath(
-		new URL( './config/rtc-daemon-teardown.ts', 'file:' + __filename )
-			.href
+		new URL( './config/rtc-daemon-teardown.ts', 'file:' + __filename ).href
 	),
 	webServer: [
 		...baseWebServer,

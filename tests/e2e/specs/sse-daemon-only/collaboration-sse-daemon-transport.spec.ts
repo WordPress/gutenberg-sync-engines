@@ -44,6 +44,9 @@ async function waitForStream( page: Page ): Promise< void > {
  * the event the page listens for, which is what a tab moving to the
  * background does. A Playwright page cannot be genuinely backgrounded, so
  * the page's own input is supplied directly.
+ *
+ * @param page  The editor page.
+ * @param value The visibility state to report.
  */
 async function setVisibility(
 	page: Page,

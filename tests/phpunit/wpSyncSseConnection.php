@@ -198,8 +198,8 @@ class Tests_Collaboration_WpSyncSseConnection extends WP_UnitTestCase {
 	}
 
 	public function test_an_oversized_body_is_refused() {
-		$conn                             = $this->connection_after( $this->request( '{}' ) );
-		$request                          = $conn->parse_handshake_request();
+		$conn                                 = $this->connection_after( $this->request( '{}' ) );
+		$request                              = $conn->parse_handshake_request();
 		$request['headers']['content-length'] = (string) ( WP_Sync_SSE_Connection::MAX_BODY_SIZE + 1 );
 
 		$accepted = $conn->accept_request( $request );
@@ -209,8 +209,8 @@ class Tests_Collaboration_WpSyncSseConnection extends WP_UnitTestCase {
 	}
 
 	public function test_a_non_numeric_content_length_is_refused() {
-		$conn                             = $this->connection_after( $this->request( '{}' ) );
-		$request                          = $conn->parse_handshake_request();
+		$conn                                 = $this->connection_after( $this->request( '{}' ) );
+		$request                              = $conn->parse_handshake_request();
 		$request['headers']['content-length'] = 'lots';
 
 		$accepted = $conn->accept_request( $request );

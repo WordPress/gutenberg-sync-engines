@@ -83,8 +83,7 @@ const config = defineConfig( {
 	// a daemon-less websocket transport; every later polling suite then
 	// timed out at session discovery).
 	globalTeardown: fileURLToPath(
-		new URL( './config/rtc-daemon-teardown.ts', 'file:' + __filename )
-			.href
+		new URL( './config/rtc-daemon-teardown.ts', 'file:' + __filename ).href
 	),
 	webServer: [
 		...baseWebServer,
