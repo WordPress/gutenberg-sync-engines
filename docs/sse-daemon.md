@@ -66,6 +66,38 @@ spent, refusing a stream that was about to open.
 - It does not work without the daemon running. The transport is a
   preference, and short polling remains the fallback.
 
+## Running it on a host
+
+The daemon (`wp collaboration sync-server`) is a PHP command-line
+process that never ends. Keep it out of the pool of PHP workers that
+serves normal pages: there it would hold a worker forever, which is the
+cost this transport exists to avoid.
+
+- **Start it with a process manager** such as systemd, supervisord or
+  its own container. The manager starts it at boot and restarts it after
+  a crash or a deploy. Point a health check at the daemon's `/health`
+  address.
+- **Put the web server or load balancer in front of it.** Let it handle
+  TLS and pass one path to the daemon's local port, so no new port is
+  open to the internet. On that path, turn off response buffering, allow
+  reads longer than the daemon's 45-second idle timeout, and pass the
+  WebSocket upgrade headers so the websocket transport can share it.
+- **It needs only the database.** Web requests and the daemon never talk
+  to each other. They meet in the room tables, and the daemon finds new
+  rows on its room scan. So it can run on a web server or on its own
+  machine, if it can reach the database (and the object cache, if the
+  site has one).
+- **Restart it now and then.** PHP was not built for processes that run
+  for days. A scheduled restart is cheap: tabs reconnect from the last
+  row they received and lose nothing.
+- **Run one daemon per site** unless you have tested more. Each connection
+  must stay on the daemon it opened, and the websocket advisory channel
+  keeps its list of who is present in the daemon's memory, so tabs on
+  different daemons do not see each other there.
+
+A host that cannot run its own processes, as on most managed WordPress
+hosting, should use `sse` or short polling instead.
+
 ## Where the code is
 
 - `includes/transports/class-wp-sync-connection.php` — the socket layer
