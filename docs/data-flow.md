@@ -7,11 +7,14 @@ polling) and what this plugin proposes.
 
 ## Short version
 
+Currently, RTC is available in Gutenberg via an experiment. We'll compare
+how things work in the Gutenberg experiment and in this plugin.
+
 In the Gutenberg experiment, **browsers merge updates and WordPress
 is just a relay**. WordPress stores the updates as bytes, but cannot
 read them, validate them, sanitize them, or notice that two people
-changed the same thing. It sees the updates only when someone saves the
-post.
+changed the same thing. It is only aware of how the content has changed
+when someone saves the post.
 
 This plugin proposes that **WordPress takes part in every update**. The
 server receives each edit, checks who sent it and what it contains,
@@ -42,6 +45,9 @@ Browsers send Yjs updates (binary data) to WordPress. WordPress stores
 them and relays them to the other browsers, which merge them into their
 copy.
 
+If you'd like a more detailed breakdown of the data flow, see the
+[fine-grained data flow](#fine-grained-data-flow) section below.
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -54,7 +60,7 @@ sequenceDiagram
     WP->>WP: Store the bytes as a post meta row
     B->>WP: Anything new?
     WP-->>B: Alice's binary update
-    B->>B: Yjs merges them into Bob's CRDT doc
+    B->>B: Yjs merges into Bob's CRDT doc
     B->>B: Update the local editor
     Note over A,B: Joining: A new tab loads the CRDT doc saved with the post,<br/>then a peer sends any changes it is missing
     Note over WP: After 50 rows, WordPress asks one browser for a full copy<br/>and deletes older rows, so the history stays small
@@ -200,8 +206,6 @@ sequenceDiagram
 | Server cost per edit                                | Store and forward         | Lock, adjust, store    | Decode, merge, and re-encode CRDT doc | Merge the whole post            |
 | Who writes `post_content`                           | The editor's save         | The editor's save      | The editor's save                     | The editor's save, merged first |
 | New room starts from                                | Saved entity              | Saved entity           | Saved entity                          | Saved entity                    |
-
-If you'd like a more detailed breakdown of the data flow, see the [fine-grained data flow](#fine-grained-data-flow) section below.
 
 ## Transports
 
