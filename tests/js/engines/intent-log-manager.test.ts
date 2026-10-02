@@ -63,6 +63,8 @@ import {
 } from '../../../src/engines/intent-log-session';
 import {
 	getEngineAdapters,
+	LOCAL_EDITOR_ORIGIN,
+	LOCAL_UNDO_IGNORED_ORIGIN,
 	registerSyncEngine,
 	resetEngineAdaptersForTesting,
 	resolveEngineAdapter,
@@ -1564,6 +1566,65 @@ describe( 'intent-log manager', () => {
 			snapshotRow( [], { title: 'Fresh title' } )
 		);
 		expect( handlers.edits.at( -1 ) ).toEqual( { title: 'Fresh title' } );
+	} );
+
+	it( 'syncs undo-ignored edits without making them undo steps', async () => {
+		const { manager, transport } = await loadManagedEntity( {
+			title: { raw: 'Original' },
+		} );
+		transport.captured.session!.receiveUpdate(
+			snapshotRow(
+				[
+					{
+						syncId: 'p1',
+						blockType: 'core/paragraph',
+						text: 'Hello',
+					},
+				],
+				{ title: 'Original' }
+			)
+		);
+		flushEditorSync();
+
+		// core-data tags `undoIgnore` edits (and save responses) with the
+		// ignored origin: they reach the wire but not the undo stack.
+		manager.update(
+			'postType/post',
+			'1',
+			{ title: 'Set by code' },
+			LOCAL_UNDO_IGNORED_ORIGIN
+		);
+		manager.update(
+			'postType/post',
+			'1',
+			{
+				blocks: [
+					{
+						name: 'core/paragraph',
+						attributes: {
+							content: 'Hello world',
+							metadata: { syncId: 'p1' },
+						},
+						innerBlocks: [],
+					},
+				],
+			},
+			LOCAL_UNDO_IGNORED_ORIGIN
+		);
+		const sent = transport.captured.sent.map(
+			( update ) => JSON.parse( update.data ).type
+		);
+		expect( sent ).toEqual( [ 'set_property', 'insert_text' ] );
+		expect( manager.undoManager!.hasUndo() ).toBe( false );
+
+		// An ordinary editor edit still becomes an undo step.
+		manager.update(
+			'postType/post',
+			'1',
+			{ title: 'Typed by the user' },
+			LOCAL_EDITOR_ORIGIN
+		);
+		expect( manager.undoManager!.hasUndo() ).toBe( true );
 	} );
 
 	it( 'title: a remote set_property pushes into the editor; a local edit authors one and suppresses the echo', async () => {
