@@ -1,7 +1,7 @@
 <?php
 /**
  * Plugin Name:       Gutenberg Sync Engines
- * Plugin URI:        https://github.com/WordPress/gutenberg
+ * Plugin URI:        https://github.com/WordPress/gutenberg-sync-engines
  * Description:       Pluggable real-time collaboration engines and transports for the Gutenberg collaborative-editing framework. Without this plugin active, real-time collaboration is effectively disabled.
  * Requires at least: 7.0
  * Requires PHP:      7.4

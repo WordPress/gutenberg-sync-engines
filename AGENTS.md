@@ -32,9 +32,11 @@ This plugin provides:
 - **Engines:** `intent-log` (server-authoritative log of typed intents; merges
   by transform, sets genuine conflicts aside for review), `yjs-server`
   (server-authoritative CRDT: the vendored y-php library merges every update
-  into a canonical room document server-side, compacts by itself, and
-  materializes post content — lock-free ingest; it inherited the retired
-  naive-relay yjs-relay engine's client CRDT machinery and wire format), and
+  into a canonical room document server-side and compacts by itself —
+  lock-free ingest; the editor saves its own serialized blocks, and the
+  server-side `materialize()` serves only the rooms CLI, benchmarks, and
+  tests; it inherited the retired naive-relay yjs-relay engine's client
+  CRDT machinery and wire format), and
   `de-rtc` (Distributed Editing's save-centric model on the room protocol:
   clients propose whole content against a named base version; the server
   three-way-merges every proposal with the merge core ported verbatim from
@@ -46,7 +48,14 @@ This plugin provides:
   what runs when the `wp_sync_engine` option is unset. Registration order
   only matters when a CONFIGURED slug isn't registered (misconfiguration
   degrades to the first registered engine: yjs-server).
-- **Transports:** `http-polling` (default), `sse`, `websocket`.
+- **Transports:** `http-polling` (default), `sse`, `sse-daemon`,
+  `websocket`. `sse` and `sse-daemon` are two framings of the same
+  receive stream, and differ only in who
+  holds it: the web tier (a PHP worker per stream) or the sync daemon
+  (its own process, on the port the websocket transport already uses).
+  A stream request names the daemon instead of a REST route and
+  authenticates with a one-time token in an `Authorization` header,
+  minted per stream open at `/wp-sync/v1/ws-token`.
   SSE uses normal PHP requests: one held worker per stream, woken by
   Redis Pub/Sub notices when `WP_SYNC_SSE_REDIS_URL` is set or a Redis
   object cache is detected (`WP_REDIS_*` constants), and otherwise by
@@ -74,15 +83,19 @@ This plugin provides:
   head cursor) when every peer is reachable. SSE turns it off while its
   stream is up (its handshake signals ride the heartbeat, never a poll),
   and a solo SSE tab goes quiet like short polling, closing its stream.
-  A HIDDEN tab holds no stream either: `sseStreaming()` is false
-  while `document.visibilityState` is hidden, so the tab receives over
-  ordinary requests under short polling's own rules (the background
-  cadence, `POLLING_INTERVAL_BACKGROUND_TAB_IN_MS`, with the channel
-  left off), and `handleVisibilityChange`
+  A HIDDEN tab holds its stream or drops it depending on who holds it.
+  A stream the web tier serves keeps a PHP worker up for as long as the
+  tab lives, so `sseStreaming()` is false
+  while `document.visibilityState` is hidden, and `handleVisibilityChange`
   drops the stream on hide through the deliberate-abort path
   (`abortParkedStream()` then `sseExchange.close()`, as `handlePageHide`
-  does, so no failure is logged or backed off) and polls at once on
-  return, which reopens it.
+  does, so no failure is logged or backed off); the tab then receives
+  over ordinary requests under short polling's own rules (the background
+  cadence, `POLLING_INTERVAL_BACKGROUND_TAB_IN_MS`, with the channel
+  left off) and polls at once on return, which reopens the stream.
+  A stream the sync daemon serves holds no worker, so the `sse-daemon`
+  transport calls `setSseStreamHoldsWorker( false )` and a hidden tab
+  keeps its stream, staying live to rows it cannot see yet.
   A tab that TYPES keeps its stream: edits (and awareness changes,
   checked once a second) go out on the updates request BESIDE the
   stream, marked `rows_received_separately: true`, which the server answers with the
@@ -286,8 +299,9 @@ The framework/plugin split is complete: the framework ships **neither** engines
     snapshot helpers, `undo.ts`, vendored `y-utilities/` — the latter ignored
     by eslint), inherited from the retired yjs-relay engine and used by
     yjs-server.
-  - `providers/{http-polling,sse,websocket}/` — transports (sse reuses the
-    polling manager, swapping only its receive half for the stream).
+  - `providers/{http-polling,sse,sse-daemon,websocket}/` — transports
+    (sse and sse-daemon reuse the polling manager, swapping only its
+    receive half for the stream).
   - `awareness/` — SLOW AWARENESS (`docs/awareness-high-latency.md`),
     on when the "Awareness interval" setting is above 0: each tab
     publishes the block its selection is in (`metadata.syncId`, else the
@@ -354,7 +368,7 @@ The framework/plugin split is complete: the framework ships **neither** engines
   `engine-comparison.md` (the decision guide: scorecard, parity table,
   resource profiles, per-engine known gaps), `principles.md` (P1-P7),
   `scenarios.md` (the A-G wire narratives), `transports.md`,
-  `de-rtc-fidelity.md` (the audit against the upstream vision),
+  `sse-daemon.md`, `de-rtc-fidelity.md` (the audit against the upstream vision),
   `architecture-decisions.md`, and `glossary.md` (the project's
   vocabulary in plain words). The set is the interpretation layer over
   both benchmark harnesses; deliberately number-free (run `npm run
@@ -377,10 +391,11 @@ active. Dependencies and built assets are generated locally. A normal clone
 includes the source; CI needs no submodule setup. Release ZIPs include the
 built framework.
 
-The bundled framework commit is `89bea5705f66172e80a7b0c88598052d378595ce`,
-above trunk `0d3eefe596560204e99bb1047df65e2e666a9ad1`. It includes PR #83410
-and the default adapter integration. Retain the private API exports,
-post-lock fallback, and conflict-review integration on updates.
+`gutenberg-pin.json` records the bundled framework commit, the trunk it
+sits on, and its source tree ID; it is the only place that names them. The
+framework includes PR #83410 and the default adapter integration. Retain
+the private API exports, post-lock fallback, and conflict-review
+integration on updates.
 See `docs/gutenberg-subtree.md` and `docs/entity-sync-adapter.md`.
 
 ## Setup (from a clean checkout)
@@ -465,6 +480,8 @@ npm run test:e2e:websocket  # Playwright: websocket-only suite (test WS provider
                             # plugin + y-websocket daemon, auto-started)
 npm run test:e2e:sse        # Playwright: sse-only suite (selects the SSE
                             # transport on the tests site; needs its Redis)
+npm run test:e2e:sse-daemon # Playwright: sse-daemon-only suite (selects the
+                            # sse-daemon transport; runs the PHP daemon)
 ```
 
 **Iterate at the cheapest layer that can catch the change.** The ladder,
@@ -507,6 +524,17 @@ the `none` slice, so it still runs, only in the wrong job.
 Never run `test:php` while an e2e run is in flight against the same env:
 PHPUnit wipes the tests-env database, killing every in-flight spec
 (auth and plugin activation vanish mid-run). Serialize the suites.
+
+`test:php` also leaves the plugin INACTIVE (measured: active before a run,
+inactive after it). A daemon lane started next fails with
+`Error: 'collaboration' is not a registered wp command.` and Playwright
+reports only `Process from config.webServer was not able to start`, which
+points at the daemon rather than at the plugin. Reactivate before any e2e
+lane that starts a daemon:
+
+```bash
+npx @wordpress/env --config .wp-env.tests.json run cli wp plugin activate gutenberg-sync-engines
+```
 
 `test:js` and `npm run typecheck` resolve `@wordpress/sync`/`yjs` from the
 **built subtree** (see Setup); `WP_SYNC_FRAMEWORK_ROOT=<framework-checkout>`
@@ -559,6 +587,11 @@ secret; `collaboration-websocket-advisory-relay.spec.ts` activates
 the `tests/e2e/plugins/advisory-relay-access-token.php` fixture (same
 secret, socket URL aimed at the relay) for its duration, so the
 relay lane never touches the daemon's auth path.
+`tests/e2e/specs/sse-framing/` holds how a tab behaves around an open
+receive stream, and both SSE lanes run it — the web tier under
+`test:e2e:sse`, the sync daemon under `test:e2e:sse-daemon` — because
+the framing and the send path are the same for both, and only the
+process writing the stream differs.
 `tests/e2e/specs/sse-only/` runs only under `test:e2e:sse`
 (`playwright.rtc-sse.config.ts`): its global setup runs the default one
 and then `tests/e2e/bin/rtc-sse-transport.mjs --select`, which refuses
@@ -568,6 +601,34 @@ transport from the same state file. The specs read the exchange's
 `window.__wpSyncSseState` (open, events, rooms) the way the websocket
 specs read `__wpSyncWsState`. The fuzzer sweeps `sse` by default and
 refuses an sse combo without Redis.
+`tests/e2e/specs/sse-daemon-only/` runs only under
+`test:e2e:sse-daemon` (`playwright.rtc-sse-daemon.config.ts`), which
+launches the same `rtc-real-ws-daemon.mjs` with `--transport=sse-daemon`.
+The `sse-daemon` transport is the same receive stream the `sse`
+transport speaks, written by the sync daemon instead of a web request:
+the daemon serves the socket and the stream on one port, so this lane
+differs from the websocket lane only in the slug the tests site
+negotiates, and both daemon lanes share
+`tests/e2e/config/rtc-daemon-teardown.ts`, which replays the launcher's
+persisted transport restore.
+A receive stream is a POST whose body can arrive across several reads,
+and the daemon's handshake handler runs once per read. The one-time
+token it authenticates with is spent on first sight, so the daemon
+authenticates once per connection and keeps the result; a second pass
+over the same connection otherwise spends the token again and refuses a
+stream that was already accepted. Symptoms of getting that wrong: the
+daemon logs `Handshake rejected: Missing, expired, or mismatched
+token.`, the browser reports the stream POST as a CORS failure (a 403
+carries no CORS headers, so the status is hidden), and the client logs
+`Error posting sync update, will retry with backoff` — then succeeds on
+the retry with a fresh token, so the suite still passes.
+Every tab on a post joins that post's awareness roster, and a page whose
+roster exceeds `DEFAULT_CLIENT_LIMIT_PER_ROOM` (3) is refused the room:
+Gutenberg shows "Too many editors connected" and the real-time path stops
+for that tab. The check runs once, on the page's first connection, so a
+spec that opens a fourth tab on one post fails for this reason and not
+because of a transport fault. Give extra tabs their own post, or raise
+the limit with the `sync.pollingProvider.maxClientsPerRoom` filter.
 (The old y-websocket PEER-relay fixture lane — the test WS provider
 plugin plus `rtc-test-ws-sync-server.mjs` — only demonstrated
 client-merging engines and none remains; the fixture files are kept
@@ -858,10 +919,12 @@ applies.
   own accepted canonical rows, proposed as ordinary new changes).
 - **Conflict review is cross-engine**: intent-log through its bespoke
   manager; de-rtc parks escalations as durable `parked` rows and
-  presents them through the framework review panel via
-  `src/engines/review-manager-decorator.ts` (the plumbing any
-  createSyncManager-composed engine can reuse); yjs-server has NO review
-  lane by design (CRDT merge detects no conflicts to park).
+  presents them through the framework review panel via the engine's
+  optional `review` member (`SyncReviewSource` in the subtree's
+  `packages/sync/src/types.ts`, which createSyncManager drives for any
+  composed engine; the old `review-manager-decorator.ts` is gone since
+  #49); yjs-server has NO review lane by design (CRDT merge detects no
+  conflicts to park).
 - **Shared genesis property seed**: all three engines seed
   `WP_Sync_Post_Genesis_Props::for_post()` (REST-shaped scalars,
   taxonomies by rest_base, `meta.<key>`), so joiners see identical field

@@ -5,8 +5,8 @@
   "license": "GPL-2.0-or-later",
   "private": true,
   "engines": {
-    "node": ">=20.10.0",
-    "npm": ">=10.2.3"
+    "node": ">=24.18.0",
+    "npm": ">=11.16.0"
   },
   "devDependencies": {
     "@jest/globals": "^29.7.0",
@@ -54,6 +54,7 @@
     "preplayground": "test -f build/sync-engines.js -a -d gutenberg/build || { echo \"playground: build first (npm run build; cd gutenberg && npm install --ignore-scripts && npm run build)\" >&2; exit 1; }",
     "pretest:e2e": "rimraf gutenberg/node_modules/@playwright/test gutenberg/node_modules/playwright",
     "pretest:e2e:sse": "rimraf gutenberg/node_modules/@playwright/test gutenberg/node_modules/playwright",
+    "pretest:e2e:sse-daemon": "rimraf gutenberg/node_modules/@playwright/test gutenberg/node_modules/playwright",
     "pretest:e2e:websocket": "rimraf gutenberg/node_modules/@playwright/test gutenberg/node_modules/playwright",
     "redis:destroy": "REDIS_PROJECT=$(npm run --silent redis:project) && REDIS_NAME=\"$REDIS_PROJECT-redis\" && docker info >/dev/null && if docker container inspect \"$REDIS_NAME\" >/dev/null 2>&1; then docker rm -f \"$REDIS_NAME\"; fi",
     "redis:project": "node -e 'require(\"@wordpress/env/lib/config\").loadConfig(process.cwd(), process.env.GSE_WP_ENV_CONFIG || \".wp-env.json\").then(c => console.log(require(\"node:path\").basename(c.workDirectoryPath))).catch(e => { console.error(e.message); process.exitCode = 1; })'",
@@ -62,10 +63,12 @@
     "release": "node bin/release.mjs",
     "rtc:http": "node ./tests/e2e/bin/rtc-dev.mjs --mode=http",
     "rtc:ws": "node ./tests/e2e/bin/rtc-dev.mjs --mode=websockets",
+    "rtc:sse": "node ./tests/e2e/bin/rtc-dev.mjs --mode=sse-daemon --detach",
     "rtc:ws:advisory": "WP_SYNC_WEBSOCKET_ACCESS_TOKEN_SECRET=wp-env-development-secret-not-for-production node ./examples/advisory-relay/relay.mjs",
     "start": "wp-scripts start",
     "test:e2e": "playwright test --config tests/e2e/playwright.config.ts",
     "test:e2e:sse": "playwright test --config tests/e2e/playwright.rtc-sse.config.ts",
+    "test:e2e:sse-daemon": "playwright test --config tests/e2e/playwright.rtc-sse-daemon.config.ts",
     "test:e2e:websocket": "playwright test --config tests/e2e/playwright.rtc-websocket.config.ts",
     "test:js": "wp-scripts test-unit-js",
     "test:php": "wp-env --config .wp-env.tests.json run cli --env-cwd=wp-content/plugins/gutenberg-sync-engines vendor/bin/phpunit",

@@ -6,6 +6,9 @@ on:
       - trunk
   pull_request:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -94,7 +97,7 @@ jobs:
       # directly (no WordPress). The automerge-php suite does NOT — see
       # its step below.
       - name: Set up PHP for phpcs and y-php
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2.37.2
         with:
           php-version: '8.4'
           extensions: mbstring

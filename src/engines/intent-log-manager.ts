@@ -40,7 +40,7 @@ import {
 	createIntentLogUndoManager,
 	type IntentLogUndoManager,
 } from './intent-log-undo';
-import { getProviderCreators } from '../framework';
+import { getProviderCreators, LOCAL_UNDO_IGNORED_ORIGIN } from '../framework';
 import type { EngineDocument } from './intent-log/engine-types';
 import type {
 	CollectionHandlers,
@@ -1923,6 +1923,11 @@ export function createIntentLogManager( debug = false ): SyncManager {
 				undoManager?.stopCapturing();
 			}
 
+			// core-data's `undoIgnore` edits and save responses carry this
+			// origin: they sync like any edit but never become undo steps
+			// (the Yjs undo manager does not track the origin either).
+			const undoable = LOCAL_UNDO_IGNORED_ORIGIN !== origin;
+
 			/*
 			 * Entity property capture: an edits object carries a property
 			 * only when the editor changed it, so presence IS intent (unlike
@@ -2027,7 +2032,7 @@ export function createIntentLogManager( debug = false ): SyncManager {
 				}
 			}
 
-			if ( propertyEnvelopes.length > 0 ) {
+			if ( undoable && propertyEnvelopes.length > 0 ) {
 				undoManager?.noteAuthored( state.session, propertyEnvelopes );
 			}
 
@@ -2116,7 +2121,9 @@ export function createIntentLogManager( debug = false ): SyncManager {
 					const envelopes = state.session.authorBatch(
 						derived.intents
 					);
-					undoManager?.noteAuthored( state.session, envelopes );
+					if ( undoable ) {
+						undoManager?.noteAuthored( state.session, envelopes );
+					}
 				} finally {
 					state.capturing = false;
 				}

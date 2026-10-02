@@ -52,7 +52,7 @@ const repoUrl = ( () => {
 	} catch {
 		// No origin remote — fall through.
 	}
-	return 'https://github.com/Automattic/gutenberg-sync-engines';
+	return 'https://github.com/WordPress/gutenberg-sync-engines';
 } )();
 
 /**

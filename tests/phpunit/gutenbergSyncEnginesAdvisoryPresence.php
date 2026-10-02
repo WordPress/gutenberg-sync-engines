@@ -351,6 +351,84 @@ class Tests_Collaboration_GutenbergSyncEnginesAdvisoryPresence extends WP_UnitTe
 		$this->assertSame( array(), $this->beat( 'tok-a' )['signals'] );
 	}
 
+	/**
+	 * Every answer hands a tab its peers' tokens, so a token must not work
+	 * for anyone but the user it was first recorded for.
+	 *
+	 * @dataProvider data_tab_list_stores
+	 *
+	 * @param bool $presence_api Whether the Presence API holds the tab list.
+	 */
+	public function test_a_peers_token_is_refused_for_another_user( bool $presence_api ) {
+		Fake_Presence_API::$enabled = $presence_api;
+		$room                       = $this->room();
+
+		// The victim's tab, then the other editor's, which sends it an offer.
+		$this->beat( 'tok-a', array( 'client_id' => 11 ) );
+		wp_set_current_user( self::$other_editor_id );
+		$peers = $this->beat(
+			'tok-b',
+			array(
+				'signals' => array(
+					array(
+						'to'   => 'tok-a',
+						'kind' => 'offer',
+						'data' => 'sdp-offer',
+					),
+				),
+			)
+		)['peers'];
+		$this->assertSame( array( 'tok-a' ), array_column( $peers, 'token' ) );
+
+		// The other editor presents the victim's token: no answer (so no
+		// mailbox), nothing filed in the victim's name, no leave, no join.
+		$this->assertSame(
+			array(),
+			$this->beat(
+				'tok-a',
+				array(
+					'signals' => array(
+						array(
+							'to'   => 'tok-b',
+							'kind' => 'answer',
+							'data' => 'forged',
+						),
+					),
+				)
+			)
+		);
+		$leave = new WP_REST_Request( 'POST', '/gutenberg-sync-engines/v1/advisory/leave' );
+		$leave->set_param( 'room', $room );
+		$leave->set_param( 'token', 'tok-a' );
+		$this->presence->handle_leave( $leave );
+		$this->assertFalse( $this->presence->note_sync_request( $room, 'tok-a', 22 ) );
+
+		$answer = $this->beat( 'tok-b' );
+		$this->assertSame( array(), $answer['signals'], 'Nothing was filed in the victim\'s name' );
+		$this->assertSame(
+			array(
+				array(
+					'token'     => 'tok-a',
+					'client_id' => 11,
+					'user_id'   => self::$editor_id,
+				),
+			),
+			$answer['peers'],
+			'The victim\'s tab is still there, still theirs'
+		);
+
+		// The victim still gets the offer.
+		wp_set_current_user( self::$editor_id );
+		$this->assertSame( array( 'sdp-offer' ), array_column( $this->beat( 'tok-a' )['signals'], 'data' ) );
+	}
+
+	public function data_tab_list_stores(): array {
+		return array(
+			'transient'    => array( false ),
+			'presence api' => array( true ),
+		);
+	}
+
 	public function test_with_the_presence_api_each_tab_is_its_own_row_in_its_table() {
 		Fake_Presence_API::$enabled = true;
 		$room                       = $this->room();

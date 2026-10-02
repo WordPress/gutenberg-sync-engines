@@ -281,6 +281,7 @@ class Tests_Collaboration_WpWebSocketAccessToken extends WP_UnitTestCase {
 			array(
 				'cookie'       => '',
 				'access_token' => true,
+				'rooms'        => WP_WebSocket_Access_Token::grants( $this->room() ),
 				'user_id'      => self::$editor_id,
 			),
 			$accepted

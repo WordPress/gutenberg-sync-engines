@@ -9,8 +9,8 @@ polling, SSE, or WebSocket.
 
 The Gutenberg subtree includes the entity sync API merged in
 `05068f8ec12b665a01fcd66d350cd4579d94ff22` ([PR #83410](https://github.com/WordPress/gutenberg/pull/83410)).
-The bundled framework commit is `89bea5705f66172e80a7b0c88598052d378595ce`:
-four framework commits above trunk `0d3eefe596560204e99bb1047df65e2e666a9ad1`.
+`gutenberg-pin.json` at the repository root records the bundled framework
+commit and the trunk it sits on.
 The source is committed under `gutenberg/`, so framework changes are visible
 in this repository.
 See [the framework workflow](gutenberg-subtree.md) for updates.
