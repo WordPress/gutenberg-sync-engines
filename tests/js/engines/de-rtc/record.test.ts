@@ -68,6 +68,20 @@ describe( 'de-rtc record', () => {
 		record.apply( { title: undefined }, 'x' );
 		expect( record.keys() ).not.toContain( 'title' );
 	} );
+
+	it( 'treats term IDs as a set but keeps the order of meta lists', () => {
+		const record = createDeRtcRecord();
+		record.apply( { categories: [ 3, 1, 2 ] }, 'x' );
+		expect( record.apply( { categories: [ 1, 2, 3 ] }, 'x' ) ).toBe(
+			false
+		);
+
+		record.apply( { meta: { gallery_ids: [ 3, 1, 2 ] } }, 'x' );
+		expect(
+			record.apply( { meta: { gallery_ids: [ 1, 2, 3 ] } }, 'x' )
+		).toBe( true );
+		expect( record.get( 'meta' ) ).toEqual( { gallery_ids: [ 1, 2, 3 ] } );
+	} );
 } );
 
 describe( 'editor changes into the record (post rules)', () => {
