@@ -59,7 +59,7 @@ PHP implementation must reproduce these bytes exactly. The JS reference
 implementation lives beside the vectors
 (`tests/js/engines/intent-log/genesis-sync-id.js`); the editor never mints
 genesis ids itself — the server does, and the build-free stamper script
-(`includes/engines/intent-log/sync-id.js`) mirrors it with WebCrypto.
+(`includes/shared/sync-id.js`) mirrors it with WebCrypto.
 
 Lifecycle: duplication remints; 1:1 transforms carry the ID; split keeps the
 ID on the first half and mints fresh for the second (stamping `syncParent`);

@@ -197,7 +197,12 @@ The framework/plugin split is complete: the framework ships **neither** engines
 ## Repo layout
 
 - `gutenberg-sync-engines.php` — plugin entry.
-- `includes/` — server PHP: `engines/{intent-log,yjs-server,de-rtc}/`,
+- `includes/` — server PHP: `engines/{intent-log,yjs-server,de-rtc}/`
+  (one folder per engine; none uses another's classes), `shared/` (code
+  the base provides to more than one engine: `WP_Sync_Block_Identity`,
+  the genesis block-id scheme `WP_Intent_Log_Planner::genesis_sync_id`
+  delegates to; the editor-side block-id stamper `sync-id.js`; the
+  genesis property seed `WP_Sync_Post_Genesis_Props`),
   `transports/{...,websocket/}`, `admin/` (the Collaboration settings screen),
   `storage/` (the room storage tables: `class-wp-sync-table-schema.php`
   — names, definition, create/upgrade/drop, loaded by the plugin entry
@@ -287,7 +292,7 @@ The framework/plugin split is complete: the framework ships **neither** engines
     simulator (`simulator.js`, the spec's validation oracle) and the JS
     reference `genesisSyncId` (`genesis-sync-id.js`, on `node:crypto`; the
     editor never mints genesis ids — the server and the build-free stamper
-    `includes/engines/intent-log/sync-id.js` do). Both are type-checked
+    `includes/shared/sync-id.js` do). Both are type-checked
     too (only the `*.test.js` files and Jest setup are excluded). Its
     vector generators are in `tests/tools/`. One file is client-only:
     `client.js` (the replica —
@@ -295,10 +300,16 @@ The framework/plugin split is complete: the framework ships **neither** engines
     coverage, since the server plans with the planner directly. It is still
     core, still frozen-by-default; changes there are additive and covered by
     `tests/js/engines/intent-log/client.test.js`.
-  - `engines/yjs/` — the shared Yjs client modules (CRDT doc schema,
-    snapshot helpers, `undo.ts`, vendored `y-utilities/` — the latter ignored
-    by eslint), inherited from the retired yjs-relay engine and used by
-    yjs-server.
+  - `engines/yjs-server/` — the yjs-server engine, WITH its Yjs client
+    modules (CRDT doc schema, snapshot helpers, `undo.ts`, vendored
+    `y-utilities/` — the latter ignored by eslint), inherited from the
+    retired yjs-relay engine. No other engine uses Yjs: de-rtc keeps a
+    plain record (`engines/de-rtc/record.ts`), intent-log its own
+    document.
+  - `shared/` — client code the base provides to more than one engine
+    (no engine folder imports another engine's folder):
+    `shared/awareness-sync.ts` — presence bridging used by all three
+    engines.
   - `providers/{http-polling,sse,sse-daemon,websocket}/` — transports
     (sse and sse-daemon reuse the polling manager, swapping only its
     receive half for the stream).
@@ -842,7 +853,7 @@ they exist so a failure is observable without re-instrumenting:
   (`@wordpress/prettier-config`).
 - The frozen `src/engines/intent-log/**` core is excluded from prettier
   (eslint still runs it, with relaxed rules, and `tsc` type-checks it via
-  `checkJs` + JSDoc); the vendored `src/engines/yjs/y-utilities/**` is
+  `checkJs` + JSDoc); the vendored `src/engines/yjs-server/y-utilities/**` is
   excluded from both — leave them alone unless deliberately syncing the
   cross-language contract (JSDoc-only edits to the core are fine). The
   generated test vectors (`tests/js/engines/*/test-vectors/`,
@@ -914,7 +925,7 @@ applies.
   intents over the accepted log (`src/engines/intent-log-undo.ts` — a
   still-pending unit CANCELS with an outbox removal plus a wire-chasing
   `cancel` row, a settled unit inverts; inverses derive only from
-  ACCEPTED rows), yjs-server via the shared `src/engines/yjs/undo.ts`,
+  ACCEPTED rows), yjs-server via `src/engines/yjs-server/undo.ts`,
   and de-rtc via revert-edit undo (reverts derived from the client's
   own accepted canonical rows, proposed as ordinary new changes).
 - **Conflict review is cross-engine**: intent-log through its bespoke
@@ -957,7 +968,7 @@ applies.
   `WP_De_RTC_Block_Identity` stamps genesis deterministically and
   engine-unaware writers' blocks, `adopt()` lines an id-less copy up
   with its base by path, and the editor-side stamper in
-  `includes/engines/intent-log/sync-id.js` serves de-rtc too) and
+  `includes/shared/sync-id.js` serves de-rtc too) and
   `WP_De_RTC_Identity_Merge` three-way merges by that identity at every
   depth BEFORE the frozen positional core (which stays the fallback
   whenever identity declines: id-less blocks, classic content between

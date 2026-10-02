@@ -4,7 +4,7 @@
  *
  * The editor never mints genesis ids from this code: the server does
  * (`WP_Intent_Log_Planner::genesis_sync_id`), and the build-free stamper
- * script (`includes/engines/intent-log/sync-id.js`) mirrors it with
+ * script (`includes/shared/sync-id.js`) mirrors it with
  * WebCrypto. This module exists for the Node-side tooling only — the
  * simulator, the Jest harness, the vector generators, and the e2e specs —
  * which is why it can lean on `node:crypto` for a synchronous, exact

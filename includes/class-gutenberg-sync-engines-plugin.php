@@ -130,8 +130,11 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Plugin' ) ) {
 			require_once GUTENBERG_SYNC_ENGINES_PATH . 'includes/interface-wp-sync-tab-list-backend.php';
 			require_once GUTENBERG_SYNC_ENGINES_PATH . 'includes/class-wp-sync-presence-api-tab-list-backend.php';
 
+			// Code the base provides to more than one engine.
+			require_once GUTENBERG_SYNC_ENGINES_PATH . 'includes/shared/class-wp-sync-block-identity.php';
+			require_once GUTENBERG_SYNC_ENGINES_PATH . 'includes/shared/class-wp-sync-post-genesis-props.php';
+
 			$engines = GUTENBERG_SYNC_ENGINES_PATH . 'includes/engines/';
-			require_once $engines . 'class-wp-sync-post-genesis-props.php';
 			require_once $engines . 'intent-log/class-wp-intent-log-document.php';
 			require_once $engines . 'intent-log/class-wp-intent-log-planner.php';
 			require_once $engines . 'intent-log/class-wp-intent-log-rich-text.php';
@@ -453,10 +456,10 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Plugin' ) ) {
 			if ( ! in_array( $engines->get_engine_slug_for_room( '' ), array( 'intent-log', 'de-rtc' ), true ) ) {
 				return;
 			}
-			$stamper = GUTENBERG_SYNC_ENGINES_PATH . 'includes/engines/intent-log/sync-id.js';
+			$stamper = GUTENBERG_SYNC_ENGINES_PATH . 'includes/shared/sync-id.js';
 			wp_enqueue_script(
-				'gutenberg-sync-engines-intent-log-stamper',
-				GUTENBERG_SYNC_ENGINES_URL . 'includes/engines/intent-log/sync-id.js',
+				'gutenberg-sync-engines-block-identity-stamper',
+				GUTENBERG_SYNC_ENGINES_URL . 'includes/shared/sync-id.js',
 				array( 'wp-data' ),
 				file_exists( $stamper ) ? (string) filemtime( $stamper ) : GUTENBERG_SYNC_ENGINES_VERSION,
 				true

@@ -16,7 +16,7 @@ if ( ! class_exists( 'WP_De_RTC_Block_Identity' ) ) {
 	 *
 	 * - GENESIS (deterministic): blocks of the saved post get ids computed
 	 *   from (postId, 0, block path) — the exact function the editor-side
-	 *   stamper (includes/engines/intent-log/sync-id.js) and the intent-log
+	 *   stamper (includes/shared/sync-id.js) and the intent-log
 	 *   room genesis use, so every independent minter agrees without any
 	 *   coordination.
 	 * - CREATION (random): blocks that reach the server without an id
@@ -59,13 +59,13 @@ if ( ! class_exists( 'WP_De_RTC_Block_Identity' ) ) {
 		 * @return string Content with every block identified.
 		 */
 		public static function stamp_genesis( string $content, int $post_id ): string {
-			if ( $post_id <= 0 || ! class_exists( 'WP_Intent_Log_Planner' ) ) {
+			if ( $post_id <= 0 ) {
 				return $content;
 			}
 			return self::stamp(
 				$content,
 				static function ( array $path ) use ( $post_id ): string {
-					return WP_Intent_Log_Planner::genesis_sync_id( $post_id, 0, $path );
+					return WP_Sync_Block_Identity::genesis_sync_id( $post_id, 0, $path );
 				}
 			);
 		}

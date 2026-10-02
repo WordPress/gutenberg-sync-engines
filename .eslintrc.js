@@ -16,7 +16,7 @@ module.exports = {
 		'gutenberg/**',
 		'build/**',
 		'vendor/**',
-		'src/engines/yjs/y-utilities/**',
+		'src/engines/yjs-server/y-utilities/**',
 	],
 	settings: {
 		'import/resolver': {

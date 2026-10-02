@@ -11,8 +11,8 @@ import { describe, expect, it } from '@jest/globals';
 import {
 	docContainsSnapshot,
 	encodeDocSnapshot,
-} from '../../../../src/engines/yjs/snapshot';
-import { createYjsDoc } from '../../../../src/engines/yjs/doc';
+} from '../../../../src/engines/yjs-server/snapshot';
+import { createYjsDoc } from '../../../../src/engines/yjs-server/doc';
 
 describe( 'encodeDocSnapshot / docContainsSnapshot', () => {
 	const TEXT_KEY = 'text';

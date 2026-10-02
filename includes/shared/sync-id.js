@@ -11,7 +11,7 @@
  *
  * - GENESIS (deterministic): blocks of a freshly loaded, unedited post get
  *   ids computed from (postId, 0, block path) — the exact function the
- *   server's room genesis uses (WP_Intent_Log_Planner::genesis_sync_id;
+ *   server's room genesis uses (WP_Sync_Block_Identity::genesis_sync_id;
  *   frozen cross-language vectors in the sync package's
  *   test-vectors/sync-id.json). Every independent minter — each open tab,
  *   the server, a tab that never connects — derives the SAME ids from the
