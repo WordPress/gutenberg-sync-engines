@@ -149,20 +149,7 @@ if ( ! class_exists( 'WP_WebSocket_Access_Token' ) ) {
 		 * @return string The issuer.
 		 */
 		public static function issuer(): string {
-			$issuer = strtolower( untrailingslashit( (string) preg_replace( '#^[a-z][a-z0-9+.-]*://#i', '', network_site_url() ) ) );
-
-			/**
-			 * Filters the name of this install in WebSocket access tokens.
-			 * Set a fixed value when one install answers on several host
-			 * names, so its tabs share one roster on a relay.
-			 *
-			 * @since n.e.x.t
-			 *
-			 * @param string $issuer The issuer.
-			 */
-			$issuer = apply_filters( 'wp_sync_websocket_access_token_issuer', $issuer );
-
-			return is_string( $issuer ) ? $issuer : '';
+			return strtolower( untrailingslashit( (string) preg_replace( '#^[a-z][a-z0-9+.-]*://#i', '', network_site_url() ) ) );
 		}
 
 		/**
@@ -306,7 +293,8 @@ if ( ! class_exists( 'WP_WebSocket_Access_Token' ) ) {
 				! is_array( $claims )
 				|| ! is_int( $claims['user_id'] ?? null ) || $claims['user_id'] < 1
 				|| ! is_int( $claims['blog_id'] ?? null )
-				|| ! is_string( $claims['iss'] ?? '' )
+				// No `iss` (a token from before it) reads as ''.
+				|| ( array_key_exists( 'iss', $claims ) && ! is_string( $claims['iss'] ) )
 				|| ! is_int( $claims['iat'] ?? null )
 				|| ! is_int( $claims['exp'] ?? null )
 				|| ! is_array( $claims['rooms'] ?? null )

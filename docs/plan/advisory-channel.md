@@ -357,11 +357,12 @@ shared secret — the shape every JWT library parses. Claims:
 -   `user_id`, `blog_id`: the signed-in user and the site (multisite
     blog id; 1 on a single site). The names match the VIP real-time
     collaboration server's tokens on purpose.
--   `iss`: the install, the network's site URL without its scheme or
-    trailing slash, in lowercase (`example.com`, `example.com/blog`;
-    the `wp_sync_websocket_access_token_issuer` filter can fix it). A
-    stored random id would be copied into a staging copy of the
-    database; the address is not.
+-   `iss` (issuer, the standard JWT claim) the network site URL without
+    its scheme or trailing slash, in lowercase (`example.com`,
+	`example.com/blog`). A stored random id would be copied into a
+	staging copy of the database. Tokens from plugin versions before
+	it have no `iss`; read a missing one as `''` (so those installs
+	still share rosters) and refuse any value that is not a string.
 
     A relay keys its rosters by `iss`, `blog_id`, AND room, never by
     room alone. Room names are not site-qualified and every single site

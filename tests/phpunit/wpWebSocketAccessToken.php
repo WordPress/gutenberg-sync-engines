@@ -157,6 +157,7 @@ class Tests_Collaboration_WpWebSocketAccessToken extends WP_UnitTestCase {
 			'alg HS512'          => $this->forge( $claims, array( 'alg' => 'HS512' ) ),
 			'other site'         => $this->forge( array_merge( $claims, array( 'blog_id' => 99 ) ) ),
 			'install not a text' => $this->forge( array_merge( $claims, array( 'iss' => 7 ) ) ),
+			'install null'       => $this->forge( array_merge( $claims, array( 'iss' => null ) ) ),
 			'no user'            => $this->forge( array_merge( $claims, array( 'user_id' => 0 ) ) ),
 			'rooms not a list'   => $this->forge( array_merge( $claims, array( 'rooms' => 'postType/post:1' ) ) ),
 			'from the future'    => $this->forge( array_merge( $claims, array( 'iat' => $now + 3600 ) ) ),
@@ -198,13 +199,6 @@ class Tests_Collaboration_WpWebSocketAccessToken extends WP_UnitTestCase {
 		add_filter( $hook, $filter );
 		$this->assertSame( 'example.com/blog', WP_WebSocket_Access_Token::issuer() );
 		remove_filter( $hook, $filter );
-
-		$fixed = static function () {
-			return 'one-install';
-		};
-		add_filter( 'wp_sync_websocket_access_token_issuer', $fixed );
-		$this->assertSame( 'one-install', WP_WebSocket_Access_Token::issuer() );
-		remove_filter( 'wp_sync_websocket_access_token_issuer', $fixed );
 	}
 
 	public function test_the_rooms_claim_names_the_post_room_and_the_collection_rooms() {

@@ -66,9 +66,9 @@ Every install that holds the secret can make tokens the relay accepts,
 including tokens that name another install. Share the relay and its
 secret only between installs that trust each other.
 
-If one install answers on several addresses, give it one fixed name
-with the `wp_sync_websocket_access_token_issuer` filter, so all its tabs
-share the same lists.
+Update every install that shares a relay. Tokens from older plugin
+versions do not name their install, so the relay still puts all such
+installs in one list, as it did before.
 
 ## Trying it locally
 

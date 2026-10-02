@@ -219,4 +219,10 @@ describe( 'advisory relay shared by two installs', () => {
 			)
 		).rejects.toThrow( 'refused 403' );
 	} );
+
+	test( 'refuses an install name that is not a string, as verify() does', async () => {
+		await expect(
+			openTab( mint( { iss: null } ), 1, 'Mallory' )
+		).rejects.toThrow( 'refused 403' );
+	} );
 } );
