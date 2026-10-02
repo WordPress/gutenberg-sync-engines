@@ -23,9 +23,9 @@ use these terms freely; none of them is standard outside this project
   channel's coverage answer over that link.
 - **Access token** — a signed, two-minute pass WordPress hands an editor tab
   for its socket handshake when a `WP_SYNC_WEBSOCKET_ACCESS_TOKEN_SECRET` is
-  configured: it names the user, the site, and the rooms the tab may
-  follow, and any server sharing the secret can check it without
-  asking WordPress. It is what lets a host run its own relay
+  configured: it names the user, the install, the site, and the rooms
+  the tab may follow, and any server sharing the secret can check it
+  without asking WordPress. It is what lets a host run its own relay
   (`examples/advisory-relay/`) instead of the sync daemon.
 - **Signaling** — how tabs find each other and exchange the WebRTC
   handshake: a per-tab presence token and a mailbox, both riding the

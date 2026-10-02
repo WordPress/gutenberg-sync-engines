@@ -12,6 +12,11 @@ release, which the release script generates from the commit history.
 
 ### Added
 
+- WebSocket access tokens name their install (`iss`), so the example
+  advisory relay keeps separate installs that share it apart. Update
+  every install that shares a relay: tokens from older versions have no
+  `iss`, and the relay still groups those installs together
+  ([#126](https://github.com/WordPress/gutenberg-sync-engines/issues/126)).
 - New `sse-daemon` transport: the same receive stream as `sse`, written
   by the sync daemon instead of a PHP worker, so a tab holds no worker
   and the stream passes proxies that block WebSocket upgrades
