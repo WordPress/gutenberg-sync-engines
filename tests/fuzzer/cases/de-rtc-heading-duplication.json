@@ -1,0 +1,109 @@
+{
+  "name": "de-rtc duplicates a new heading during concurrent edits",
+  "sourceRevision": "c44737cf403731d140ff3db6b8ef410a6465e577",
+  "replay": "npm run fuzz -- --combos=de-rtc/http-polling --seed-list=31 --steps=20 --users=3 --profile=concurrency --burst-rate=0.6 --no-lifecycle --trace=retain-on-failure",
+  "observed": {
+    "sweep": "failed",
+    "recheck": "failed",
+    "step": 9,
+    "authoredHeadingCount": 1,
+    "convergedHeadingCount": 2,
+    "participantsAtFailure": 2,
+    "leaveOrRejoinBeforeFailure": false,
+    "reloadBeforeFailure": false,
+    "conflictCardResolutionBeforeFailure": false,
+    "finalHarnessReplay": "failed with the same duplication at step 9"
+  },
+  "trigger": [
+    "One editor types into a nested paragraph.",
+    "The other editor adds a heading and a nested group before the next convergence check.",
+    "The next sync request from that editor is delayed by 1408 ms."
+  ],
+  "evidence": {
+    "proposals": [
+      {
+        "requestStartedAt": "2026-10-02T18:18:52.632Z",
+        "proposal": "p-435997066-14",
+        "baseVersion": "v22",
+        "headingIds": [
+          null
+        ],
+        "acceptedVersion": "v25"
+      },
+      {
+        "requestStartedAt": "2026-10-02T18:18:53.468Z",
+        "proposal": "p-1244357174-12",
+        "baseVersion": "v25",
+        "headingIds": [
+          "76a2a5a1-9deb-480e-9db4-4339d359699a"
+        ],
+        "acceptedVersion": "v26"
+      },
+      {
+        "requestStartedAt": "2026-10-02T18:18:54.259Z",
+        "proposal": "p-435997066-15",
+        "baseVersion": "v22",
+        "headingIds": [
+          "83a162c8-a7cb-411f-957f-71727daf1f87"
+        ],
+        "acceptedVersion": "v27"
+      }
+    ],
+    "serverSnapshots": [
+      {
+        "version": "v25",
+        "headingIds": [
+          null
+        ]
+      },
+      {
+        "version": "v26",
+        "headingIds": [
+          "76a2a5a1-9deb-480e-9db4-4339d359699a"
+        ]
+      },
+      {
+        "version": "v27",
+        "headingIds": [
+          "83a162c8-a7cb-411f-957f-71727daf1f87",
+          "76a2a5a1-9deb-480e-9db4-4339d359699a"
+        ]
+      }
+    ]
+  },
+  "finding": "The first accepted copy has no block ID. The two browsers subsequently submit different IDs for that same heading. The server later returns both copies.",
+  "investigation": "Check the ordering between local block ID assignment in includes/shared/sync-id.js and proposal capture in src/engines/de-rtc/session.ts. The trace proves identity disagreement; it does not establish a complete fix.",
+  "knownIssueComparison": "Issue #123 also concerns de-rtc duplication, but its reported trigger is a returning editor over WebSocket. This failure uses polling with no leave/rejoin. A shared underlying cause is not ruled out.",
+  "artifacts": {
+    "sweep": "tests/fuzzer/artifacts/fuzz-2026-10-02-18-09-/de-rtc--http-polling/sweep-report.json",
+    "recheck": "tests/fuzzer/artifacts/fuzz-2026-10-02-18-09-/de-rtc--http-polling/recheck-report.json",
+    "trace": "tests/fuzzer/artifacts/fuzz-2026-10-02-18-09-/de-rtc--http-polling/recheck-artifacts/collaboration-fuzz-Collabo-cc5d3-de-rtc-http-polling-seed-31-chromium/trace.zip",
+    "finalHarnessReplay": "tests/fuzzer/artifacts/fuzz-2026-10-02-20-29-39-116Z"
+  },
+  "resolution": {
+    "change": "Assign creation IDs while capturing editor blocks, before record listeners can send a proposal. Capture and the deferred editor stamper both use the UUID Gutenberg assigned to the new block. Preserve existing IDs and reserve creation IDs for their original blocks when copies precede them.",
+    "regressionTests": [
+      "tests/js/engines/de-rtc/engine.test.ts",
+      "tests/js/engines/de-rtc/creation-identity.test.js"
+    ],
+    "validation": {
+      "javascriptTests": "760 passed",
+      "typecheck": "passed",
+      "build": "passed",
+      "seed31Replays": [
+        {
+          "result": "passed",
+          "artifacts": "tests/fuzzer/artifacts/fuzz-2026-10-02-20-47-28-605Z"
+        },
+        {
+          "result": "passed",
+          "artifacts": "tests/fuzzer/artifacts/fuzz-2026-10-02-20-48-39-020Z"
+        }
+      ],
+      "smoke": {
+        "result": "6 passed across all three engines over HTTP polling",
+        "artifacts": "tests/fuzzer/artifacts/fuzz-2026-10-02-20-49-55-696Z"
+      }
+    }
+  }
+}

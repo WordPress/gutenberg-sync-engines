@@ -14,13 +14,13 @@ npm run fuzz
 ```
 
 That runs the default matrix — `{intent-log, yjs-server, de-rtc} ×
-{http-polling, sse, websocket}` — with 5 seeds per combo,
+{http-polling, sse, sse-daemon, websocket}` — with 5 seeds per combo,
 12 actions per seed, 2 collaborating browsers. It starts the TESTS wp-env
 (`.wp-env.tests.json`) if needed, flips the engine/transport per combo,
 manages the websocket daemon, rechecks failures, and writes a summary.
 Exit code is non-zero when any failure reproduces.
 
-Websocket combos need host port 8787 for a daemon serving the TESTS
+Websocket and sse-daemon combos need host port 8787 for a daemon serving the TESTS
 database, so the runner removes the dev env's auto-started daemon
 (`wp-sync-ws-daemon`, which serves the DEV database) for the duration of
 the run; `npm run env start` or `npm run rtc:ws` brings it back.
@@ -29,6 +29,8 @@ SSE combos need the Redis container the tests env's `afterStart` hook
 starts beside the site; the runner refuses an sse combo without it, since
 tabs would silently receive over polling and certify nothing. Sync faults
 stay on for sse: a failed stream request is exactly the fallback path.
+Both SSE transports must open a stream and receive an event during peer
+discovery. A run that only uses polling fallback fails this check.
 
 Common variations:
 
@@ -54,7 +56,8 @@ npm run fuzz -- --profile=concurrency --burst-rate=0.5   # same-block
 `--profile` tilts the seeded action distribution (`undo` or `concurrency`)
 without removing the rest of the grammar. The profile is part of the seed's
 identity: replay a profiled failure with the same `--profile` flag (the
-summary's replay commands include it).
+summary's replay commands include it). Replay commands also keep the user
+count, fault and burst rates, lifecycle switches, and any CPU slowdown.
 
 `--help` lists everything. Prerequisites are the standard repo setup
 (README/AGENTS.md): plugin `npm install` + `npm run build`, the subtree
@@ -72,7 +75,7 @@ few durable invariants instead of many brittle UI details.*
 
 - **Seeded determinism.** One test = one seed. The seed drives initial
   content, every action, the acting user, milestone placement, and fault
-  injection. Failing seeds replay exactly.
+  injection. Browser timing can still vary between replays.
 - **Bounded action grammar.** Block insert/edit/move/delete, nested
   groups/lists/quotes, headings, title edits, real keystrokes (typing
   exercises capture paths that programmatic edits bypass — this is what
@@ -103,7 +106,10 @@ few durable invariants instead of many brittle UI details.*
   - *Persistence*: a mid-run save milestone plus a final
     save → reload → reconverge round-trip. A server-authoritative engine
     must rebuild the same document for a fresh session; the REST title must
-    match the converged state.
+    match the converged state. The full saved content must also match,
+    after parsing and serializing both copies with the editor. A live room
+    can hide a stale database copy during reload, so this check reads the
+    saved post separately.
   - *Session lifecycle*: a seeded mid-run reload of a random participant;
     with `--users=3`, a seeded late join that must be able to *contribute*,
     not just receive.
@@ -171,7 +177,39 @@ tests/fuzzer/
 ```
 
 Every test attaches `fuzz-run.json` — the full seeded action/fault/milestone
-trace — so a failure is diagnosable without re-running it.
+trace and effective run settings. An action-start entry also identifies an
+action that timed out before it could return its result. Empty or incomplete
+Playwright reports fail the runner; they cannot count as passing campaigns.
+When duplication is detected, the attachment also contains the shared state.
+Conflict cards are resolved one at a time through a reachable button; card
+positions are read again after each choice.
+
+Run the runner's focused checks with `node --test tests/fuzzer/runner.test.mjs`.
+
+`cases/` keeps reproduction settings and filtered evidence for confirmed
+product failures. These are investigation records, not passing tests. See
+[`de-rtc-heading-duplication.json`](cases/de-rtc-heading-duplication.json)
+for a duplicate block reproduced without a participant leaving or rejoining.
+
+## Choosing a campaign
+
+Start with `fuzz:quick` to check the environment and basic editing. Then
+change one source of stress at a time:
+
+-   Use `--profile=concurrency --burst-rate=0.6 --no-lifecycle` to make edits
+    arrive before earlier edits settle. Keep faults off for the first run,
+    then add them to test retries.
+-   Use `--profile=undo` to test changes to local history while peers edit.
+-   Use `--users=3` to test a new participant after edits already exist.
+-   Test all four transports. A passing polling run does not prove that a
+    stream reconnect or socket reconnect works.
+-   Use `RTC_FUZZ_CPU_THROTTLE=5` when a failure depends on slow editor updates.
+
+Keep the original failing run before reducing steps or changing settings.
+The same seed chooses the same random values, but browser timing and
+document-dependent action choices can differ. A replay is evidence of
+repeatability, not a guarantee of the same timing. Reducing `--steps` also
+changes milestone placement, so it does not preserve the original prefix.
 
 The spec reuses the subtree's collaboration fixtures
 (`gutenberg/test/e2e/specs/editor/collaboration/fixtures/`) and the
@@ -194,7 +232,7 @@ including the worktree duplicate-mount handling). Engine/transport are set
   signature is guaranteed to match, not the exact schedule.
 - Documented engine capability gaps are excluded up front: the runner's
   `ENGINE_CAPABILITIES` map (run.mjs) disables actions an engine cannot
-  sync (currently de-rtc's missing title sync) so lanes measure real
+  sync (currently none; all three engines sync titles) so lanes measure real
   defects, not known limitations. Extend the map when an engine's
   documented capabilities change.
 - Before filing anything, check the known-issue families in AGENTS.md —

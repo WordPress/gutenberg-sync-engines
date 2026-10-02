@@ -73,7 +73,7 @@ const DEFAULT_ENGINES = [ 'intent-log', 'yjs-server', 'de-rtc' ];
  * doc that documents the gap.
  */
 const ENGINE_CAPABILITIES = {};
-const DEFAULT_TRANSPORTS = [ 'http-polling', 'sse', 'websocket' ];
+const DEFAULT_TRANSPORTS = [ 'http-polling', 'sse', 'sse-daemon', 'websocket' ];
 
 const CLI_OPTIONS = {
 	engines: { type: 'string' },
@@ -150,7 +150,7 @@ function printUsage() {
 			'Usage: npm run fuzz -- [options]',
 			'',
 			'  --engines=a,b        Engines to sweep (default: intent-log,yjs-server,de-rtc)',
-			'  --transports=a,b     Transports to sweep (default: http-polling,sse,websocket)',
+			'  --transports=a,b     Transports to sweep (default: http-polling,sse,sse-daemon,websocket)',
 			'  --combos=e/t,...     Explicit engine/transport pairs (overrides the cross product)',
 			'  --seeds=N            Seeds per combo (default: 5)',
 			'  --seed-start=N       First seed (default: 1)',
@@ -162,6 +162,9 @@ function printUsage() {
 			'  --shrink             Bisect each reproducible failure to a minimal --steps (one exemplar per signature; a shrunk run is seeded fresh, so only the failure signature is guaranteed to match)',
 			'  --profile=NAME       Action-weighting profile: undo | concurrency (default: uniform grammar; replay with the same profile)',
 			'  --no-faults          Disable sync fault injection',
+			'  --fault-rate=N       Chance of a sync fault per action (0–1)',
+			'  --burst-rate=N       Chance of several actions before a convergence check (0–1)',
+			'  --no-lifecycle       Disable participant leave/rejoin milestones',
 			'  --no-reload          Disable mid-run and final reload milestones',
 			'  --headed             Headed browsers',
 			'  --out=DIR            Artifact root (default: tests/fuzzer/artifacts)',
@@ -540,9 +543,17 @@ function failureSignature( message ) {
  * Flatten the Playwright JSON report into per-seed results.
  *
  * @param {string} reportPath Path to the JSON report.
+ * @param {Array}  seeds      Expected seeds; missing tests are a harness error.
  */
-async function readReport( reportPath ) {
+export async function readReport( reportPath, seeds ) {
 	const report = JSON.parse( await fs.readFile( reportPath, 'utf8' ) );
+	if ( report.errors?.length ) {
+		throw new Error(
+			`Playwright harness failed: ${ report.errors
+				.map( ( error ) => error.message )
+				.join( '\n' ) }`
+		);
+	}
 	const results = [];
 	const walkSuites = ( suites ) => {
 		for ( const suite of suites || [] ) {
@@ -569,7 +580,70 @@ async function readReport( reportPath ) {
 		}
 	};
 	walkSuites( report.suites );
+	if (
+		results.length !== seeds.length ||
+		seeds.some(
+			( seed ) =>
+				results.filter(
+					( result ) => String( result.seed ) === String( seed )
+				).length !== 1
+		)
+	) {
+		throw new Error(
+			`Incomplete Playwright report: expected seeds ${ seeds.join(
+				','
+			) }, got ${ results.map( ( result ) => result.seed ).join( ',' ) }`
+		);
+	}
 	return results;
+}
+
+/**
+ * Keep every action/schedule setting in the replay command. A seed alone
+ * does not identify a run, and inherited RTC_FUZZ settings matter too.
+ *
+ * @param {Object} args    Parsed CLI options.
+ * @param {Object} example Failure's combo and seed.
+ * @param {number} steps   Step count to replay.
+ * @param {Object} env     Inherited environment.
+ */
+export function replayCommand( args, example, steps, env = process.env ) {
+	const quote = ( value ) =>
+		`'${ String( value ).replaceAll( "'", "'\\''" ) }'`;
+	const inherited = Object.entries( env )
+		.filter( ( [ name ] ) =>
+			/^RTC_FUZZ_(CPU_THROTTLE|CONVERGENCE_TIMEOUT_MS|DISCOVERY_TIMEOUT_MS|TEST_TIMEOUT_MS|DISABLE_SYNC_FAULTS|DISABLE_RELOAD|DISABLE_LIFECYCLE|FAULT_RATE|BURST_RATE|PROFILE|SYNC_TITLE|LOG_SYNC)$/.test(
+				name
+			)
+		)
+		.map( ( [ name, value ] ) => `${ name }=${ quote( value ) }` );
+	const flags = [
+		`--combos=${ example.combo }`,
+		`--seed-list=${ example.seed }`,
+		`--steps=${ steps }`,
+		`--users=${ args.users }`,
+		'--trace=retain-on-failure',
+	];
+	for ( const [ key, flag ] of [
+		[ 'profile', 'profile' ],
+		[ 'faultRate', 'fault-rate' ],
+		[ 'burstRate', 'burst-rate' ],
+	] ) {
+		if ( args[ key ] !== null && args[ key ] !== undefined ) {
+			flags.push( `--${ flag }=${ quote( args[ key ] ) }` );
+		}
+	}
+	for ( const [ key, flag ] of [
+		[ 'noFaults', 'no-faults' ],
+		[ 'noReload', 'no-reload' ],
+		[ 'noLifecycle', 'no-lifecycle' ],
+		[ 'headed', 'headed' ],
+	] ) {
+		if ( args[ key ] ) {
+			flags.push( `--${ flag }` );
+		}
+	}
+	return [ ...inherited, 'npm run fuzz --', ...flags ].join( ' ' );
 }
 
 /**
@@ -653,7 +727,7 @@ async function runPlaywright( {
 			`Playwright produced no JSON report for ${ combo.engine }/${ combo.transport } (${ phase }); the harness itself failed — check the output above.`
 		);
 	}
-	return readReport( reportPath );
+	return readReport( reportPath, seeds );
 }
 
 async function main() {
@@ -699,10 +773,7 @@ async function main() {
 			String( args.seedStart + offset )
 		);
 
-	const runId = new Date()
-		.toISOString()
-		.replace( /[:T]/g, '-' )
-		.slice( 0, 17 );
+	const runId = new Date().toISOString().replace( /[:T.]/g, '-' );
 	const runDir = path.join( args.out, `fuzz-${ runId }` );
 	await fs.mkdir( runDir, { recursive: true } );
 	log( `Run directory: ${ path.relative( REPO_ROOT, runDir ) }` );
@@ -774,8 +845,8 @@ async function main() {
 			// The daemon caches options at boot: start it AFTER the engine
 			// flip, per combo.
 			let daemon = null;
-			if ( combo.transport === 'websocket' ) {
-				log( 'Starting websocket sync daemon…' );
+			if ( [ 'websocket', 'sse-daemon' ].includes( combo.transport ) ) {
+				log( 'Starting sync daemon…' );
 				daemon = await startWsDaemon( composeFile );
 				log( `Daemon healthy on ws://localhost:${ WS_PORT }.` );
 			}
@@ -987,13 +1058,11 @@ async function main() {
 				`- \`${ signature }\``,
 				`  - combos: ${ [ ...entry.combos ].join( ', ' ) }`,
 				`  - seeds: ${ entry.seeds.join( ', ' ) }`,
-				`  - replay: \`npm run fuzz -- --combos=${
-					entry.example.combo
-				} --seed-list=${ entry.example.seed } --steps=${
+				`  - replay: \`${ replayCommand(
+					args,
+					entry.example,
 					shrunkSteps ?? args.steps
-				}${
-					args.profile ? ` --profile=${ args.profile }` : ''
-				} --trace=retain-on-failure\`${
+				) }\`${
 					shrunkSteps ? ` (shrunk from ${ args.steps } steps)` : ''
 				}`
 			);
@@ -1010,16 +1079,21 @@ async function main() {
 	process.exit( reproducibleFailures ? 1 : 0 );
 }
 
-// Ensure a stray SIGINT still removes the daemon container.
-for ( const signal of [ 'SIGINT', 'SIGTERM' ] ) {
-	process.on( signal, () => {
+if (
+	process.argv[ 1 ] &&
+	path.resolve( process.argv[ 1 ] ) === fileURLToPath( import.meta.url )
+) {
+	// Ensure a stray SIGINT still removes the daemon container.
+	for ( const signal of [ 'SIGINT', 'SIGTERM' ] ) {
+		process.on( signal, () => {
+			stopWsDaemon();
+			process.exit( 130 );
+		} );
+	}
+
+	main().catch( ( error ) => {
 		stopWsDaemon();
-		process.exit( 130 );
+		process.stderr.write( `${ error?.stack || error }\n` );
+		process.exit( 1 );
 	} );
 }
-
-main().catch( ( error ) => {
-	stopWsDaemon();
-	process.stderr.write( `${ error?.stack || error }\n` );
-	process.exit( 1 );
-} );
