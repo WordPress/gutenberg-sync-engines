@@ -191,8 +191,9 @@ back its modified copy while two editors are collaborating.
 - **yjs-server**: Re-bootstrap from snapshot + tail; the client uploads
   its own full state as an ordinary update — idempotent, the server
   diffs out what it already has. Under racing lock-free ingests a client
-  can be asked to resync (`resync-required` void); it heals by the same
-  full-state upload, one extra round trip, nothing lost.
+  can be asked to resync (`resync-required` void). The client heals it
+  with the same full-state upload, one extra round trip; the upload
+  carries the voided edit too, so nothing is lost.
 - **de-rtc**: The client re-commits its doc's current state; if the
   lost send actually landed, the re-commit merges as a no-op (and its
   announce's hash confirms it). A stale

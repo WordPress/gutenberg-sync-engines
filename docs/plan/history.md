@@ -78,7 +78,7 @@ Three attempts, all recorded, all partial. Raising the threshold made
 it rarer, not gone. Deferring the trim while someone is typing did not
 close it either. The remaining fix is to stop the cause: a table
 keystroke currently writes three history entries instead of one. See
-[#37](https://github.com/Automattic/gutenberg-sync-engines/issues/37).
+[#37](https://github.com/WordPress/gutenberg-sync-engines/issues/37).
 
 **Recovering a lost edit by asking the editor for the post's current
 state.** The obvious call for this returns nothing for some block
@@ -97,7 +97,7 @@ request rate that did not exist. Subtract before concluding.
 
 **Making the bundled Automerge library do real work** has not been
 tried and is not obviously worth trying. The reasons for and against
-are in [#44](https://github.com/Automattic/gutenberg-sync-engines/issues/44).
+are in [#44](https://github.com/WordPress/gutenberg-sync-engines/issues/44).
 
 ## How the v1 work was run, and what was worth keeping
 

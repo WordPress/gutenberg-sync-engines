@@ -2,6 +2,10 @@
 
 Start here if you want to:
 
+- **See the proposal in one page** → [data-flow.md](data-flow.md) —
+  how an edit reaches other editors in the Gutenberg trunk experiment
+  and under each engine and transport here, from the block editor's
+  side and from the network and security side.
 - **Pick an engine or transport** →
   [engine-comparison.md](engine-comparison.md) — what each engine is,
   how they score against the principles, feature parity, resource
@@ -14,7 +18,11 @@ Start here if you want to:
   typing, same-paragraph conflicts, machine writes, deep lag…) traced
   through all three engines.
 - **Compare transports** → [transports.md](transports.md) — polling vs
-  server-sent events vs websocket, and the operational notes for both.
+  server-sent events vs websocket, and the operational notes for each.
+- **Run the receive stream from the sync daemon** →
+  [sse-daemon.md](sse-daemon.md) — how the `sse-daemon` transport
+  shares the daemon with the websocket transport, and where it differs
+  from `sse`.
 - **Understand de-rtc's relationship to its upstream design** →
   [de-rtc-fidelity.md](de-rtc-fidelity.md) — the audit of our port
   against the Distributed Editing vision.

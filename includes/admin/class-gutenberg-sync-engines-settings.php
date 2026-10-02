@@ -58,6 +58,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
 		const DELIVERY_POLLING_WEBRTC    = 'polling-webrtc';
 		const DELIVERY_POLLING_WEBSOCKET = 'polling-websocket';
 		const DELIVERY_SSE               = 'sse';
+		const DELIVERY_SSE_DAEMON        = 'sse-daemon';
 		const DELIVERY_WEBSOCKET         = 'websocket';
 
 		/**
@@ -305,6 +306,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
 			$labels  = array(
 				'http-polling' => __( 'Short-polling (default)', 'gutenberg-sync-engines' ),
 				'sse'          => __( 'Server-sent events', 'gutenberg-sync-engines' ),
+				'sse-daemon'   => __( 'Server-sent events (sync daemon)', 'gutenberg-sync-engines' ),
 				'websocket'    => __( 'WebSocket', 'gutenberg-sync-engines' ),
 			);
 			$choices = array();
@@ -361,6 +363,12 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
 					'label'       => __( 'Server-sent events', 'gutenberg-sync-engines' ),
 					'description' => $sse_description,
 				),
+				self::DELIVERY_SSE_DAEMON        => array(
+					'transport'   => 'sse-daemon',
+					'advisory'    => self::ADVISORY_WEBRTC,
+					'label'       => __( 'Server-sent events (sync daemon)', 'gutenberg-sync-engines' ),
+					'description' => __( 'The same HTTP event stream, served by the sync daemon instead of a web worker, so no PHP worker is held per stream. Needs the daemon running. Peers fall back to polling on failure.', 'gutenberg-sync-engines' ),
+				),
 				self::DELIVERY_WEBSOCKET         => array(
 					'transport'   => 'websocket',
 					'advisory'    => self::ADVISORY_WEBRTC,
@@ -381,6 +389,9 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
 		 */
 		public static function delivery(): string {
 			$transport = self::stored_transport();
+			if ( 'sse-daemon' === $transport ) {
+				return self::DELIVERY_SSE_DAEMON;
+			}
 			if ( 'sse' === $transport ) {
 				return self::DELIVERY_SSE;
 			}

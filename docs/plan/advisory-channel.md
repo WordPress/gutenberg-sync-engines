@@ -224,7 +224,10 @@ Server (`includes/class-gutenberg-sync-engines-advisory-presence.php`):
     stores outgoing handshake messages in per-recipient mailboxes (size
     and count capped, short expiry), and answers with the other tokens in
     the room, whether anyone else is present (tokens plus live sync
-    awareness), and this tab's mailbox.
+    awareness), and this tab's mailbox. Because every answer hands out
+    the peers' tokens, a token works only for the user it was first
+    recorded for: a probe, leave, or sync request presenting another
+    user's token is ignored.
 -   Page-render settings under `window._gutenbergSyncEnginesSettings
 .advisory`: room, token, whether others are present, the STUN list
     (filterable), the peer cap, and the enabled flag.
@@ -367,7 +370,11 @@ shared secret — the shape every JWT library parses. Claims:
     three wildcards (collection rooms carry presence only over this
     lane). A follow for any other room is refused with an error frame.
     Without this claim a user could watch who is editing any post and
-    nudge them to poll — small, but cheap to close.
+    nudge them to poll — small, but cheap to close. The plugin's daemon
+    applies the same rule to advisory follows. Its sync subscriptions
+    are not held to the claim: the websocket transport asks for its
+    token without a room (one socket syncs every room the editor
+    opens), so the daemon checks those against the user's capabilities.
 -   `iat`, `exp`: Unix seconds; an access token lives 2 minutes. Verifiers
     allow 30 seconds of clock skew.
 

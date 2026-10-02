@@ -300,9 +300,11 @@ export function createDeRtcSessionCodec(
 
 	/*
 	 * The commit-cadence dial (TODO/B4): minimum spacing between commits,
-	 * in milliseconds. 0 (the default) keeps the settle cycle — a commit
-	 * whenever local edits settle and the slot is free (pseudo-realtime).
-	 * The Distributed Editing vision's operating point is ~10 s: edits
+	 * in milliseconds. The plugin setting defaults to 10 s
+	 * (Gutenberg_Sync_Engines_Settings::DE_RTC_COMMIT_INTERVAL_DEFAULT).
+	 * 0, or no localized setting, keeps the settle cycle — a commit
+	 * whenever the commit slot is free (pseudo-realtime). The
+	 * Distributed Editing vision's operating point is ~10 s: edits
 	 * coalesce locally and the room advances at save-and-sync cadence,
 	 * cutting request rate and upload bytes on cheap hosts. Read from the
 	 * plugin settings the enqueue localizes; the dial changes WHEN a
