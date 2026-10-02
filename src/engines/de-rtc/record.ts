@@ -299,12 +299,12 @@ export function recordChangesFromEditor(
 				break;
 			case 'blocks': {
 				if ( value ) {
-					result.blocks = value;
+					result.blocks = identifyEditorBlocks( value as any[] );
 					break;
 				}
 				const raw = getRawValue( changes.content );
 				if ( 'string' === typeof raw ) {
-					result.blocks = parse( raw );
+					result.blocks = identifyEditorBlocks( parse( raw ) );
 				}
 				break;
 			}
@@ -327,6 +327,69 @@ export function recordChangesFromEditor(
 		}
 	}
 	return result;
+}
+
+/**
+ * Gives new editor blocks an identity before a record listener can send them.
+ *
+ * Gutenberg assigns a fresh UUID clientId on creation (including duplication).
+ * Use that UUID here and in includes/shared/sync-id.js, which writes it into
+ * the editor later. Both copies then agree even if capture beats that write.
+ * Peers retain the serialized syncId, never their own parsed clientId. Existing
+ * IDs, including server genesis IDs, remain unchanged. Blocks without an
+ * editor clientId are left unchanged; only the creating editor assigns IDs.
+ *
+ * @param blocks The immutable editor tree.
+ * @return The tree with missing and duplicate identities filled.
+ */
+function identifyEditorBlocks( blocks: any[] ): any[] {
+	const seen = new Set< string >();
+	const clientIds = new Set< string >();
+	const collect = ( tree: any[] ) => {
+		for ( const block of tree ) {
+			if ( block.clientId ) {
+				clientIds.add( block.clientId );
+			}
+			if ( block.innerBlocks ) {
+				collect( block.innerBlocks );
+			}
+		}
+	};
+	collect( blocks );
+	const walk = ( tree: any[] ): any[] => {
+		let changed = false;
+		const result = tree.map( ( block ) => {
+			const syncId = block.attributes?.metadata?.syncId;
+			// A copy may precede its source. Reserve creation IDs for their
+			// original clientId so the source never loses its own identity.
+			const belongsToAnother =
+				syncId !== block.clientId && clientIds.has( syncId );
+			const assign =
+				( ! syncId || seen.has( syncId ) || belongsToAnother ) &&
+				block.clientId;
+			seen.add( assign ? block.clientId : syncId );
+			const innerBlocks = block.innerBlocks && walk( block.innerBlocks );
+			if ( ! assign && innerBlocks === block.innerBlocks ) {
+				return block;
+			}
+			changed = true;
+			return {
+				...block,
+				...( assign && {
+					attributes: {
+						...block.attributes,
+						metadata: {
+							...block.attributes?.metadata,
+							syncId: block.clientId,
+						},
+					},
+				} ),
+				...( innerBlocks && { innerBlocks } ),
+			};
+		} );
+		return changed ? result : tree;
+	};
+	return walk( blocks );
 }
 
 /**

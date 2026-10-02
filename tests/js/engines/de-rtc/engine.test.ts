@@ -172,6 +172,58 @@ describe( 'createDeRtcEngine', () => {
 		] );
 	} );
 
+	it( 'identifies a new nested block before its first proposal reaches a peer', () => {
+		const entity = makeEntity();
+		const session = entity.createSession();
+		const sent: any[] = [];
+		session.onLocalUpdate( ( update ) => sent.push( update ) );
+		session.receiveUpdate( snapshotRow( 'v1', contentOf() ) );
+		const heading = {
+			clientId: 'new-heading',
+			name: 'core/heading',
+			attributes: { content: 'One heading', metadata: { name: 'Label' } },
+			innerBlocks: [],
+		};
+		const group = {
+			clientId: 'new-group',
+			name: 'core/group',
+			attributes: {},
+			innerBlocks: [ heading ],
+		};
+		entity.applyLocalChanges( { blocks: [ group ] } as any, 'editor', {} );
+		const proposal = JSON.parse( sent[ 0 ].data );
+		const [ captured ] = JSON.parse( proposal.proposedContent );
+		expect( captured.attributes.metadata.syncId ).toBe( group.clientId );
+		expect( captured.innerBlocks[ 0 ].attributes.metadata ).toEqual( {
+			name: 'Label',
+			syncId: heading.clientId,
+		} );
+		// Capture must not mutate the editor's immutable blocks.
+		expect( heading.attributes.metadata ).toEqual( { name: 'Label' } );
+		expect( group.attributes ).toEqual( {} );
+
+		// The peer parses the snapshot with different editor clientIds. Its
+		// next edit must retain the identities from the original proposal.
+		const peer = makeEntity();
+		const peerSession = peer.createSession();
+		const peerSent: any[] = [];
+		peerSession.onLocalUpdate( ( update ) => peerSent.push( update ) );
+		peerSession.receiveUpdate(
+			snapshotRow( 'v2', proposal.proposedContent )
+		);
+		captured.clientId = 'peer-group';
+		captured.innerBlocks[ 0 ].clientId = 'peer-heading';
+		captured.innerBlocks[ 0 ].attributes.content = 'Edited heading';
+		peer.applyLocalChanges( { blocks: [ captured ] } as any, 'editor', {} );
+		const peerBlocks = JSON.parse(
+			JSON.parse( peerSent[ 0 ].data ).proposedContent
+		);
+		expect( peerBlocks[ 0 ].innerBlocks ).toHaveLength( 1 );
+		expect(
+			peerBlocks[ 0 ].innerBlocks[ 0 ].attributes.metadata.syncId
+		).toBe( heading.clientId );
+	} );
+
 	it( 'applies a fetched canonical snapshot when clean and reports a remote change', () => {
 		const entity = makeEntity();
 		const session = entity.createSession();
