@@ -226,7 +226,11 @@ export function createDeRtcRecord(): DeRtcRecord {
 						if ( undefined === metaValue ) {
 							metaChanged = key in meta || metaChanged;
 							delete meta[ key ];
-						} else if ( ! valuesEqual( meta[ key ], metaValue ) ) {
+						} else if (
+							// Meta lists keep their order: only term IDs are sets.
+							JSON.stringify( meta[ key ] ) !==
+							JSON.stringify( metaValue )
+						) {
 							meta[ key ] = metaValue;
 							metaChanged = true;
 						}
