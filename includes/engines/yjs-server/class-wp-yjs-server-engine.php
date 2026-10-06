@@ -172,9 +172,10 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 		const UPDATE_TYPE_HELD = 'held';
 
 		/**
-		 * Update type closing a security hold (accepted, dismissed, or
-		 * superseded by a newer hold over the same block). Server-emitted
-		 * only.
+		 * Update type closing a security hold (accepted, dismissed,
+		 * superseded by a newer hold over the same block, or
+		 * block-removed when the block was taken out of the document).
+		 * Server-emitted only.
 		 *
 		 * @since n.e.x.t
 		 * @var string
@@ -328,6 +329,9 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 			$load_cursor = (int) $state['cursor'];
 
 			$before_bytes = \Yjs\encodeStateAsUpdateV2( $doc )->toBinaryString();
+			// The blocks the room has before this batch, to tell afterwards
+			// which ones the batch removed (see close_holds_of_removed_blocks()).
+			$ids_before = self::all_block_ids( $doc );
 
 			/*
 			 * Post-genesis growth policing (tiers 1+2). The genesis
@@ -525,6 +529,10 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 				$after_bytes = \Yjs\encodeStateAsUpdateV2( $doc )->toBinaryString();
 			}
 
+			// After the rows that removed the blocks, so a client reads the
+			// removal first and the closed hold second.
+			$this->close_holds_of_removed_blocks( $room, array_diff_key( $ids_before, self::all_block_ids( $doc ) ) );
+
 			// $after_bytes IS the canonical encoding at the new head; reuse
 			// it rather than encoding the document a third time.
 			// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode -- Encodes the canonical document's binary bytes for storage.
@@ -634,6 +642,16 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 				$specs   = self::blocks_to_yblocks( $parsed, $id_base, $wrappers, $replaced_id );
 				$yblocks->delete( $index, 1 );
 				$block_id = null;
+				// Where an approval puts the markup back when nothing of
+				// the block is left: after the block that is before it now
+				// ('' at the start of the document).
+				$after_id = '';
+				if ( $index > 0 ) {
+					$neighbour = $yblocks->get( $index - 1 );
+					if ( $neighbour instanceof \Yjs\Types\YMap && is_string( $neighbour->get( 'clientId' ) ) ) {
+						$after_id = $neighbour->get( 'clientId' );
+					}
+				}
 				if ( array() !== $specs ) {
 					$yblocks->insert( $index, $specs );
 					// The block's id in every editor: the review card's
@@ -656,6 +674,7 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 					// What the block was before this batch, when the same
 					// slot held one ('' for a block this batch added).
 					'base'       => isset( $before_list[ $index ] ) && count( $before_list ) === count( $after ) ? $before_list[ $index ] : '',
+					'afterId'    => $after_id,
 					// Not part of the row: how hold_markup() finds the
 					// open hold over the same block.
 					'replacedId' => $replaced_id,
@@ -710,14 +729,16 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 		 * index, held (the block as the author wrote it), sanitized (the
 		 * block as the canonical document has it), base (the block before
 		 * the author's first held batch, '' for a new block), author,
-		 * authorClientId, at.
+		 * authorClientId, at. A hold with no block also has afterId: the
+		 * id of the block that was before it ('' at the start of the
+		 * document), which is where an approval puts the markup back.
 		 *
 		 * @since n.e.x.t
 		 *
 		 * @param string $room      Room identifier.
 		 * @param int    $client_id The authoring client.
 		 * @param array  $hold      blockId, index, held, sanitized, base,
-		 *                          and the two fields that find the open
+		 *                          afterId, and the two fields that find the open
 		 *                          hold over the same block: replacedId
 		 *                          (the id the block had when the author
 		 *                          wrote into it) and added (whether this
@@ -768,10 +789,85 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 				'authorClientId' => $client_id,
 				'at'             => time(),
 			);
+			if ( null === $hold['blockId'] ) {
+				$entry['afterId'] = (string) ( $hold['afterId'] ?? '' );
+			}
 			if ( $this->add_row( $room, self::GENESIS_CLIENT_ID, self::UPDATE_TYPE_HELD, (string) wp_json_encode( $entry ) ) ) {
 				$ledger[ $hold_id ] = $entry;
 			}
 			$this->storage->set_room_meta( $room, self::META_HELD, $ledger );
+		}
+
+		/**
+		 * Closes the open holds whose block was just removed from the
+		 * document, with the resolution `block-removed`.
+		 *
+		 * A hold is a request to put markup back into one block. Once
+		 * the block is gone there is nothing to approve: without this the
+		 * hold would stay open, be announced again after every checkpoint,
+		 * and sit in every reviewer's list until someone dismissed it.
+		 *
+		 * Only blocks the CALLER saw go away are passed in, never "every
+		 * hold whose block I cannot find". Writes are not locked, so
+		 * another request may have just raised a hold on a block whose
+		 * rows this request has not read yet, and that hold must stay.
+		 *
+		 * A block is the same block for as long as its id is in the
+		 * document, at any depth: a block moved into a group keeps its
+		 * hold. A block removed and then put back by an undo does not
+		 * get its hold back.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param string              $room        Room identifier.
+		 * @param array<string, true> $removed_ids Ids of the removed blocks, as keys.
+		 * @param string|null         $except      A hold to leave alone (the
+		 *                                         one the caller is closing
+		 *                                         itself).
+		 * @return void
+		 */
+		private function close_holds_of_removed_blocks( string $room, array $removed_ids, ?string $except = null ): void {
+			if ( array() === $removed_ids || ! method_exists( $this->storage, 'set_room_meta' ) ) {
+				return;
+			}
+
+			$ledger = $this->get_open_holds( $room );
+			$closed = false;
+			foreach ( $ledger as $hold_id => $hold ) {
+				if (
+					(string) $hold_id === $except ||
+					! is_array( $hold ) ||
+					! is_string( $hold['blockId'] ?? null ) ||
+					! isset( $removed_ids[ $hold['blockId'] ] )
+				) {
+					continue;
+				}
+
+				// The row first, the ledger second, as in resolve_hold():
+				// a hold whose closing row was not stored stays open.
+				$stored = $this->add_row(
+					$room,
+					self::GENESIS_CLIENT_ID,
+					self::UPDATE_TYPE_HELD_RESOLVED,
+					(string) wp_json_encode(
+						array(
+							'holdId'     => (string) $hold_id,
+							'resolution' => 'block-removed',
+							'time'       => time(),
+						)
+					)
+				);
+				if ( $stored ) {
+					unset( $ledger[ $hold_id ] );
+					$closed = true;
+				}
+			}
+
+			if ( $closed ) {
+				$this->storage->set_room_meta( $room, self::META_HELD, $ledger );
+				// phpcs:ignore WordPress.NamingConventions.ValidHookName.UseUnderscores, WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- Query Monitor's debug hook.
+				do_action( 'qm/debug', "wp-sync: yjs-server closed a hold whose block was removed from {$room}" );
+			}
 		}
 
 		/**
@@ -939,28 +1035,25 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 				return false;
 			}
 
-			$length = $yblocks->length;
-			$found  = null;
+			// The block is looked for at any depth: someone may have moved
+			// it into a group since the hold was raised.
+			$siblings = $yblocks;
+			$found    = null;
 			if ( is_string( $hold['blockId'] ?? null ) ) {
-				for ( $i = 0; $i < $length; $i++ ) {
-					$candidate = $yblocks->get( $i );
-					if ( $candidate instanceof \Yjs\Types\YMap && $candidate->get( 'clientId' ) === $hold['blockId'] ) {
-						$found = $i;
-						break;
-					}
-				}
-				if ( null === $found ) {
+				$place = self::find_yblock( $yblocks, $hold['blockId'] );
+				if ( null === $place ) {
 					// The sanitized block is gone (someone removed or
 					// replaced it): there is nothing to put the markup
 					// back into.
 					return false;
 				}
+				list( $siblings, $found ) = $place;
 			}
-			$index = null === $found ? min( max( 0, (int) ( $hold['index'] ?? 0 ) ), $length ) : $found;
+			$index = $found ?? self::held_insertion_index( $yblocks, $hold );
 
 			$wrappers = $this->room_wrappers( $room );
 			if ( null !== $found ) {
-				$live = self::materialize_yblock( $yblocks->get( $found ), $wrappers );
+				$live = self::materialize_yblock( $siblings->get( $found ), $wrappers );
 				if ( ( $seen ?? (string) ( $hold['sanitized'] ?? '' ) ) !== $live ) {
 					return $this->refuse_stale_hold( $room, $hold, $live );
 				}
@@ -993,11 +1086,12 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 			// phpcs:ignore WordPress.NamingConventions.ValidVariableName.UsedPropertyNotSnakeCase -- clientID is the y-php Doc property, mirroring JS Yjs naming.
 			$doc->clientID = self::GENESIS_CLIENT_ID;
 			$state_vector  = \Yjs\encodeStateVector( $doc );
+			$ids_before    = self::all_block_ids( $doc );
 			if ( null !== $found ) {
-				$yblocks->delete( $index, 1 );
+				$siblings->delete( $index, 1 );
 			}
 			if ( array() !== $specs ) {
-				$yblocks->insert( $index, $specs );
+				$siblings->insert( $index, $specs );
 			}
 
 			$diff = \Yjs\encodeStateAsUpdateV2( $doc, $state_vector )->toBase64();
@@ -1011,6 +1105,14 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 			if ( method_exists( $this->storage, 'set_room_meta' ) ) {
 				$this->storage->set_room_meta( $room, self::META_WRAPPERS, $wrappers );
 			}
+			// The approved content may have removed the block (empty
+			// content) or blocks inside it. Other holds on those close;
+			// the caller closes this one.
+			$this->close_holds_of_removed_blocks(
+				$room,
+				array_diff_key( $ids_before, self::all_block_ids( $doc ) ),
+				(string) ( $hold['holdId'] ?? '' )
+			);
 			// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode -- Encodes the canonical document's binary bytes for storage.
 			$this->save_canonical( $room, $doc, (int) $state['cursor'], base64_encode( \Yjs\encodeStateAsUpdateV2( $doc )->toBinaryString() ) );
 			$this->maybe_checkpoint( $room, self::GENESIS_CLIENT_ID, $doc );
@@ -1258,6 +1360,119 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 			}
 
 			return $ids;
+		}
+
+		/**
+		 * The ids of every block in a document, at any depth, as array
+		 * keys.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param \Yjs\Utils\Doc $doc The document.
+		 * @return array<string, true> Block id => true.
+		 */
+		private static function all_block_ids( \Yjs\Utils\Doc $doc ): array {
+			$ids    = array();
+			$blocks = $doc->getMap( 'document' )->get( 'blocks' );
+			if ( $blocks instanceof \Yjs\Types\YArray ) {
+				self::collect_block_ids( $blocks, $ids );
+			}
+
+			return $ids;
+		}
+
+		/**
+		 * Adds the ids of a list of blocks, and of the blocks inside
+		 * them, to a set.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param \Yjs\Types\YArray   $blocks The blocks.
+		 * @param array<string, true> $ids    The set (by reference).
+		 * @return void
+		 */
+		private static function collect_block_ids( \Yjs\Types\YArray $blocks, array &$ids ): void {
+			foreach ( $blocks->toArray() as $block ) {
+				if ( ! ( $block instanceof \Yjs\Types\YMap ) ) {
+					continue;
+				}
+				$id = $block->get( 'clientId' );
+				if ( is_string( $id ) ) {
+					$ids[ $id ] = true;
+				}
+				$inner = $block->get( 'innerBlocks' );
+				if ( $inner instanceof \Yjs\Types\YArray ) {
+					self::collect_block_ids( $inner, $ids );
+				}
+			}
+		}
+
+		/**
+		 * Finds a block by its id, at any depth.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param \Yjs\Types\YArray $blocks The blocks to look through.
+		 * @param string            $id     The block's id.
+		 * @return array|null The list the block is in and its position
+		 *                    there, or null when no block has the id.
+		 */
+		private static function find_yblock( \Yjs\Types\YArray $blocks, string $id ): ?array {
+			foreach ( $blocks->toArray() as $position => $block ) {
+				if ( ! ( $block instanceof \Yjs\Types\YMap ) ) {
+					continue;
+				}
+				if ( $block->get( 'clientId' ) === $id ) {
+					return array( $blocks, $position );
+				}
+				$inner = $block->get( 'innerBlocks' );
+				if ( $inner instanceof \Yjs\Types\YArray ) {
+					$place = self::find_yblock( $inner, $id );
+					if ( null !== $place ) {
+						return $place;
+					}
+				}
+			}
+
+			return null;
+		}
+
+		/**
+		 * Where the approved content of a hold with no block goes, among
+		 * the top-level blocks.
+		 *
+		 * The position recorded with the hold goes stale as soon as a
+		 * block is added or removed above it. The hold also names the
+		 * block that was before it, and that block is followed by its
+		 * id: the content goes right after it. Example: the hold was
+		 * raised between the first and second paragraphs, then someone
+		 * added three blocks at the top. The content still lands after
+		 * the paragraph that was first. When that block is gone too, the
+		 * content goes to the end of the document. A hold from before
+		 * this field existed uses its recorded position.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param \Yjs\Types\YArray $yblocks The top-level blocks.
+		 * @param array             $hold    The hold.
+		 * @return int The position to insert at.
+		 */
+		private static function held_insertion_index( \Yjs\Types\YArray $yblocks, array $hold ): int {
+			$length = $yblocks->length;
+			if ( ! is_string( $hold['afterId'] ?? null ) ) {
+				return min( max( 0, (int) ( $hold['index'] ?? 0 ) ), $length );
+			}
+			if ( '' === $hold['afterId'] ) {
+				return 0;
+			}
+
+			foreach ( $yblocks->toArray() as $position => $block ) {
+				if ( $block instanceof \Yjs\Types\YMap && $block->get( 'clientId' ) === $hold['afterId'] ) {
+					return $position + 1;
+				}
+			}
+
+			return $length;
 		}
 
 		/**

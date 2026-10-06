@@ -3,8 +3,8 @@
  * author's block and kept for a reviewer who may publish unfiltered HTML.
  * The canonical document holds the SANITIZED block; the hold carries what
  * was written. Holds arrive as `held` rows and close with `held-resolved`
- * rows (accepted, dismissed, or superseded by a newer hold over the same
- * block).
+ * rows (accepted, dismissed, superseded by a newer hold over the same
+ * block, or block-removed when the block was taken out of the document).
  */
 
 /**
@@ -26,6 +26,12 @@ export interface YjsServerHold {
 	blockId: string | null;
 	/** The block's top-level index when the hold was raised. */
 	index: number;
+	/**
+	 * For a hold with no block: the id of the block that was before it
+	 * ('' at the start of the document). The server puts approved
+	 * content right after that block.
+	 */
+	afterId?: string;
 	/** The block as the author wrote it, serialized. */
 	held: string;
 	/** The block as the canonical document has it, serialized. */
