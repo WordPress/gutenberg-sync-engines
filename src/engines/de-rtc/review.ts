@@ -129,28 +129,41 @@ export function createDeRtcReviewState(): DeRtcReviewState {
 	};
 
 	/**
-	 * Merge-not-stack key: one review task per author per
-	 * target — a property register, or a block set (by identity when
-	 * the blocks carry one, else by index). A revised parked proposal
-	 * from the same author over the same target FOLDS into the open
-	 * task instead of raising a second one.
+	 * Merge-not-stack key: one review task per author, reason, and
+	 * target, where the target is a property register or a block set
+	 * (by identity when the blocks carry one, else by index). A revised
+	 * parked proposal from the same author, for the same reason, over
+	 * the same target FOLDS into the open task instead of raising a
+	 * second one.
+	 *
+	 * The reason is part of the key because the server folds the same
+	 * way (supersede_open_rows() in the PHP engine), and because one
+	 * decision closes every row of a task. A security hold and a merge
+	 * conflict on one block are two tasks: folded into one, a decision
+	 * on the conflict would also dismiss the hold, which the reviewer
+	 * never saw.
 	 *
 	 * @param parked Parked proposal.
 	 * @return Fold key.
 	 */
-	const foldKey = ( parked: DeRtcParkedProposal ): string =>
-		parked.property?.name
-			? `prop:${ parked.authorClientId }:${ parked.property.name }`
-			: `blocks:${ parked.authorClientId }:${ (
-					parked.changedBlocks ?? []
-			  )
-					.map( ( block ) =>
-						'string' === typeof block.syncId
-							? block.syncId
-							: String( Number( block.index ) )
-					)
-					.sort()
-					.join( ',' ) }`;
+	const foldKey = ( parked: DeRtcParkedProposal ): string => {
+		if ( parked.property?.name ) {
+			return `prop:${ parked.authorClientId }:${ parked.property.name }`;
+		}
+
+		const blocks = ( parked.changedBlocks ?? [] )
+			.map( ( block ) => {
+				if ( 'string' === typeof block.syncId ) {
+					return block.syncId;
+				}
+
+				return String( Number( block.index ) );
+			} )
+			.sort()
+			.join( ',' );
+
+		return `blocks:${ parked.authorClientId }:${ parked.reason }:${ blocks }`;
+	};
 
 	return {
 		noteParked( parked ) {

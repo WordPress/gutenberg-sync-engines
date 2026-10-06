@@ -197,6 +197,49 @@ describe( 'parked review tasks fold (merge-not-stack)', () => {
 		] );
 		expect( review.getOpen() ).toHaveLength( 1 ); // The other author's.
 	} );
+
+	it( 'a security hold and a merge conflict on one block stay two tasks, each decided alone', () => {
+		const review = createDeRtcReviewState();
+		const sent: any[] = [];
+		review.setRestResolver( ( proposalId, resolution ) => {
+			sent.push( { proposalId, resolution } );
+			return Promise.resolve( {} );
+		} );
+
+		// One author, one block, two reasons.
+		review.noteParked( {
+			proposalId: 'p-9-held',
+			reason: 'requires-unfiltered-html',
+			authorClientId: 9,
+			changedBlocks: [
+				{ index: 1, syncId: 'block-b', html: contentOf( A_PEER ) },
+			],
+		} );
+		review.noteParked( {
+			proposalId: 'p-9-conflict',
+			reason: 'manual-conflict-required',
+			authorClientId: 9,
+			changedBlocks: [
+				{ index: 1, syncId: 'block-b', html: contentOf( A_PEER2 ) },
+			],
+		} );
+
+		const openItems = review.getOpen();
+		expect( openItems.map( ( item ) => item.proposalId ) ).toEqual( [
+			'p-9-held',
+			'p-9-conflict',
+		] );
+		expect( openItems[ 1 ].supersededIds ).toBeUndefined();
+
+		// Deciding the conflict says nothing about the hold.
+		review.resolve( 'p-9-conflict', 'accepted', contentOf( A_PEER2 ) );
+		expect( sent ).toEqual( [
+			{ proposalId: 'p-9-conflict', resolution: 'accepted' },
+		] );
+		expect( review.getOpen().map( ( item ) => item.proposalId ) ).toEqual( [
+			'p-9-held',
+		] );
+	} );
 } );
 
 describe( 'save-through-the-room middleware', () => {
