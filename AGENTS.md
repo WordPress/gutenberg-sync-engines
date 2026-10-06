@@ -61,8 +61,13 @@ This plugin provides:
   object cache is detected (`WP_REDIS_*` constants), and otherwise by
   half-second checks of a per-room VERSION COUNTER
   (`WP_Sync_Table_Storage::get_room_versions`, bumped atomically on every
-  write; in the object cache when persistent, else a `_version` room-meta
-  row; snapshot taken BEFORE each read) through
+  storage write; in the object cache when persistent, else a `_version`
+  room-meta row; snapshot taken BEFORE each read; awareness held by the
+  Presence API bumps no counter, so each check then also reads the
+  stream's rooms' awareness and compares it with what was last sent —
+  `awareness_changed()`; the Presence API backend fires
+  `gutenberg_sync_engines_room_changed` itself, so Redis notices still
+  go out) through
   `WP_Sync_Storage_Change_Waiter`, the retired long-polling transport's
   wait; a storage without counters is read the long way. Bounded
   reconnects from durable cursors. A stored `http-long-polling` choice reads as
@@ -152,7 +157,8 @@ This plugin provides:
   object cache (`wp_using_ext_object_cache()`) the storage follows the
   strategy the WordPress hosting tests recommended
   (`custom-table-with-transients`, wordpress-develop#11599): awareness
-  lives ONLY in the object cache (group
+  in the room array (the fallback when the Presence API is not recording,
+  see Awareness below) lives ONLY in the object cache (group
   `WP_Sync_Table_Schema::CACHE_GROUP`, never a row), and the two
   write-once keys (engine lineage, the polling transport's generation
   token) are cached after their first read; `reset_room()` drops the
@@ -164,7 +170,11 @@ This plugin provides:
   (`wp_sync_awareness_timestamp_granularity`) and skips the write when a
   poll changes nothing, so an idle poll is read-only: with a persistent
   cache it runs the cursor snapshot plus the engine's own floor read
-  (two queries; six without a cache, seven before the skip). To
+  (two queries; six without a cache, seven before the skip). Those
+  counts are for the room-array fallback: with the Presence API holding
+  awareness, each poll also reads `wp_presence` twice (the client-id
+  ownership check and `put()`), and a refresh writes once per 10 s
+  per tab; not yet re-measured. To
   re-measure, dispatch a poll under the `query` filter as
   `tests/phpunit/wpHttpPollingSyncServer.php` does. `WP_Sync_Table_Schema` owns
   the lifecycle: activation creates the tables (dbDelta), a bumped
@@ -430,7 +440,8 @@ Two SEPARATE wp-env configs (the split the env 11 deprecation asks for; both
 set `testsEnvironment: false`, so each starts a single site):
 
 ```bash
-npm run env start         # DEV env (.wp-env.json): this plugin (which loads
+npm run env start         # DEV env (.wp-env.json): the Presence API plugin
+                          # (required) and this plugin (which loads
                           # the bundled Gutenberg subtree itself),
                           # http://localhost:8888. Its afterStart
                           # lifecycle hook auto-starts the websocket sync
@@ -462,7 +473,8 @@ inline script in `package.json`) serves the checkout on a local
 SQLite) at http://127.0.0.1:9400, mounted under the fixed name
 `wp-content/plugins/gutenberg-sync-engines` (worktree-safe, and only ONE
 mount, so the double-mount trap below does not apply) with
-`blueprint.local.json` applied: plugin activated (its activation hook
+`blueprint.local.json` applied: the Presence API installed and
+activated first (this plugin requires it), plugin activated (its activation hook
 turns the RTC experiment on), `WP_DEBUG` + `SCRIPT_DEBUG` on, a second
 account (`editor` / `password`), welcome guide off. The checkout is
 served as-is, so it must be BUILT (`preplayground` refuses otherwise):
@@ -475,7 +487,8 @@ true` alone does not log a BROWSER in on the CLI) and `--workers=1`
 workers, and the editor shows "Session expired" at random).
 `blueprint.json` at the repo root is the public twin for the OFFICIAL
 Playground (`https://playground.wordpress.net/?blueprint-url=<raw URL
-of that file on trunk>`): it installs the LATEST release zip from
+of that file on trunk>`): it installs the Presence API from
+wordpress.org, then the LATEST release zip from
 GitHub (Playground routes the cross-origin download through its own
 CORS proxy; the console shows a CORS error first, then the proxied
 fetch succeeds). Each hosted tab is its own site, so it demonstrates a

@@ -130,7 +130,12 @@ order:
 | Version counter in the room-meta table | no cache at all | one indexed query twice a second |
 
 The version counter is a number the room storage bumps after every
-successful write (updates, presence, room meta, a reset). The stream
+successful write (updates, room meta, a reset, and presence when presence
+is kept in the room storage). Presence kept in the Presence API's
+`wp_presence` table, the default, bumps no counter. While it is in use,
+each counter check also reads the presence of the stream's rooms, one
+query per room, and wakes the stream when it differs from what was
+last sent. Presence writes there still send the Redis notice. The stream
 reads the counters of all its rooms in one lookup and re-reads storage
 when any differs from the snapshot it took just before its last read; a
 write landing during that read therefore still wakes the next check. The
