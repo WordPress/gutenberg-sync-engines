@@ -6,9 +6,9 @@
  * sources is at most one non-empty list.
  *
  * Conflict data deliberately does NOT go through core-data's store (the
- * fork's review items, which upstream Gutenberg never had) or a new
- * `@wordpress/data` store: the engines already keep per-entity state, and
- * the UI only needs subscribe, read, and resolve.
+ * bundled Gutenberg's review items, which upstream Gutenberg never had)
+ * or a new `@wordpress/data` store: the engines already keep per-entity
+ * state, and the UI only needs subscribe, read, and resolve.
  */
 
 /**
@@ -30,7 +30,7 @@ const sources = new Set< SyncConflictSource >();
 
 /**
  * The stable "no conflicts" result. Unconflicted blocks are the
- * overwhelmingly common case; returning one shared array keeps their
+ * overwhelmingly common case. Returning one shared array keeps their
  * renders free of fresh objects (useSyncExternalStore compares snapshots
  * by identity).
  */

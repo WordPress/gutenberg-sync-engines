@@ -1,4 +1,4 @@
-// @ts-nocheck -- Prototype JavaScript moved as is from the bundled Gutenberg fork; typing it (TSX) is a later pass.
+// @ts-nocheck -- Plain JavaScript. The review components are not type-checked.
 import { useState } from '@wordpress/element';
 import { useSelect } from '@wordpress/data';
 import { __ } from '@wordpress/i18n';
@@ -76,7 +76,7 @@ export function useBlockSequestrations( clientId ) {
  * A security hold as the review card and dialog present it: the held
  * markup, and what it would replace. A record with no base content (a
  * block the base did not hold, or held nothing in) reads as a brand-new
- * proposal; one with base content as an update to it.
+ * proposal, and one with base content as an update to it.
  *
  * @param {Object} conflict The conflict record.
  * @return {Object} `{ kind, original, proposed }`.
@@ -143,7 +143,7 @@ export function SequesteredBlockBody( { sequestration, canReview, onReview } ) {
  * The in-place replacement for a block held for security review: rendered
  * INSTEAD of the block's edit UI (see the sequestered-block editor hook),
  * so the content is read-only while held. The review dialog opens from
- * here; its modal renders outside the canvas.
+ * here. Its modal renders outside the canvas.
  *
  * Both decisions go to the ENGINE (`resolveConflict`): Approve accepts
  * the reviewed markup as content, Remove block accepts empty content
@@ -151,8 +151,8 @@ export function SequesteredBlockBody( { sequestration, canReview, onReview } ) {
  * itself: a canvas write dispatched right before resolving is silently
  * lost to the sync push the resolution triggers.
  *
- * When several records hold the block, the card presents the first;
- * the next one takes its place once it is decided.
+ * When several records hold the block, the card presents the first.
+ * The next one takes its place once it is decided.
  *
  * @param {Object} props
  * @param {Array}  props.conflicts The block's held records.

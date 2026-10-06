@@ -10,7 +10,7 @@
  * Two named exports so a reader can tell which package each unlocks:
  * `unlock` opens `@wordpress/sync` (the framework registries and the
  * manager), `unlockEditor` opens `@wordpress/editor` (the revisions block
- * differ the conflict review dialogs render with; see
+ * differ the conflict review dialogs render with, see
  * src/review/revisions-diff.ts).
  */
 

@@ -981,7 +981,7 @@ function chooseObservedBaseline(
  * entity, keyed like the manager's entity states, and the source the
  * plugin registers with the conflict registry at module load. The ledger
  * is module-level because the source must exist before any manager does
- * (the registry takes it at load; managers are created per session).
+ * (the registry takes it at load, and managers are created per session).
  */
 interface ConflictEntity {
 	list: () => SyncConflict[];
@@ -1787,7 +1787,7 @@ export function createIntentLogManager( debug = false ): SyncManager {
 		/*
 		 * The conflict review lane: the open proposals as SyncConflict
 		 * records (one per parked unit, overlapping units folded, three
-		 * sides rebuilt from the retained log; see
+		 * sides rebuilt from the retained log, see
 		 * intent-log-conflicts.ts), and the reviewer's decision applied
 		 * by the engine.
 		 */
@@ -1897,7 +1897,7 @@ export function createIntentLogManager( debug = false ): SyncManager {
 			state.capturing = true;
 			try {
 				// Authored at the head, against the optimistic document the
-				// diff was taken from; the observed frame stays where the
+				// diff was taken from. The observed frame stays where the
 				// capture lane left it.
 				const envelopes = session.authorBatch( derived.intents, {
 					txnId: globalThis.crypto.randomUUID(),
@@ -2005,7 +2005,7 @@ export function createIntentLogManager( debug = false ): SyncManager {
 		} );
 		/*
 		 * One notification per delivery batch. A change to the open list
-		 * always notifies; a change to the document notifies only when it
+		 * always notifies. A change to the document notifies only when it
 		 * changed what a record shows.
 		 */
 		let proposalsChanged = false;
@@ -2439,11 +2439,10 @@ export function createIntentLogManager( debug = false ): SyncManager {
 					 * last capture, related or not: stamped as a unit, one
 					 * conflicting member would set the whole batch aside
 					 * (an inserted paragraph parked because an attribute
-					 * write beside it conflicted; found by the e2e save
-					 * test). The members merge or park one by one, and
-					 * conflict review folds what parked back into one
-					 * record per author and block (see
-					 * intent-log-conflicts.ts).
+					 * write beside it conflicted). The members merge or
+					 * park one by one, and conflict review folds what
+					 * parked back into one record per author and block
+					 * (see intent-log-conflicts.ts).
 					 */
 					const envelopes = state.session.authorBatch(
 						derived.intents
@@ -2645,7 +2644,7 @@ export function createIntentLogManager( debug = false ): SyncManager {
 				 * custom HTML block's content change: the placeholder
 				 * character lands as safe plain text and only the format
 				 * carrying the markup parks. Re-author it over the target
-				 * range at the current head (clamped; the range's text is
+				 * range at the current head (clamped). The range's text is
 				 * ordinarily still there, since the paired text intent was
 				 * accepted). The re-authored intent carries the RESTORER's
 				 * capability, which is what makes this an approval.

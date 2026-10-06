@@ -497,7 +497,7 @@ test.describe( 'Collaboration - de-rtc engine @engine-de-rtc', () => {
 		}
 
 		// Decisions are MUTATIONS and travel ONLY over the REST review
-		// lane (B5). Arm the listener BEFORE deciding so the spec proves
+		// lane. Arm the listener BEFORE deciding so the spec proves
 		// the route really ran, with the reviewer's content on it.
 		const resolveResponse = cardPage.waitForResponse(
 			( response ) =>
@@ -507,13 +507,14 @@ test.describe( 'Collaboration - de-rtc engine @engine-de-rtc', () => {
 			{ timeout: 30000 }
 		);
 
-		// Decide everything parked, until settled-and-still-empty.
+		// Decide everything parked, until the cards stay gone.
 		await expect( async () => {
 			await decideConflictCards( cardPage, cardEditor.canvas );
-			// Quiescence, not just momentary emptiness: in-flight pushes
-			// from the typing race can set MORE edits aside after the
-			// cards first clear. Only settled-and-still-empty after a
-			// full poll/flush cycle counts; otherwise decide again.
+			// The cards must stay gone, not just clear for a moment.
+			// In-flight pushes from the typing race can set MORE edits
+			// aside after the cards first clear, so only a canvas still
+			// empty after a full poll/flush cycle counts. Otherwise
+			// decide again.
 			await cardPage.waitForTimeout( 3000 );
 			expect( await cardEditor.canvas.getByText( card ).count() ).toBe(
 				0
@@ -608,7 +609,7 @@ test.describe( 'Collaboration - de-rtc engine @engine-de-rtc', () => {
 		await page1.waitForTimeout( 3000 );
 
 		// User two rewrites the same words. The first keystroke's commit
-		// is set aside; user two keeps typing through it.
+		// is set aside. User two keeps typing through it.
 		const userTwoText = 'Foxtrot golf hotel india juliet kilo';
 		const firstCommit = page2.waitForResponse( isAutosaveCommit, {
 			timeout: 30000,

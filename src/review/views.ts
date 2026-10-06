@@ -1,13 +1,13 @@
 /**
  * Block-type overrides for the conflict review dialog. A block type whose
  * conflicts merge better in a bespoke view (a table as a grid rather than
- * as text) registers one here; the built-in dialog handles every other
- * target. A view applies when the target is a single block of that type;
- * multi-block spans keep the built-in section dialog.
+ * as text) registers one here. The built-in dialog handles every other
+ * target. A view applies when the target is a single block of that type.
+ * Multi-block spans keep the built-in section dialog.
  *
  * The view receives the record and hands back a SyncConflictDecision. It
- * decides only how the sides look and how the merged result is edited;
- * it never touches the document (the engine applies the decision).
+ * decides only how the sides look and how the merged result is edited.
+ * It never touches the document (the engine applies the decision).
  */
 
 /**

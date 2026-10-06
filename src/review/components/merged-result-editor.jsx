@@ -1,4 +1,4 @@
-// @ts-nocheck -- Prototype JavaScript moved as is from the bundled Gutenberg fork; typing it (TSX) is a later pass.
+// @ts-nocheck -- Plain JavaScript. The review components are not type-checked.
 import { useEffect, useMemo } from '@wordpress/element';
 import { useDispatch } from '@wordpress/data';
 import { Popover, SlotFillProvider } from '@wordpress/components';
@@ -49,7 +49,7 @@ function SelectMergedBlock( { clientId } ) {
  * @param {string|boolean} props.templateLock The lock for the merged
  *                                            content. The default 'all'
  *                                            allows text and formatting
- *                                            only; the section dialog
+ *                                            only. The section dialog
  *                                            passes false so blocks can
  *                                            be added and removed while
  *                                            resolving a structural

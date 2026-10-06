@@ -15,7 +15,7 @@ import {
  */
 import { addFilter, removeFilter } from '@wordpress/hooks';
 
-// The real module drags ESM-only deps into Jest; the manager reads
+// The real module drags ESM-only deps into Jest. The manager reads
 // attribute schemas for its block-default merge, and serializes and parses
 // blocks for conflict review. The stand-ins render blocks as opaque JSON
 // (name, attributes, children), the same trick the de-rtc suites use.
@@ -2431,7 +2431,7 @@ describe( 'intent-log manager', () => {
 			intentLogConflictSource.getOpenConflicts( 'postType/post', '1' )
 		).toEqual( [] );
 
-		// A live open proposal opens a record; dismissing it emits the
+		// A live open proposal opens a record. Dismissing it emits the
 		// wire row and empties the list.
 		transport.captured.session!.receiveUpdate( {
 			data: JSON.stringify( {

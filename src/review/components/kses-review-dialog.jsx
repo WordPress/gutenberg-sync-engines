@@ -1,4 +1,4 @@
-// @ts-nocheck -- Prototype JavaScript moved as is from the bundled Gutenberg fork; typing it (TSX) is a later pass.
+// @ts-nocheck -- Plain JavaScript. The review components are not type-checked.
 import { useState } from '@wordpress/element';
 import { __ } from '@wordpress/i18n';
 import { Button, Modal } from '@wordpress/components';
@@ -11,10 +11,10 @@ import PlainTextDiff from './plain-text-diff';
  *
  * The held markup shows as the revisions system's line-numbered code
  * diff. An UPDATE diffs from the original to the proposal in one unified
- * view (removed and added lines interleaved); a NEW-block proposal diffs
+ * view (removed and added lines interleaved). A NEW-block proposal diffs
  * against nothing, so every line reads as added. Either shape offers
  * Approve, Remove block, and an Edit toggle opening the proposed markup
- * for plain-text editing below; the diff recomputes live while editing,
+ * for plain-text editing below. The diff recomputes live while editing,
  * and Approve hands back the (possibly edited) markup.
  *
  * When the editor does not export that code diff (a standalone Gutenberg

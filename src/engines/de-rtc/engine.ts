@@ -310,7 +310,7 @@ export function createDeRtcEngine(): SyncEngine & {
 	 * records with their three sides (see getConflicts), and the
 	 * reviewer's decision mapped onto the review verbs: `accept` sends
 	 * the `accepted` resolution with the content, `dismiss` the
-	 * `dismissed` one; a contested block adopts or rejects.
+	 * `dismissed` one. A contested block adopts or rejects.
 	 */
 	const conflictSource: SyncConflictSource = {
 		getOpenConflicts: ( objectType, objectId ) =>
@@ -711,7 +711,7 @@ export function createDeRtcEngine(): SyncEngine & {
 						target: {
 							type: 'blocks',
 							// Identity wins when every changed block
-							// carries one; the span is the covering
+							// carries one. The span is the covering
 							// top-level run.
 							...( byIdentity ? { ids } : {} ),
 							index: first,
@@ -731,7 +731,7 @@ export function createDeRtcEngine(): SyncEngine & {
 				 * A contested block: this client edited a block a
 				 * newer canonical version also changed. `proposed` is
 				 * the canonical form, `current` this client's own
-				 * block; the version both started from is not kept.
+				 * block. The version both started from is not kept.
 				 */
 				...Array.from( contested.entries() ).map(
 					( [ contestKey, item ] ): SyncConflict => {

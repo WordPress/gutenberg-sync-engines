@@ -5,7 +5,7 @@
  * replica's retained log.
  *
  * ONE RECORD PER PARKED UNIT, AND RECORDS NEVER OVERLAP. The engine parks
- * intents; a person reviews edits. Members of one atomic unit (a txn)
+ * intents. A person reviews edits. Members of one atomic unit (a txn)
  * form one record, and units by the same author that touch the same
  * block (or the same property) fold into one record too: a typing burst
  * parks keystroke by keystroke, and the reviewer must see it as one edit
@@ -25,7 +25,7 @@
  * - `base`: the run in the document at the EARLIEST member's baseSeq,
  *   the state the author started from. Null when the replica no
  *   longer holds that seq (a proposal older than the session, replayed on
- *   join); the review UI then compares proposed against current.
+ *   join). The review UI then compares proposed against current.
  * - `proposed`: that base document with the author's edits applied, then
  *   the same blocks. The author's edits are, first, what the author got
  *   ACCEPTED from the same frames (read back out of the retained log),
@@ -423,7 +423,7 @@ function groupProposals( open: IntentLogProposal[] ): Draft[] {
 			drafts.push( unit );
 			continue;
 		}
-		// Fold into the earliest overlapping record; records this unit
+		// Fold into the earliest overlapping record. Records this unit
 		// bridges fold in with it.
 		const [ target, ...bridged ] = overlapping;
 		for ( const draft of [ ...bridged, unit ] ) {
@@ -631,7 +631,7 @@ export function buildConflictRecords(
 				 * The server remembers an author's set-aside edits to a
 				 * block across requests and sets their later typing there
 				 * aside as dependents (rule 6 seeded from the parked rows),
-				 * and those fold into this record; a property write has no
+				 * and those fold into this record. A property write has no
 				 * text frame for that. The card then waits for a typing
 				 * pause so the record carries the whole sentence.
 				 */

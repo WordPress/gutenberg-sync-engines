@@ -997,7 +997,7 @@ if ( ! class_exists( 'WP_Intent_Log_Engine' ) ) {
 				case 'format_text':
 					/*
 					 * Judged in BOTH directions. Applying a protected format
-					 * is the obvious case; REMOVING one is gated too: a
+					 * is the obvious case. REMOVING one is gated too: a
 					 * filtered author's change to protected markup derives
 					 * as an off/on format pair (a custom HTML block edit is
 					 * the canonical case), and letting the off half apply
@@ -1400,7 +1400,7 @@ if ( ! class_exists( 'WP_Intent_Log_Engine' ) ) {
 						 * frame until the author observes the clash
 						 * (resolved or not): later batches from that actor
 						 * plan from it (see seed_frame_state). The settling
-						 * seq rides the row; a row written before it was
+						 * seq rides the row. A row written before it was
 						 * recorded falls back to the head at parking, the
 						 * conservative choice. Security holds are not frame
 						 * phantoms and are left out.
@@ -1434,8 +1434,9 @@ if ( ! class_exists( 'WP_Intent_Log_Engine' ) ) {
 				}
 			}
 
-			// Phantoms settled below the retained window can poison no
-			// plannable intent (stale bases void before planning).
+			// A park settled below the retained window is dropped from the
+			// seed: it cannot affect any intent that can still be planned,
+			// since stale bases are voided before planning.
 			foreach ( $parked as $actor => $parks ) {
 				$parked[ $actor ] = array_values(
 					array_filter(

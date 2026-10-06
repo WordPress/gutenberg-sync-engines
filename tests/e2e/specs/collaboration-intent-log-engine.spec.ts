@@ -838,7 +838,7 @@ test.describe( 'Collaboration - intent-log engine @engine-intent-log', () => {
 		requestUtils,
 		editor,
 	} ) => {
-		// The decide-until-quiescent loop (60 s budget with 3 s settle
+		// Deciding cards until they stay gone (60 s budget with 3 s settle
 		// waits per attempt) plus the reload and bootstrap-replay waits
 		// push this test's happy path past the 60 s default cap on CI.
 		test.setTimeout( 120_000 );
@@ -909,15 +909,16 @@ test.describe( 'Collaboration - intent-log engine @engine-intent-log', () => {
 		 * Deciding a conflict closes it for every collaborator, durably:
 		 * after a reload the decided conflicts must NOT resurface (the
 		 * resolution rows settle the bootstrap replay). A sustained typing
-		 * race sets many edits aside; they present as one card per author
+		 * race sets many edits aside. They present as one card per author
 		 * and block, one after the other. Decide them all.
 		 */
 		await expect( async () => {
 			await decideConflictCards( cardPage, cardEditor.canvas );
-			// Quiescence, not just momentary emptiness: in-flight pushes
-			// from the typing race can set MORE edits aside after the
-			// cards first clear. Only settled-and-still-empty after a
-			// full poll/flush cycle counts; otherwise decide again.
+			// The cards must stay gone, not just clear for a moment.
+			// In-flight pushes from the typing race can set MORE edits
+			// aside after the cards first clear, so only a canvas still
+			// empty after a full poll/flush cycle counts. Otherwise
+			// decide again.
 			await cardPage.waitForTimeout( 3000 );
 			expect( await cardEditor.canvas.getByText( card ).count() ).toBe(
 				0
@@ -942,7 +943,7 @@ test.describe( 'Collaboration - intent-log engine @engine-intent-log', () => {
 		await expect(
 			cardPage.locator( 'iframe[name="editor-canvas"]' )
 		).toBeVisible( { timeout: 30000 } );
-		// Allow the bootstrap replay to settle; a decided conflict must
+		// Allow the bootstrap replay to settle. A decided conflict must
 		// not come back.
 		await cardPage.waitForTimeout( 4000 );
 		await expect( cardEditor.canvas.getByText( card ) ).toHaveCount( 0 );
@@ -969,7 +970,7 @@ test.describe( 'Collaboration - intent-log engine @engine-intent-log', () => {
 		 * export the revision comparison the dialog's panes render with.
 		 * The fixture removes those names from the bundled editor before
 		 * the plugin reads them, which is what the plugin sees on such a
-		 * site. Opening the card used to crash the dialog there.
+		 * site.
 		 */
 		await requestUtils.activatePlugin( WITHOUT_REVISION_COMPARISON_PLUGIN );
 

@@ -81,7 +81,7 @@ export function createClient( actorId, initialDoc, firstSeq = 0 ) {
 		// still counts set-aside text is predicted as the dependent the
 		// server will make of it (see seedFrameState). The owner records a
 		// park here when its proposal row arrives (flushClient does it from
-		// the server directly); nothing below firstSeq can matter (see
+		// the server directly). Nothing below firstSeq can matter (see
 		// trimClientLog).
 		parked: [],
 		log: [],

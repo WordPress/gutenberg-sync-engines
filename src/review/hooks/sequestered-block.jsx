@@ -1,4 +1,4 @@
-// @ts-nocheck -- Prototype JavaScript moved as is from the bundled Gutenberg fork; typing it (TSX) is a later pass.
+// @ts-nocheck -- Plain JavaScript. The review components are not type-checked.
 import { addFilter } from '@wordpress/hooks';
 import { createHigherOrderComponent } from '@wordpress/compose';
 import { useIsInsideReviewSurface } from '../components/review-surface';
@@ -12,7 +12,7 @@ import SequesteredBlock, {
  * in-place sequestered card, the way block recovery replaces an invalid
  * block. A block is held when an engine published a `sequestration`
  * conflict targeting it, the kind every engine maps a wp_kses rejection
- * to; merge conflicts present as the conflict card instead. The block's
+ * to. Merge conflicts present as the conflict card instead. The block's
  * content is read-only while held, since its editable UI is not rendered
  * at all.
  *

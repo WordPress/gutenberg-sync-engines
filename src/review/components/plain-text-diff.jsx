@@ -1,4 +1,4 @@
-// @ts-nocheck -- Matches the prototype JavaScript beside it; typing the review components (TSX) is a later pass.
+// @ts-nocheck -- Plain JavaScript. The review components are not type-checked.
 import { diffLines, diffWords } from 'diff';
 import { useMemo } from '@wordpress/element';
 import DiffText from './diff-text';

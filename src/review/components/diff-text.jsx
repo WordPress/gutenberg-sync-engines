@@ -1,4 +1,4 @@
-// @ts-nocheck -- Prototype JavaScript moved as is from the bundled Gutenberg fork; typing it (TSX) is a later pass.
+// @ts-nocheck -- Plain JavaScript. The review components are not type-checked.
 /**
  * Renders word-diff parts, marking additions and removals.
  *

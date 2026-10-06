@@ -33,7 +33,7 @@ export interface SyncConflict {
 	target: SyncConflictTarget;
 	/**
 	 * The target as the author started from it. Null when the engine can
-	 * no longer recover it; the editor then compares proposed against
+	 * no longer recover it. The editor then compares proposed against
 	 * current. Empty for a proposed insertion.
 	 */
 	base: string | null;
@@ -71,8 +71,8 @@ export interface SyncConflictTargetBlocks {
 }
 
 /**
- * One entity property, such as the title. There is no block to anchor;
- * the editor shows the conflict on that field.
+ * One entity property, such as the title. There is no block to anchor.
+ * The editor shows the conflict on that field.
  */
 export interface SyncConflictTargetProperty {
 	type: 'property';
@@ -138,7 +138,7 @@ export interface SyncConflictSource {
 	) => () => void;
 	/**
 	 * Applies a decision. Returns what became of it, at once or once the
-	 * server has answered; returning nothing reads as `resolved`.
+	 * server has answered. Returning nothing reads as `resolved`.
 	 */
 	resolveConflict: (
 		objectType: ObjectType,
@@ -160,7 +160,7 @@ export interface SyncConflictSource {
  *
  * Every block side is serialized block content (block comments plus
  * markup), whatever the block type. The editor picks the presentation
- * from the kind, the target, and the block name; the engine never says
+ * from the kind, the target, and the block name. The engine never says
  * how a conflict should look. The engine owns the replacement: it turns
  * the accepted content into the smallest edit against its own document
  * and closes the parked edit in the same round, so the two can never
@@ -204,10 +204,10 @@ export interface SyncConflictSource {
  *
  * A block type can replace the built-in dialog for its own conflicts
  * (src/review/views.ts). The editor hands a registered view the record
- * and takes back a SyncConflictDecision; the view decides only how the
+ * and takes back a SyncConflictDecision. The view decides only how the
  * sides look and how the merged result is edited, and never touches the
  * document itself. A view applies when the target is a single block of
- * that type; other spans keep the built-in dialog. For a table block
+ * that type. Other spans keep the built-in dialog. For a table block
  * whose cells merge better as a grid than as text:
  *
  * ```tsx

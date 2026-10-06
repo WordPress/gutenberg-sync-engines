@@ -1,4 +1,4 @@
-// @ts-nocheck -- Prototype JavaScript moved as is from the bundled Gutenberg fork; typing it (TSX) is a later pass.
+// @ts-nocheck -- Plain JavaScript. The review components are not type-checked.
 import { diffWords } from 'diff';
 import { useMemo, useState } from '@wordpress/element';
 import { useSelect } from '@wordpress/data';
@@ -140,7 +140,7 @@ export function useBlockConflicts( clientId ) {
  *
  * The block-recovery Warning component keeps everything but its actions
  * inside the message paragraph, so the box is rendered directly with the
- * same class names; the canvas's recovery styles apply to it either way,
+ * same class names. The canvas's recovery styles apply to it either way,
  * and the preview can sit inside the box as its own full-width row.
  *
  * Position-independent so it can be unit-tested without the block editor.
@@ -212,9 +212,9 @@ export function ConflictBlockBody( {
 /**
  * The in-place replacement for a conflicted block: rendered INSTEAD of the
  * block's edit UI (see the conflict-block editor hook), so the content is
- * read-only until the conflict is reviewed. The dialog opens from here;
- * its modal renders outside the canvas. A single block whose type
- * registered a review view (a table) opens that view; everything else
+ * read-only until the conflict is reviewed. The dialog opens from here.
+ * Its modal renders outside the canvas. A single block whose type
+ * registered a review view (a table) opens that view. Everything else
  * opens the built-in dialog, with its structure unlocked when the record
  * covers a section.
  *
@@ -230,7 +230,7 @@ export function ConflictBlockBody( {
  * update()).
  *
  * When several records target the block (parked edits by different
- * authors), the card presents the first; the next one takes its place
+ * authors), the card presents the first. The next one takes its place
  * once it is decided.
  *
  * @param {Object} props

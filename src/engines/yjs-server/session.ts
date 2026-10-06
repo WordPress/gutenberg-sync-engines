@@ -193,7 +193,7 @@ export function createYjsServerSessionCodec(
 				return;
 			}
 
-			// Review rows carry no document content; they feed the hold
+			// Review rows carry no document content. They feed the hold
 			// ledger.
 			case YJS_SERVER_HELD_TYPE: {
 				try {

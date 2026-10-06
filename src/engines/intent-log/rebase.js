@@ -370,7 +370,7 @@ export function cloneFrameState( frame ) {
  * that settled it, and re-authors on a clean frame. A live editor cannot
  * always do that mid-burst, so its later edits keep counting the set-aside
  * text and keep their old baseSeq. Rule 6 already treats such an intent as
- * a dependent (baseSeq at or before the settlement) — but only while the
+ * a dependent (baseSeq at or before the settlement), but only while the
  * batch frame state remembers the phantom. Seeding the state from the
  * actor's stored proposals makes rule 6 hold across requests, so a
  * typist's later keystrokes park beside the first one instead of landing

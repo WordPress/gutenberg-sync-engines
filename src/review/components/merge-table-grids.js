@@ -1,4 +1,4 @@
-// @ts-nocheck -- Prototype JavaScript moved as is from the bundled Gutenberg fork; typing it (TSX) is a later pass.
+// @ts-nocheck -- Plain JavaScript. The review components are not type-checked.
 /**
  * The pure three-way merge behind the table conflict dialog. No React and
  * no stores, so it is unit-testable on its own.
@@ -15,9 +15,8 @@
  * by their header text, rows by their first cell. When they cannot (a
  * version has no header row, a label repeats, a row is wider than the
  * header) the grids line up BY POSITION instead, so every cell still has
- * a place in the merge. Either way this is a deliberate prototype
- * simplification: renamed, reordered, and deleted rows and columns are
- * not modeled.
+ * a place in the merge. Renamed, reordered, and deleted rows and columns
+ * are not modeled.
  */
 
 /**
@@ -94,8 +93,8 @@ function columnCount( grid ) {
 }
 
 /**
- * One grid with its row and column keys, and lookups by those keys;
- * every lookup is undefined when the grid has no such row or column.
+ * One grid with its row and column keys, and lookups by those keys.
+ * Every lookup is undefined when the grid has no such row or column.
  *
  * @param {Object}   grid       A grid.
  * @param {string[]} columnKeys The key of each column, in column order.
@@ -214,7 +213,7 @@ function pickSide( base, yours, current ) {
  * - Present in base and untouched, or changed by both sides to the SAME
  *   value (a convergent edit needs no decision): 'unchanged'.
  * - Changed by exactly one side: that side's status and value.
- * - Changed by both sides differently: 'contested'; the suggested value
+ * - Changed by both sides differently: 'contested'. The suggested value
  *   defaults to the current version's, consistent with the paragraph
  *   dialog seeding from current.
  *
@@ -529,7 +528,7 @@ export function gridToTableAttributes( grid ) {
  * A core/table block's attributes as a grid, the inverse of
  * gridToTableAttributes: the first header row's cells as the head, every
  * body row's cells as the rows. Cell contents may be strings or rich-text
- * values; both stringify to their markup. Everything else is kept beside
+ * values. Both stringify to their markup. Everything else is kept beside
  * them untouched: each cell's other attributes (`tag`, `scope`, `align`,
  * `colspan`, `rowspan`), the header rows after the first, and the footer.
  *

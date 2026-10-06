@@ -54,11 +54,11 @@ jobs:
       - name: Jest
         run: npm run test:js
 
-      # The vendored subtree carries one delta on top of its pin, the
+      # The vendored subtree carries one change on top of its pin, the
       # revisions differ exported for the plugin's conflict review UI
-      # (see "The gutenberg/ subtree" in AGENTS.md); run its own suite, plus
-      # the fork's review panel, so the delta stays certified. The review
-      # UI itself lives in the plugin and runs under `npm run test:js`.
+      # (see "The gutenberg/ subtree" in AGENTS.md). Run its own suite, plus
+      # the bundled Gutenberg's review panel, so the change stays certified.
+      # The review UI itself lives in the plugin and runs under `npm run test:js`.
       - name: Subtree component tests (revisions differ, review panel)
         run: |
           cd gutenberg

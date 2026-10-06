@@ -113,7 +113,7 @@ describe( 'de-rtc review lane (client)', () => {
 		const changed = jest.fn();
 		engine.conflicts.subscribe( 'postType/book', '1', changed );
 
-		// The document holds Alpha and Beta; a collaborator's rewrite of
+		// The document holds Alpha and Beta. A collaborator's rewrite of
 		// Beta (index 1) parked against its base form.
 		session.receiveUpdate(
 			snapshotRow( 'v1', contentOf( BLOCK_A, BLOCK_B ) )
@@ -211,7 +211,7 @@ describe( 'de-rtc review lane (client)', () => {
 		} );
 		await Promise.resolve();
 
-		// Both close optimistically; the decisions ride the REST lane.
+		// Both close optimistically. The decisions ride the REST lane.
 		expect(
 			engine.conflicts.getOpenConflicts( 'postType/book', '1' )
 		).toEqual( [] );
@@ -710,7 +710,7 @@ describe( 'de-rtc review lane (client)', () => {
 		};
 
 		beforeEach( () => {
-			// Edits and snapshots land in the same tick here; the typing-
+			// Edits and snapshots land in the same tick here. The typing-
 			// burst quiet gate would defer every snapshot otherwise.
 			setDeRtcBurstQuietMsForTesting( 0 );
 		} );
@@ -884,7 +884,7 @@ describe( 'de-rtc review lane (client)', () => {
 		};
 
 		beforeEach( () => {
-			// Edits and snapshots land in the same tick here; the typing-
+			// Edits and snapshots land in the same tick here. The typing-
 			// burst quiet gate would put every snapshot on a timer.
 			setDeRtcBurstQuietMsForTesting( 0 );
 		} );

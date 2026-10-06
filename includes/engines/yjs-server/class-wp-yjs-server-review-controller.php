@@ -66,7 +66,7 @@ if ( ! class_exists( 'WP_Yjs_Server_Review_Controller' ) ) {
 		 * Whether the user may decide holds in this room at all: they must
 		 * be able to edit the post the room belongs to, as the sync
 		 * transports require. Accepting a hold needs the unfiltered_html
-		 * capability on top; the engine enforces it.
+		 * capability on top. The engine enforces it.
 		 *
 		 * @since n.e.x.t
 		 *

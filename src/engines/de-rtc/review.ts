@@ -24,7 +24,7 @@ export interface DeRtcParkedProposal {
 		html: string;
 		/**
 		 * The block as the proposal's base version had it ('' for a
-		 * proposed insertion; absent on rows older than this field).
+		 * proposed insertion, absent on rows older than this field).
 		 */
 		baseHtml?: string;
 		/** The block's durable identity (identity-merged parks). */
@@ -89,7 +89,7 @@ export interface DeRtcReviewState {
 	/**
 	 * Optimistically closes a parked proposal and POSTs the resolution.
 	 * The `restored` resolution is sent AFTER the caller re-applied the
-	 * parked content as ordinary local edits; `accepted` carries the
+	 * parked content as ordinary local edits. `accepted` carries the
 	 * reviewer's replacement content for the server to apply, and the
 	 * version of the content the reviewer saw (`seenVersion`). Settles
 	 * with what became of the decision, and never rejects.
@@ -129,12 +129,11 @@ export function createDeRtcReviewState(): DeRtcReviewState {
 	};
 
 	/**
-	 * Merge-not-stack key: one review task per author, reason, and
-	 * target, where the target is a property register or a block set
-	 * (by identity when the blocks carry one, else by index). A revised
-	 * parked proposal from the same author, for the same reason, over
-	 * the same target FOLDS into the open task instead of raising a
-	 * second one.
+	 * One review task per author, reason, and target, where the target
+	 * is a property register or a block set (by identity when the blocks
+	 * carry one, else by index). A revised parked proposal from the same
+	 * author, for the same reason, over the same target FOLDS into the
+	 * open task instead of raising a second one.
 	 *
 	 * The reason is part of the key because the server folds the same
 	 * way (supersede_open_rows() in the PHP engine), and because one
@@ -222,7 +221,7 @@ export function createDeRtcReviewState(): DeRtcReviewState {
 			// still resolves server-side. A folded task resolves EVERY
 			// revision it superseded with it (merge-not-stack: one
 			// decision closes the whole lineage). An accepted replacement
-			// applies ONCE, on the task's latest revision; the superseded
+			// applies ONCE, on the task's latest revision. The superseded
 			// revisions close as dismissed.
 			// Revisions the server already closed (it closes the rows a
 			// newer row of the same author and blocks replaces) need no
@@ -261,7 +260,7 @@ export function createDeRtcReviewState(): DeRtcReviewState {
 					// task so the reviewer can decide again. Ids whose POST
 					// did land re-ack idempotently on the retry. The server
 					// also refuses an accepted result whose content changed
-					// after the reviewer saw it; the task reopens the same
+					// after the reviewer saw it. The task reopens the same
 					// way, and the caller is told why.
 					ids.forEach( ( id ) => resolvedIds.delete( id ) );
 					if ( item ) {

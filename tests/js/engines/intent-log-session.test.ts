@@ -397,7 +397,7 @@ describe( 'intent-log session codec', () => {
 		aliceLink.poll();
 		bobLink.poll();
 
-		// Alice appends a space; Bob has not seen it when he types "ab".
+		// Alice appends a space. Bob has not seen it when he types "ab".
 		alice.author( 'insert_text', { syncId: 'p1', offset: 11, text: ' ' } );
 		aliceLink.poll();
 		bob.author( 'insert_text', { syncId: 'p1', offset: 0, text: 'a' } );
@@ -623,7 +623,7 @@ describe( 'intent-log session codec', () => {
 			type: INTENT_LOG_UPDATE_TYPES.PARKED,
 		} );
 
-		// The editor catches up to the head; without the open proposal the
+		// The editor catches up to the head. Without the open proposal the
 		// log would now trim up to the observed frame.
 		session.setObservedSeq( session.getSeq() );
 		session.receiveUpdate( remote( 'r3', 2 ) );

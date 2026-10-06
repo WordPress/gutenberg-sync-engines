@@ -567,7 +567,7 @@ test( 'REGRESSION: later keystrokes after a set-aside letter are dependents acro
 	// A peer appends a space at the end: log 4.
 	serverIngestBatch( server, [ key( 'peer', ' ', 19, 0 ) ] );
 	// The typist has not seen the peer's space: every keystroke still
-	// carries baseSeq 4. " " is accepted; "l" clashes (rule 5).
+	// carries baseSeq 4. " " is accepted, "l" clashes (rule 5).
 	const first = serverIngestBatch( server, [
 		key( 'typist', ' ', 4, 4 ),
 		key( 'typist', 'l', 5, 4 ),

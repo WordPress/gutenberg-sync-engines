@@ -236,7 +236,7 @@ test( 'a park recorded at flush seeds later replans: a pending intent at the old
 		);
 	}
 	// The entity bridge keeps the log sliceable from the frame the editor
-	// displays (retainFrom); the park survives the post-flush trim with it.
+	// displays (retainFrom). The park survives the post-flush trim with it.
 	bob.retainFrom = 0;
 	const report = flushClient( server, bob );
 	assert.equal( report[ 1 ].actual.reason, 'frame-conflict' );

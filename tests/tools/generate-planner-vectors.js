@@ -451,7 +451,7 @@ for ( const mode of [ 'format', 'delete', 'join', 'conflict', 'unicode' ] ) {
  * later keystroke in the paragraph still counts it in its offset and keeps
  * the old baseSeq. The server seeds each batch's frame state from the
  * actor's earlier proposals (seedFrameState), so those keystrokes park as
- * dependents (rule 6 across requests) instead of landing misplaced; a
+ * dependents (rule 6 across requests) instead of landing misplaced. A
  * keystroke authored after the typist observed the clash is clean.
  */
 {

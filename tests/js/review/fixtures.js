@@ -36,7 +36,7 @@ export const PARAGRAPH_CONFLICT = record( {
  * A split-vs-edit section: both versions started from a heading and one
  * two-sentence paragraph. The proposed version SPLIT the paragraph at the
  * sentence boundary, moved the date to May, and extended the new second
- * paragraph; the current version changed the same date to April in place.
+ * paragraph. The current version changed the same date to April in place.
  *
  * Keep the paragraph's FIRST sentence carrying clearly more words than
  * the second: the revisions differ pairs the base paragraph with

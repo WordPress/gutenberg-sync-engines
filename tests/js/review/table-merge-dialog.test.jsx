@@ -23,7 +23,7 @@ afterAll( () => {
 
 // The last Accept payload as plain strings: the header labels and the
 // body's cell contents (cell contents may be strings or rich-text
-// values; both stringify).
+// values, and both stringify).
 const acceptedGrid = ( onAccept ) => {
 	const { head, body } = onAccept.mock.calls.at( -1 )[ 0 ];
 

@@ -482,10 +482,10 @@ export function createIntentLogSession(
 	 * from the observed frame (the next capture authors at it), the undo
 	 * pin (inverse derivation reads documents at retained seqs), AND the
 	 * base of every open proposal (conflict review rebuilds what the
-	 * author started from; a parked intent is no longer pending, so the
+	 * author started from. A parked intent is no longer pending, so the
 	 * outbox floor alone would let its base be trimmed away). A proposal
 	 * whose base is already below the replica's first seq (parked before
-	 * this session joined) cannot pull the floor back; its record has no
+	 * this session joined) cannot pull the floor back. Its record has no
 	 * base side.
 	 */
 	const applyRetention = (): void => {

@@ -103,7 +103,7 @@ export interface DeRtcSessionOptions {
 
 	/**
 	 * The entity's record of canonical content by version. The session
-	 * writes every version it receives into it; the engine's review lane
+	 * writes every version it receives into it. The engine's review lane
 	 * reads the newest one. Optional: a session without one keeps its
 	 * own.
 	 */

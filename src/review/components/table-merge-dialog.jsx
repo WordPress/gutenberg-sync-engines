@@ -1,4 +1,4 @@
-// @ts-nocheck -- Prototype JavaScript moved as is from the bundled Gutenberg fork; typing it (TSX) is a later pass.
+// @ts-nocheck -- Plain JavaScript. The review components are not type-checked.
 import { useMemo, useState } from '@wordpress/element';
 import { __ } from '@wordpress/i18n';
 import { Button, Modal } from '@wordpress/components';
@@ -68,11 +68,11 @@ function GridPane( { label, grid, baseGrid, onRestore } ) {
  * side by side as read-only tables, each highlighting only its own
  * changes against the shared base, and below them the merged result as a
  * real table block in the mini block editor, pre-seeded with the
- * SUGGESTED merge (all clean changes from both sides applied; a cell
+ * SUGGESTED merge (all clean changes from both sides applied, and a cell
  * both sides changed differently holds the current version's value) and
  * hand-editable. Genuinely contested cells are resolved by editing the
- * merged table directly; the panes show what each side wanted. Accept
- * hands the merged table's head, body, and foot attributes back; Cancel
+ * merged table directly. The panes show what each side wanted. Accept
+ * hands the merged table's head, body, and foot attributes back. Cancel
  * closes without changing anything.
  *
  * The record can change while the dialog is open (a collaborator edits
@@ -289,8 +289,8 @@ export function TableConflictPreview( { conflict } ) {
  * The table block's review view (see src/review/views.ts): the record's
  * sides as grids, the merged result as a table, and the decision handed
  * back as the serialized table. The merged table keeps the current
- * block's other attributes (the caption, the layout) and its identity;
- * only the head, the body, and the foot come from the merge.
+ * block's other attributes (the caption, the layout) and its identity.
+ * Only the head, the body, and the foot come from the merge.
  *
  * @param {Object}   props
  * @param {Object}   props.conflict The conflict record.

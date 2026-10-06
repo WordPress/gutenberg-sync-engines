@@ -1696,7 +1696,7 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 		$this->author_tries_the_held_block_again( $this->engine_that_cannot_store_a_closing_row(), '<script>alert(2)</script>' );
 
 		// Every tab still shows the first hold's card, so the server must
-		// still know it; the new hold is raised beside it.
+		// still know it. The new hold is raised beside it.
 		$holds = $this->engine()->get_open_holds( $this->room() );
 		$this->assertCount( 2, $holds, 'the first hold stays open beside the second' );
 		$this->assertArrayHasKey( $first['holdId'], $holds );

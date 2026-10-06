@@ -74,7 +74,7 @@ export function createYjsServerEngine(): SyncEngine & {
 } {
 	/*
 	 * Security holds, per entity. A CRDT merge detects no conflicts to
-	 * set aside, so this engine has no MERGE records; what it has is
+	 * set aside, so this engine has no MERGE records. What it has is
 	 * markup the server's kses lane stripped from a filtered author's
 	 * block and kept for approval. Subscriptions are keyed at the engine
 	 * level so they are valid before, and across, an entity's lifetime.

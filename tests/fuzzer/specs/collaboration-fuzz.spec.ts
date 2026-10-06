@@ -593,8 +593,8 @@ async function clickPastReviewCards(
 	rng: Random
 ): Promise< CardResolution[] > {
 	const resolutions: CardResolution[] = [];
-	// One block can carry several records (edits by different authors);
-	// they present one after the other.
+	// One block can carry several records (edits by different authors).
+	// They present one after the other.
 	for ( let attempt = 0; attempt < 5; attempt++ ) {
 		const resolution = await resolveReviewCard( page, target, rng );
 		if ( ! resolution ) {

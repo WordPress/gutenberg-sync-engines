@@ -1,4 +1,4 @@
-// @ts-nocheck -- Prototype JavaScript moved as is from the bundled Gutenberg fork; typing it (TSX) is a later pass.
+// @ts-nocheck -- Plain JavaScript. The review components are not type-checked.
 import { useState } from '@wordpress/element';
 import { useSelect } from '@wordpress/data';
 import { __ } from '@wordpress/i18n';
@@ -87,7 +87,7 @@ function Pane( { label, content, baseContent, onRestore } ) {
  * The merge dialog's content: the proposed version and the current
  * version side by side, each rendered as read-only blocks diffed against
  * the SHARED BASE both started from with the revisions diff system, so
- * each pane highlights only its own changes at both grains: block-level
+ * each pane highlights only its own changes at both levels: block-level
  * added/removed/modified markers and inline ins/del inside rich text.
  * Every side is serialized block content, one block or several, so the
  * same dialog serves a paragraph and a whole section (a conflict with no
@@ -102,7 +102,7 @@ function Pane( { label, content, baseContent, onRestore } ) {
  * The merged result below the panes is a real block editor seeded from
  * the current version. Either pane's "Restore this version" reseeds it
  * wholly. Accept hands the merged result back as serialized block
- * content; Cancel closes without changing anything.
+ * content. Cancel closes without changing anything.
  *
  * The record can change while the dialog is open: a collaborator edits
  * the block, or the author types on. The panes always show the record

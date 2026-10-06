@@ -60,10 +60,10 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 	 * sanitize_unfiltered_html): blocks an unfiltered author's batch
 	 * touched whose serialization wp_kses_post would rewrite are replaced
 	 * with their sanitized form and the compensating delta broadcasts to
-	 * every client — filter-on-save semantics at per-update grain. What
-	 * the lane stripped is HELD for review (`held` rows, the room's hold
-	 * ledger): someone allowed to publish unfiltered HTML approves it,
-	 * edits it, or discards it over the REST review lane.
+	 * every client. This is what filtering on save does, applied to every
+	 * update. What the lane stripped is HELD for review (`held` rows, the
+	 * room's hold ledger): someone allowed to publish unfiltered HTML
+	 * approves it, edits it, or discards it over the REST review lane.
 	 *
 	 * KNOWN GAP (relative to intent-log, tracked in
 	 * docs/engine-comparison.md): no proposal/review lane — genuine
@@ -163,7 +163,7 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 		/**
 		 * Update type for a security hold: markup the kses lane stripped
 		 * from a filtered author's block, kept for a reviewer who may
-		 * publish unfiltered HTML. Server-emitted only; the data is JSON
+		 * publish unfiltered HTML. Server-emitted only. The data is JSON
 		 * (see hold_markup()).
 		 *
 		 * @since n.e.x.t
@@ -555,7 +555,7 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 		 * block builder, wrappers recorded). The sanitized form keeps the
 		 * block's id: to every editor it is the same block with other
 		 * content, and an open hold over it still names it. Returns the
-		 * compensating deltas to broadcast; empty when nothing was
+		 * compensating deltas to broadcast, empty when nothing was
 		 * sanitized.
 		 *
 		 * The stripped markup is not thrown away: each sanitized block is
@@ -724,7 +724,7 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 		 * by its position (see is_hold_over_same_block()).
 		 *
 		 * The row: holdId, blockId (the block's id in the canonical
-		 * document, which the sanitized form keeps; null when nothing of
+		 * document, which the sanitized form keeps, null when nothing of
 		 * the block survived),
 		 * index, held (the block as the author wrote it), sanitized (the
 		 * block as the canonical document has it), base (the block before
@@ -913,7 +913,7 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 		 * lane: decisions are mutations and belong on an authenticated
 		 * route). `accepted` lands the reviewer's content in place of the
 		 * sanitized block, as a server-authored update every client merges
-		 * like any other, and needs the unfiltered_html capability;
+		 * like any other, and needs the unfiltered_html capability.
 		 * `dismissed` keeps the sanitized block. Either closes the hold
 		 * for every client. An unknown or closed hold acks without
 		 * changing anything.
@@ -931,9 +931,9 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 		 * @param string      $resolution 'accepted' or 'dismissed'.
 		 * @param string|null $content    The replacement for 'accepted', as
 		 *                                serialized blocks ('' removes the
-		 *                                block); null lands the held markup.
+		 *                                block). Null lands the held markup.
 		 * @param string|null $seen       The sanitized block the reviewer
-		 *                                saw, for 'accepted'; null stands
+		 *                                saw, for 'accepted'. Null stands
 		 *                                for the hold as it is recorded.
 		 * @return array|WP_Error Disposition, or error.
 		 */
@@ -1112,8 +1112,8 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 				$this->storage->set_room_meta( $room, self::META_WRAPPERS, $wrappers );
 			}
 			// The approved content may have removed the block (empty
-			// content) or blocks inside it. Other holds on those close;
-			// the caller closes this one.
+			// content) or blocks inside it. Other holds on those close.
+			// The caller closes this one.
 			$this->close_holds_of_removed_blocks(
 				$room,
 				array_diff_key( $ids_before, self::all_block_ids( $doc ) ),

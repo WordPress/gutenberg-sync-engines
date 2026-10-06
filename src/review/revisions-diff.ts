@@ -2,12 +2,11 @@
  * The revisions block differ, unlocked ONCE from `@wordpress/editor`'s
  * private APIs and re-exported for the review components. Every review
  * component imports these names from here, never from the subtree by
- * relative path. The names are the vendor delta the bundled Gutenberg
- * carries on top of its pin (see AGENTS.md, "The gutenberg/ subtree"), and
- * the upstream pull request in docs/plan/upstream-revisions-differ-pr.md.
+ * relative path. The names are the one change the bundled Gutenberg
+ * carries on top of its pin (see AGENTS.md, "The gutenberg/ subtree").
  *
  * A standalone Gutenberg wins over the bundled one, and it does not carry
- * the delta: every name below is then undefined. A component must check
+ * that change: every name below is then undefined. A component must check
  * `hasBlockDiff` or `hasCodeDiff` before it uses a name, and show the
  * plain text comparison (components/plain-text-diff.jsx) when the answer
  * is no.

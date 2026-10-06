@@ -1838,12 +1838,12 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 
 		/**
 		 * Stamps each changed block with `baseHtml`: the block as the
-		 * proposal's base version had it — its serialized form by identity
-		 * when the block carries a syncId (at any depth), else the top-level
-		 * record at the same index — or '' for a block the base does not
-		 * hold (a proposed insertion). The review UI's "base" side. On
-		 * freeform boundaries (no per-block records) the single whole-content
-		 * park takes the whole base.
+		 * proposal's base version had it. That is its serialized form by
+		 * identity when the block carries a syncId (at any depth), else the
+		 * top-level record at the same index, or '' for a block the base
+		 * does not hold (a proposed insertion). The review UI's "base" side.
+		 * On freeform boundaries (no per-block records) the single
+		 * whole-content park takes the whole base.
 		 *
 		 * @since n.e.x.t
 		 *
@@ -1865,7 +1865,7 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 				if ( is_string( $block['syncId'] ?? null ) && '' !== $block['syncId'] ) {
 					if ( null === $by_id ) {
 						// The identity lanes' `html` is the block's subtree
-						// with core block names canonicalized; the base
+						// with core block names canonicalized. The base
 						// form takes the same shape so the two compare.
 						$by_id = array();
 						self::index_serialized_blocks_by_id( parse_blocks( wp_de_rtc_canonicalize_post_content_core_block_names( $base_content ) ), $by_id );
@@ -1891,7 +1891,7 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 		 * with `notInDocument`: the proposal's merge left them out (a held
 		 * new block dropped, a block one side deleted), so no block in the
 		 * document stands for them. An accepted resolution inserts such a
-		 * block; one without the mark replaces the block in the document,
+		 * block. One without the mark replaces the block in the document,
 		 * and is refused once that block is gone (see replace_parked_span()).
 		 *
 		 * @since n.e.x.t

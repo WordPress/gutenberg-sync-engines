@@ -1,7 +1,7 @@
 /**
  * The intent-log conflict records: one record per parked unit, overlapping
  * units folded, and the three sides rebuilt from the retained log. Runs the
- * real engine core (documents and the reducer); the serializer is a plain
+ * real engine core (documents and the reducer). The serializer is a plain
  * stand-in, since block markup is the editor's business.
  */
 
@@ -466,7 +466,7 @@ describe( 'intent-log conflict records', () => {
 				index: 0,
 				count: 3,
 			} );
-			// The edits touch two blocks; an accepted result replaces three.
+			// The edits touch two blocks. An accepted result replaces three.
 			expect( record.blockIds ).toEqual( [ 'p1', 'p3' ] );
 			expect( record.spanIds ).toEqual( [ 'p1', 'p2', 'p3' ] );
 		} );

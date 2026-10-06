@@ -1,4 +1,4 @@
-// @ts-nocheck -- Prototype JavaScript moved as is from the bundled Gutenberg fork; typing it (TSX) is a later pass.
+// @ts-nocheck -- Plain JavaScript. The review components are not type-checked.
 import { useDispatch, useSelect } from '@wordpress/data';
 import { useCallback } from '@wordpress/element';
 import { __ } from '@wordpress/i18n';
@@ -25,8 +25,8 @@ export const REASON_LABELS = {
 
 /**
  * Whether the current user may approve content held for unfiltered-HTML
- * review. UI hint only, since ingest re-enforces per the authoring user's
- * capability regardless of what the client shows. The plugin's PHP sets
+ * review. This only decides what the UI shows: the server checks the
+ * authoring user's capability again on every write. The plugin's PHP sets
  * the flag on its client settings (enqueue_editor_assets). Only an
  * explicit `true` allows: when the settings or the flag are missing, the
  * answer is no.

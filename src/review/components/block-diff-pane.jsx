@@ -1,4 +1,4 @@
-// @ts-nocheck -- Prototype JavaScript moved as is from the bundled Gutenberg fork; typing it (TSX) is a later pass.
+// @ts-nocheck -- Plain JavaScript. The review components are not type-checked.
 import { useEffect, useMemo, useState } from '@wordpress/element';
 import { Disabled } from '@wordpress/components';
 import { BlockEditorProvider, BlockList } from '@wordpress/block-editor';
@@ -62,7 +62,7 @@ function useDiffFormatTypes() {
  * the diff CSS, the SVG filter the removed styles reference by id, and the
  * visually hidden descriptions the diff marks point at via
  * `aria-describedby`. The revisions canvas injects the same resources into
- * its iframe; a dialog renders this component once instead, since the
+ * its iframe. A dialog renders this component once instead, since the
  * admin stylesheet does not carry them.
  *
  * Renders nothing when the editor does not export its revision comparison:

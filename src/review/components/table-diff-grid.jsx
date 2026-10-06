@@ -1,4 +1,4 @@
-// @ts-nocheck -- Prototype JavaScript moved as is from the bundled Gutenberg fork; typing it (TSX) is a later pass.
+// @ts-nocheck -- Plain JavaScript. The review components are not type-checked.
 import { useMemo } from '@wordpress/element';
 import { diffGridAgainstBase } from './merge-table-grids';
 
@@ -80,7 +80,7 @@ function displayFromModel( model ) {
 					'current' === cell.status
 				) {
 					// A one-sided cell reached through added structure
-					// reads as added; a one-sided edit of a base cell
+					// reads as added. A one-sided edit of a base cell
 					// reads as changed. Both share the same palette.
 					const structural =
 						'base' !== row.source ||
@@ -107,8 +107,8 @@ function displayFromModel( model ) {
  * overflows.
  *
  * The revisions diff system is deliberately NOT used here: table cells
- * live in query-sourced attributes, so the block differ has no cell grain
- * to offer; the whole table would just mark as modified.
+ * live in query-sourced attributes, which the block differ cannot compare
+ * cell by cell. It would mark the whole table as modified.
  *
  * @param {Object}  props
  * @param {Object}  [props.grid]     A version's grid.

@@ -728,7 +728,7 @@ class Tests_Collaboration_WpDeRtcEngine extends WP_UnitTestCase {
 		// The parked block stayed in the document (canonical won its position).
 		$this->assertArrayNotHasKey( 'notInDocument', $parked[0]['changedBlocks'][0] );
 
-		// A peer deletes the parked (Alpha) block; the Beta block moves to its index.
+		// A peer deletes the parked (Alpha) block. The Beta block moves to its index.
 		$records = wp_de_rtc_get_top_level_serialized_block_records( $latest['content'] );
 		$this->engine()->handle_updates(
 			$this->room(),

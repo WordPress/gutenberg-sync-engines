@@ -126,7 +126,7 @@ describe( 'useDecideConflict', () => {
 
 	it( 'tells the reviewer when an engine behind the fan-out refused the decision as stale', async () => {
 		// de-rtc and yjs-server register through a fan-out over their
-		// per-session instances; the instance's answer must come through.
+		// per-session instances. The instance's answer must come through.
 		const fanOut = createConflictFanOut();
 		fanOut.add( {
 			getOpenConflicts: () => [ PARAGRAPH_CONFLICT ],

@@ -17,7 +17,7 @@ afterAll( () => {
 } );
 
 // The pane blocks read by their diff status ("Modified block: Paragraph",
-// "Added block: Paragraph"); plain labels are the merged editor's.
+// "Added block: Paragraph"). Plain labels are the merged editor's.
 const mergedParagraphs = () =>
 	screen.getAllByRole( 'document', { name: 'Block: Paragraph' } );
 
@@ -251,7 +251,7 @@ describe( 'MergeDialogBody, a section', () => {
 		await act( async () => {} );
 
 		// The proposed pane marks the moved second sentence as removed
-		// from the first half; the current pane marks the March-to-April
+		// from the first half. The current pane marks the March-to-April
 		// edit.
 		const deletions = screen
 			.getAllByRole( 'deletion' )

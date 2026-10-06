@@ -442,11 +442,11 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Plugin' ) ) {
 
 				/*
 				 * Whether the user may approve markup held for
-				 * unfiltered-HTML review (the review UI's hint; ingest
-				 * re-enforces per the authoring user regardless). The
-				 * framework prints the same flag as a global of its own; the
-				 * plugin reads this one so the UI outlives the framework's
-				 * globals.
+				 * unfiltered-HTML review. This only decides what the review
+				 * UI shows: the server checks the authoring user's capability
+				 * again on every write. The framework prints the same flag
+				 * as a global of its own. The plugin reads this one so the
+				 * UI outlives the framework's globals.
 				 */
 				$settings['canUnfilteredHtml'] = current_user_can( 'unfiltered_html' );
 

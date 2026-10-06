@@ -19,7 +19,7 @@ add_action(
 		/*
 		 * The names are the bundled Gutenberg's one addition to the editor
 		 * package (AGENTS.md, "The gutenberg/ subtree"). The script runs
-		 * right after the editor package loads; the sync-engines bundle
+		 * right after the editor package loads. The sync-engines bundle
 		 * depends on that package, so it always loads later and finds the
 		 * names gone.
 		 */

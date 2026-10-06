@@ -1,7 +1,7 @@
 /**
  * Security holds: markup the server's kses lane stripped from a filtered
  * author's block and kept for a reviewer who may publish unfiltered HTML.
- * The canonical document holds the SANITIZED block; the hold carries what
+ * The canonical document holds the SANITIZED block. The hold carries what
  * was written. Holds arrive as `held` rows and close with `held-resolved`
  * rows (accepted, dismissed, superseded by a newer hold over the same
  * block, or block-removed when the block was taken out of the document).
@@ -107,13 +107,13 @@ export interface YjsServerHolds {
 	onChange: ( listener: () => void ) => () => void;
 	/**
 	 * Registers the REST lane decisions travel over (last one wins). A
-	 * decision is a mutation and belongs on an authenticated route; the
+	 * decision is a mutation and belongs on an authenticated route. The
 	 * transport only carries the announcements.
 	 */
 	setRestResolver: ( resolver: YjsServerHoldResolver | null ) => void;
 	/**
 	 * Optimistically closes a hold and POSTs the decision. An approval
-	 * names the sanitized block the reviewer saw (`seen`); the server
+	 * names the sanitized block the reviewer saw (`seen`). The server
 	 * refuses it when the block no longer reads that way. Settles with
 	 * what became of the decision, and never rejects.
 	 */
