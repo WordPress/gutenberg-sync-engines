@@ -762,8 +762,11 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 				// The reviewer compares against what the block was before
 				// the author's FIRST held batch: carry that base over.
 				$hold['base'] = is_string( $open['base'] ?? null ) ? $open['base'] : $hold['base'];
-				unset( $ledger[ $open_id ] );
-				$this->add_row(
+				// The row first, the ledger second, as in resolve_hold(): a
+				// hold whose closing row was not stored stays open beside
+				// the new one (the author's next batch supersedes it
+				// again), so no tab shows a card the server has forgotten.
+				$stored = $this->add_row(
 					$room,
 					self::GENESIS_CLIENT_ID,
 					self::UPDATE_TYPE_HELD_RESOLVED,
@@ -775,6 +778,9 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 						)
 					)
 				);
+				if ( $stored ) {
+					unset( $ledger[ $open_id ] );
+				}
 			}
 
 			$hold_id = 'h-' . substr( md5( $room . '|' . $author . '|' . $hold['index'] . '|' . $hold['held'] . '|' . microtime() ), 0, 12 );

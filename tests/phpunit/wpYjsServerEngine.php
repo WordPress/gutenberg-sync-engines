@@ -1659,6 +1659,69 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 	}
 
 	/**
+	 * The filtered author tries the held block again through the given
+	 * engine: the next hold by the same author over the same block.
+	 *
+	 * @param WP_Yjs_Server_Engine $engine The engine that takes the edit.
+	 * @param string               $markup The markup the author types.
+	 * @return void
+	 */
+	private function author_tries_the_held_block_again( WP_Yjs_Server_Engine $engine, string $markup ): void {
+		wp_set_current_user( self::$author_id );
+		$response = $this->engine()->get_updates_since( $this->room(), 101, 0, array() );
+		$doc      = $this->client_doc_from_response( $response );
+		$update   = $this->encode_edit(
+			$doc,
+			function ( $doc ) use ( $markup ) {
+				$this->first_block_content( $doc )->insert( 0, $markup );
+			}
+		);
+		$engine->handle_updates(
+			$this->room(),
+			101,
+			(int) $response['end_cursor'],
+			array(
+				array(
+					'type' => 'update',
+					'data' => $update,
+				),
+			),
+			array()
+		);
+	}
+
+	public function test_a_superseded_hold_whose_closing_row_was_not_stored_stays_open() {
+		$first = $this->raise_hold();
+
+		$this->author_tries_the_held_block_again( $this->engine_that_cannot_store_a_closing_row(), '<script>alert(2)</script>' );
+
+		// Every tab still shows the first hold's card, so the server must
+		// still know it; the new hold is raised beside it.
+		$holds = $this->engine()->get_open_holds( $this->room() );
+		$this->assertCount( 2, $holds, 'the first hold stays open beside the second' );
+		$this->assertArrayHasKey( $first['holdId'], $holds );
+		$this->assertSame( array(), $this->closed_holds() );
+		$second = array_values( array_diff_key( $holds, array( $first['holdId'] => true ) ) )[0];
+		$this->assertStringContainsString( 'alert(2)', $second['held'] );
+		$this->assertSame( $first['base'], $second['base'], 'the base carries over either way' );
+
+		// The author's next batch supersedes both through a working engine.
+		$this->author_tries_the_held_block_again( $this->engine(), '<script>alert(3)</script>' );
+
+		$holds = array_values( $this->engine()->get_open_holds( $this->room() ) );
+		$this->assertCount( 1, $holds );
+		$this->assertStringContainsString( 'alert(3)', $holds[0]['held'] );
+		$this->assertSame( $first['base'], $holds[0]['base'] );
+		$this->assertSame(
+			array(
+				$first['holdId']  => 'superseded',
+				$second['holdId'] => 'superseded',
+			),
+			$this->closed_holds()
+		);
+	}
+
+	/**
 	 * A paragraph block as an editor adds it to the document.
 	 *
 	 * @param string $client_id The block's id.
