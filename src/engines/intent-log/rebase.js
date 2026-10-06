@@ -20,6 +20,7 @@
 import { locateBlock, subtreeContains } from './document.js';
 import { IntentTypes, TEXT_INTENT_TYPES, withPayload } from './intents.js';
 import { applyIntent, replay } from './reducer.js';
+import { textSliceIntents, withTextSlices } from './text-slices.js';
 
 /** @typedef {import('./engine-types').EngineDocument} EngineDocument */
 /** @typedef {import('./engine-types').IntentEnvelope} IntentEnvelope */
@@ -139,7 +140,7 @@ const voidOut = ( intent, reason ) => ( {
  */
 export const ESCALATION_REASONS = new Set( [
 	'target-deleted', // Rule 1.
-	'range-crosses-split', // Rule 2 (known simplification).
+	'range-crosses-split', // Rule 2 (replacement placement needs review).
 	'concurrent-insert-in-range', // Rule 2.
 	'position-in-deleted-range', // Rule 2.
 	'concurrent-replace-overlap', // Rule 2.
@@ -159,6 +160,9 @@ export const ESCALATION_REASONS = new Set( [
  * @return {string[]} Required block ids.
  */
 function requiredTargets( intent ) {
+	if ( intent.textSlices ) {
+		return textSliceIntents( intent ).flatMap( requiredTargets );
+	}
 	const { type, payload } = intent;
 	switch ( type ) {
 		case IntentTypes.SET_PROPERTY:
@@ -224,6 +228,9 @@ export function frameKeysOverlap( a, b ) {
  * @return {string[]} Frame keys the payload depends on.
  */
 export function frameReadTargets( intent ) {
+	if ( intent.textSlices ) {
+		return textSliceIntents( intent ).flatMap( frameReadTargets );
+	}
 	const { type, payload } = intent;
 	switch ( type ) {
 		case IntentTypes.INSERT_TEXT:
@@ -252,6 +259,9 @@ export function frameReadTargets( intent ) {
  * @return {string[]} Frame keys the intent changes.
  */
 export function frameWriteTargets( intent ) {
+	if ( intent.textSlices ) {
+		return textSliceIntents( intent ).flatMap( frameWriteTargets );
+	}
 	const { type, payload } = intent;
 	switch ( type ) {
 		case IntentTypes.INSERT_TEXT:
@@ -648,6 +658,34 @@ function targetsAnyTextOf( intent, syncId ) {
  *                           reason? }.
  */
 function transformOne( intent, prior, doc ) {
+	if ( prior.textSlices ) {
+		let current = intent;
+		for ( const part of textSliceIntents( prior ) ) {
+			const result = transformOne( current, part, doc );
+			if ( result.outcome !== 'clean' ) {return {
+				 ...result, intent };
+			}
+			current = result.intent;
+			( { doc } = applyIntent( doc, part ) );
+		}
+		return clean( current );
+	}
+	if ( intent.textSlices ) {
+		/** @type {IntentEnvelope[]} */
+		const slices = [];
+		for ( const part of textSliceIntents( intent ) ) {
+			const result = transformOne( part, prior, doc );
+			if ( result.outcome === 'escalate' ) {return {
+				 ...result, intent };
+			}
+			if ( result.outcome === 'clean' ) {
+				slices.push( result.intent );
+			}
+		}
+		return slices.length
+			? clean( withTextSlices( intent, slices ) )
+			: voidOut( intent, 'already-deleted' );
+	}
 	const { type, payload } = intent;
 	const priorPayload = prior.payload;
 
@@ -710,15 +748,20 @@ function transformOne( intent, prior, doc ) {
 						} )
 					);
 				}
-				if ( intent.type === IntentTypes.FORMAT_TEXT ) {
-					// Formats never escalate: clip to the first half. The
-					// tail's missing/lingering formatting is cosmetic drift,
-					// documented as a known simplification.
-					return clean( withPayload( intent, { end: splitAt } ) );
+				if (
+					intent.type === IntentTypes.FORMAT_TEXT ||
+					intent.type === IntentTypes.DELETE_TEXT
+				) {
+					return clean( withTextSlices( intent, [
+						withPayload( intent, { end: splitAt } ),
+						withPayload( intent, {
+							syncId: priorPayload.newSyncId,
+							start: 0,
+							end: end - splitAt,
+						} ),
+					] ) );
 				}
-				// Known simplification: a destructive range crossing a
-				// concurrent split point escalates rather than dividing
-				// into two intents.
+				// Replacement placement across a split still needs review.
 				return escalate( intent, 'range-crosses-split' );
 			}
 			return clean( intent );

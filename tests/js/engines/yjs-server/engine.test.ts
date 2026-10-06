@@ -14,7 +14,7 @@ import {
 	CRDT_RECORD_MAP_KEY,
 	CRDT_STATE_MAP_KEY,
 	CRDT_STATE_MAP_VERSION_KEY as VERSION_KEY,
-} from '../../../../src/engines/yjs/constants';
+} from '../../../../src/engines/yjs-server/constants';
 // eslint-disable-next-line import/no-unresolved -- Provided at runtime as wp.sync.
 import type { SyncConfig } from '@wordpress/sync';
 

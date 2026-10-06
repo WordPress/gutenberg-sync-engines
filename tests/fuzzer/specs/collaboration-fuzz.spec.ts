@@ -9,7 +9,7 @@
  * - Every test is one SEED. The seed deterministically chooses the initial
  *   post content, the action at every step, the acting user, milestone
  *   (save/reload/late-join) placement, and fault injection. A failing seed
- *   replays exactly (same engine/transport/steps/users).
+ *   repeats the random choices; browser timing can still vary.
  * - Actions come from a bounded grammar (block inserts/edits/moves/deletes,
  *   nested structures, title edits, real typing, concurrent edits), not
  *   arbitrary DOM mutation.
@@ -1426,9 +1426,32 @@ async function waitForDiscovery( pages: Page[] ) {
 				.waitFor( { timeout: DISCOVERY_TIMEOUT_MS } )
 		)
 	);
-	if ( TRANSPORT === 'websocket' || TRANSPORT === 'sse' ) {
+	if ( [ 'websocket', 'sse', 'sse-daemon' ].includes( TRANSPORT ) ) {
 		// Sync rides WS frames, or one long-lived stream response per tab
-		// that answers only when it ends.
+		// that answers only when it ends. Require evidence of the selected
+		// transport: successful polling fallback must not certify SSE.
+		await Promise.all(
+			pages.map( ( pg ) =>
+				pg.waitForFunction(
+					( transport ) => {
+						const state =
+							transport === 'websocket'
+								? ( window as any ).__wpSyncWsState
+								: ( window as any ).__wpSyncSseState;
+						return (
+							state?.open &&
+							( transport === 'websocket'
+								? Object.values( state.rooms ).some(
+										( room: any ) => room.synced
+								  )
+								: state.events > 0 )
+						);
+					},
+					TRANSPORT,
+					{ timeout: DISCOVERY_TIMEOUT_MS }
+				)
+			)
+		);
 		return;
 	}
 	await Promise.all( pages.map( ( pg ) => waitForSyncQuiet( pg ) ) );
@@ -1525,6 +1548,14 @@ test.describe( `Collaboration fuzz [${ ENGINE }/${ TRANSPORT }]`, () => {
 					if ( count > 1 ) {
 						duplicated[ mark ] = count;
 					}
+				}
+				if ( Object.keys( duplicated ).length ) {
+					record( {
+						label: 'duplicated-content',
+						step: trace[ trace.length - 1 ]?.step ?? -1,
+						userIndex: -1,
+						detail: { after: label, duplicated, state },
+					} );
 				}
 				expect(
 					duplicated,
@@ -1791,6 +1822,12 @@ test.describe( `Collaboration fuzz [${ ENGINE }/${ TRANSPORT }]`, () => {
 
 					const action = pick( rng, ACTIVE_ACTIONS );
 					const opId = nextOpId++;
+					record( {
+						label: 'action-start',
+						step,
+						userIndex: actorIndex,
+						detail: { action: action.label, opId },
+					} );
 					const detail =
 						await test.step( `seed ${ seed } step ${ step } ${ action.label } user ${ actorIndex }`, async () =>
 							( await action.run( {
@@ -1879,9 +1916,20 @@ test.describe( `Collaboration fuzz [${ ENGINE }/${ TRANSPORT }]`, () => {
 							},
 							-1
 						);
-						await waitForConvergence(
+						const joinedState = await waitForConvergence(
 							activePages(),
 							CONVERGENCE_TIMEOUT_MS
+						);
+						expect(
+							joinedState.content,
+							'late joiner must contribute content'
+						).toContain(
+							marker(
+								seed,
+								step,
+								participants.length - 1,
+								'late'
+							)
 						);
 					}
 
@@ -1933,10 +1981,14 @@ test.describe( `Collaboration fuzz [${ ENGINE }/${ TRANSPORT }]`, () => {
 							-1
 						);
 						documentMayBeEmpty = false;
-						await waitForConvergence(
+						const rejoinedState = await waitForConvergence(
 							activePages(),
 							CONVERGENCE_TIMEOUT_MS
 						);
+						expect(
+							rejoinedState.content,
+							'returning participant must contribute content'
+						).toContain( marker( seed, step, 1, 'rejoin' ) );
 						await assertNoInvalidBlocks(
 							rejoined.page,
 							'post-rejoin'
@@ -2056,9 +2108,22 @@ test.describe( `Collaboration fuzz [${ ENGINE }/${ TRANSPORT }]`, () => {
 					title: { raw: string };
 				};
 				expect( saved.title.raw ).toBe( finalState.title );
-				if ( ! documentMayBeEmpty ) {
-					expect( saved.content.raw.length ).toBeGreaterThan( 0 );
-				}
+				// Reloading a live room can conceal a stale saved post: peers
+				// repair the editor from room history. Check the database's
+				// full content independently, allowing serialization formatting.
+				const persisted = await participants[ 0 ].page.evaluate(
+					( contents ) =>
+						contents.map( ( content ) => {
+							const { parse, serialize } = ( window as any ).wp
+								.blocks;
+							return serialize( parse( content ) );
+						} ),
+					[ saved.content.raw, finalState.content ]
+				);
+				expect(
+					persisted[ 0 ],
+					'saved post content must match the converged editor'
+				).toBe( persisted[ 1 ] );
 			} finally {
 				await testInfo.attach( 'fuzz-run.json', {
 					body: JSON.stringify(
@@ -2066,6 +2131,15 @@ test.describe( `Collaboration fuzz [${ ENGINE }/${ TRANSPORT }]`, () => {
 							consoleLog,
 							engine: ENGINE,
 							profile: PROFILE,
+							settings: {
+								burstRate: BURST_RATE,
+								faultRate: FAULT_RATE,
+								cpuThrottle: CPU_THROTTLE,
+								disableSyncFaults: DISABLE_SYNC_FAULTS,
+								disableReload: DISABLE_RELOAD,
+								disableLifecycle: DISABLE_LIFECYCLE,
+								convergenceTimeoutMs: CONVERGENCE_TIMEOUT_MS,
+							},
 							seed,
 							stepCount: STEP_COUNT,
 							trace,

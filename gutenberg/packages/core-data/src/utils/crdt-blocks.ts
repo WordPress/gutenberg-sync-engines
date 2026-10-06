@@ -429,7 +429,7 @@ function createNewYBlock( block: Block ): YBlock {
 								string,
 								unknown,
 							],
-					  ] ),
+						] ),
 				...Object.entries( block ),
 			].map( ( [ key, value ] ) => {
 				switch ( key ) {
@@ -1067,7 +1067,7 @@ function resolveRichTextCursorPosition(
 		? richTextOffsetToHtmlIndex(
 				updatedValue,
 				asRichTextOffset( cursorPosition.offset )
-		  )
+			)
 		: null;
 }
 

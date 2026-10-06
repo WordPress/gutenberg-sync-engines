@@ -2,7 +2,6 @@
  * External dependencies
  */
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
-import * as Y from 'yjs';
 
 /**
  * Internal dependencies
@@ -19,7 +18,6 @@ import {
 	propertyValuesEqual,
 	unflattenProperties,
 } from '../../../../src/engines/de-rtc/doc-bridge';
-import { CRDT_RECORD_MAP_KEY } from '../../../../src/engines/yjs/constants';
 // eslint-disable-next-line import/no-unresolved -- Provided at runtime as wp.sync.
 import type { SyncConfig } from '@wordpress/sync';
 
@@ -32,27 +30,8 @@ jest.mock( '@wordpress/blocks', () => ( {
 
 function makeSyncConfig(): jest.MockedObject< SyncConfig > {
 	return {
-		applyChangesToCRDTDoc: jest.fn( ( doc: Y.Doc, changes: any ) => {
-			const map = doc.getMap( CRDT_RECORD_MAP_KEY );
-			Object.entries( changes ).forEach( ( [ key, value ] ) => {
-				if ( 'meta' === key && value && 'object' === typeof value ) {
-					// Merge meta per key, like core-data's real mapping —
-					// a partial meta object must not wipe sibling keys.
-					const current = map.get( 'meta' );
-					map.set( 'meta', {
-						...( current && 'object' === typeof current
-							? current
-							: {} ),
-						...( value as object ),
-					} );
-					return;
-				}
-				map.set( key, value );
-			} );
-		} ),
-		getChangesFromCRDTDoc: jest.fn( ( doc: Y.Doc ) =>
-			doc.getMap( CRDT_RECORD_MAP_KEY ).toJSON()
-		),
+		// The engine keeps its own plain record; the config only
+		// supplies the awareness factory, which these tests omit.
 	} as unknown as jest.MockedObject< SyncConfig >;
 }
 
@@ -91,7 +70,7 @@ describe( 'de-rtc property sync (client)', () => {
 		return { entity, session, sent };
 	}
 
-	it( "proposals carry the doc's full property map, flattened and canonicalized", () => {
+	it( "proposals carry the record's full property map, flattened and canonicalized", () => {
 		const { entity, session, sent } = makeEntity();
 		session.receiveUpdate(
 			snapshotRow( 'v1', contentOf( BLOCK_A ), {
@@ -124,7 +103,7 @@ describe( 'de-rtc property sync (client)', () => {
 		expect( payload.proposedProperties.blocks ).toBeUndefined();
 	} );
 
-	it( 'canonical snapshots apply properties into the doc and reach the editor', () => {
+	it( 'canonical snapshots apply properties into the record and reach the editor', () => {
 		const { entity, session } = makeEntity();
 		session.receiveUpdate(
 			snapshotRow( 'v1', contentOf( BLOCK_A ), { title: 'Seeded' } )
@@ -138,7 +117,11 @@ describe( 'de-rtc property sync (client)', () => {
 			} )
 		);
 
-		const changes = entity.getEditorChanges( {} as any ) as any;
+		// The editor's record carries the registered meta key (core-data
+		// ignores meta keys the post no longer registers).
+		const changes = entity.getEditorChanges( {
+			meta: { note: 'seeded' },
+		} as any ) as any;
 		expect( changes.title ).toBe( 'Peer title' );
 		expect( changes.meta ).toEqual( { note: 'peer' } );
 	} );
@@ -201,7 +184,9 @@ describe( 'de-rtc property sync (client)', () => {
 			} ),
 		} );
 
-		const changes = entity.getEditorChanges( {} as any ) as any;
+		const changes = entity.getEditorChanges( {
+			meta: { note: 'orig' },
+		} as any ) as any;
 		expect( changes.title ).toBe( 'Mine' );
 		expect( changes.meta ).toEqual( { note: 'peer-updated' } );
 	} );

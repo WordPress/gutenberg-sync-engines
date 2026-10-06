@@ -1,9 +1,4 @@
 /**
- * External dependencies
- */
-import * as Y from 'yjs';
-
-/**
  * WordPress dependencies
  */
 import apiFetch from '@wordpress/api-fetch';
@@ -18,14 +13,15 @@ import type {
 /**
  * Internal dependencies
  *
- * The local Y.Doc is an EDITOR BRIDGE only (block model, undo scope,
- * awareness anchor) reusing the shared `engines/yjs/` schema; the sync
- * substrate is de-rtc's proposal wire — the server's canonical document
- * is a serialized-block string, never a CRDT.
+ * The entity keeps a plain record that mirrors the editor (record.ts), not
+ * a Y.Doc: the sync substrate is de-rtc's proposal wire, and the server's
+ * canonical document is a serialized-block string, never a CRDT.
  */
-import { CRDT_RECORD_MAP_KEY } from '../yjs/constants';
-import { createYjsDoc, serializeCrdtDoc } from '../yjs/doc';
-import { docContainsSnapshot, encodeDocSnapshot } from '../yjs/snapshot';
+import {
+	createDeRtcRecord,
+	editorChangesFromRecord,
+	recordChangesFromEditor,
+} from './record';
 import { createDeRtcAuthorship, type DeRtcBlockAuthorship } from './authorship';
 import type { SyncConflict, SyncConflictSource } from '../../review/types';
 import {
@@ -35,7 +31,10 @@ import {
 } from './revert-undo';
 import { createDeRtcCommitAdapter } from './commit';
 import { registerSaveBaseVersion } from './save-base-version';
-import { applyServerAwarenessStates } from '../awareness-sync';
+import {
+	applyServerAwarenessStates,
+	createAwarenessDoc,
+} from '../../shared/awareness-sync';
 import { registerAwareness } from '../../awareness/registry';
 import { createDeRtcCanonicalContents } from './canonical-contents';
 import {
@@ -46,6 +45,7 @@ import {
 	findBlockBySyncId,
 	serializeBlock,
 	replaceBlockBySyncId,
+	stabilizeClientIds,
 	syncIdOf,
 	unflattenProperties,
 	type DeRtcContestKey,
@@ -97,12 +97,12 @@ function propertyText( value: unknown ): string {
  * An awareness-only codec for de-rtc collection rooms: presence flows,
  * rows are ignored, nothing is ever proposed.
  *
- * @param ydoc      The collection's anchor doc (client id source).
+ * @param clientId  The collection's transport client id.
  * @param awareness Optional awareness instance.
  * @return The transport-facing session codec.
  */
 function createInertDeRtcCollectionCodec(
-	ydoc: Y.Doc,
+	clientId: number,
 	awareness?: import('y-protocols/awareness').Awareness
 ): ReturnType< typeof createDeRtcSessionCodec > {
 	const noopUpdate = () => ( {
@@ -126,7 +126,7 @@ function createInertDeRtcCollectionCodec(
 		 * must flow while alone too.
 		 */
 		sendsWhileAlone: true,
-		clientId: ydoc.clientID,
+		clientId,
 		engineSlug: DE_RTC_ENGINE_SLUG,
 		engineProtocol: DE_RTC_ENGINE_PROTOCOL,
 		// Never sent: this codec has no local updates whose outcome could
@@ -147,11 +147,11 @@ function createInertDeRtcCollectionCodec(
  * The DE-RTC engine, client half.
  *
  * Distributed Editing's client obligations are deliberately small: it
- * never merges. The editor's edits land in the local doc; the session
- * codec proposes the doc's content against the version it last
+ * never merges. The editor's edits land in the local record; the session
+ * codec proposes the record's content against the version it last
  * incorporated; the SERVER three-way-merges every proposal and announces
  * each new version; the canonical content this entity folds back into
- * the doc (and so into the editor) arrives as fetched snapshots. Like the
+ * the record (and so into the editor) arrives as fetched snapshots. Like the
  * yjs-server engine:
  *
  * - `hydrate` is a no-op: the server's genesis snapshot row is the
@@ -162,6 +162,12 @@ function createInertDeRtcCollectionCodec(
  * - `getEditorChanges` reports nothing until bootstrap, so an empty
  *   pre-sync document can never be dispatched into the editor as a
  *   mass deletion.
+ * - No CRDT snapshots or persisted CRDT document: the server holds the
+ *   canonical content, so `encodeSnapshot`/`serialize` return '' (the
+ *   save adds nothing) and `containsSnapshot` returns false (the editor
+ *   fails open on autosave checks) — the intent-log precedent.
+ * - No shared carets: core-data places collaborators' carets with Yjs
+ *   relative positions, which a stub awareness doc cannot resolve.
  *
  * Undo is DE-RTC's revert-edit model (see revert-undo.ts): undo never
  * undoes — it derives a revert from the client's own accepted canonical
@@ -399,11 +405,15 @@ export function createDeRtcEngine(): SyncEngine & {
 					?.byId() ?? {},
 		},
 		createEntity( { syncConfig, objectType, objectId } ): EngineEntity {
-			const ydoc = createYjsDoc( { objectType } );
-			const recordMap = ydoc.getMap( CRDT_RECORD_MAP_KEY );
-			const awareness = syncConfig.createAwareness?.( ydoc );
+			const record = createDeRtcRecord();
+			// The typed Awareness only reads `clientID` (and a destroy
+			// listener) from its doc argument, so a stub serves; carets
+			// that need a real Y.Doc stay off (see the docblock).
+			const awareness = syncConfig.createAwareness?.(
+				createAwarenessDoc( record.clientId ) as never
+			);
 			registerAwareness( objectType, objectId, awareness );
-			const bridge = createDeRtcDocBridge( ydoc, syncConfig );
+			const bridge = createDeRtcDocBridge( record );
 			const review = createDeRtcReviewState();
 			// The REST review lane (B5): resolutions are mutations, so they
 			// POST to the plugin's authenticated route — for EVERY entity
@@ -418,7 +428,7 @@ export function createDeRtcEngine(): SyncEngine & {
 				( proposalId, resolution, content, seenVersion ) =>
 					apiFetch( {
 						data: {
-							client_id: ydoc.clientID,
+							client_id: record.clientId,
 							proposalId,
 							resolution,
 							...( undefined !== content ? { content } : {} ),
@@ -455,41 +465,44 @@ export function createDeRtcEngine(): SyncEngine & {
 				byId: authorship.getBlockAuthorshipById,
 			} );
 
-			// Edits made before the server snapshot arrives, replayed in
-			// order once it does.
+			// Editor edits made before the server snapshot arrives, replayed
+			// in order once it does (after the genesis properties, so the
+			// post's taxonomy fields are known when the edits are filtered).
 			let pendingLocalChanges: Array< {
-				changes: Parameters<
-					typeof syncConfig.applyChangesToCRDTDoc
-				>[ 1 ];
+				changes: Record< string, unknown >;
 				origin: unknown;
 			} > = [];
 
-			const applyChanges = (
-				changes: Parameters<
-					typeof syncConfig.applyChangesToCRDTDoc
-				>[ 1 ],
+			// Editor edits: kept per the framework's field rules.
+			const applyEditorChanges = (
+				changes: Record< string, unknown >,
 				origin: unknown
 			) => {
-				ydoc.transact( () => {
-					syncConfig.applyChangesToCRDTDoc( ydoc, changes );
-				}, origin );
+				record.apply(
+					recordChangesFromEditor( changes, record, objectType ),
+					origin
+				);
+			};
+
+			// Restores and reverts: already record-shaped. Parsed blocks
+			// keep the clientIds of the blocks they replace, so the canvas
+			// does not remount them.
+			const applyRestore = ( changes: Record< string, unknown > ) => {
+				if ( Array.isArray( changes.blocks ) ) {
+					stabilizeClientIds( changes.blocks, record.blocks() );
+				}
+				record.apply( changes, DE_RTC_RESTORE_ORIGIN );
 			};
 
 			bridge.onBootstrap( () => {
 				const pending = pendingLocalChanges;
 				pendingLocalChanges = [];
 				for ( const entry of pending ) {
-					applyChanges( entry.changes, entry.origin );
+					applyEditorChanges( entry.changes, entry.origin );
 				}
 			} );
 
-			const localBlocks = (): any[] => {
-				const stored: any = recordMap.get( 'blocks' );
-				return (
-					stored?.toJSON?.() ??
-					( Array.isArray( stored ) ? stored : [] )
-				);
-			};
+			const localBlocks = (): any[] => record.blocks();
 
 			/*
 			 * The blocks a parked record's `current` side is read from:
@@ -547,11 +560,10 @@ export function createDeRtcEngine(): SyncEngine & {
 				// it and wins the three-way merge (canonical now agrees
 				// with the base for that property).
 				if ( parked.property?.name ) {
-					applyChanges(
+					applyRestore(
 						unflattenProperties( {
 							[ parked.property.name ]: parked.property.value,
-						} ),
-						DE_RTC_RESTORE_ORIGIN
+						} )
 					);
 					return;
 				}
@@ -586,7 +598,7 @@ export function createDeRtcEngine(): SyncEngine & {
 						}
 					} );
 				}
-				applyChanges( { blocks: next }, DE_RTC_RESTORE_ORIGIN );
+				applyRestore( { blocks: next } );
 			};
 
 			const key = reviewKey( objectType, objectId );
@@ -676,7 +688,7 @@ export function createDeRtcEngine(): SyncEngine & {
 						: null;
 					if ( parked.property ) {
 						const name = parked.property.name;
-						const value: unknown = recordMap.toJSON()[ name ];
+						const value: unknown = record.get( name );
 						return {
 							id: parked.proposalId,
 							kind: 'merge',
@@ -767,7 +779,7 @@ export function createDeRtcEngine(): SyncEngine & {
 					...review.getOpen().map( ( parked ) => ( {
 						id: parked.proposalId,
 						unitId: parked.proposalId,
-						isLocal: parked.authorClientId === ydoc.clientID,
+						isLocal: parked.authorClientId === record.clientId,
 						actorId: `u${ parked.author ?? 0 }c${
 							parked.authorClientId
 						}`,
@@ -828,7 +840,7 @@ export function createDeRtcEngine(): SyncEngine & {
 					overlayParkedBlocks( {
 						proposalId: `contested-${ contestKey }`,
 						reason: 'contested',
-						authorClientId: ydoc.clientID,
+						authorClientId: record.clientId,
 						changedBlocks: [
 							{
 								index,
@@ -868,19 +880,13 @@ export function createDeRtcEngine(): SyncEngine & {
 					notifyKey( key );
 				}
 			};
-			recordMap.observeDeep( onDocumentChange );
+			const unsubscribeDocument = record.subscribe( onDocumentChange );
 			// A version can be held before the document takes it (it waits
 			// while this client types), and the records change then too.
 			const unsubscribeCanonical =
 				canonicalContents.onChange( onDocumentChange );
 
-			let observersAttached = false;
-			let onRecordUpdate:
-				| ( (
-						events: Y.YEvent< any >[],
-						transaction: Y.Transaction
-				  ) => void )
-				| undefined;
+			let unsubscribeObservers: ( () => void ) | null = null;
 
 			return {
 				awareness,
@@ -900,7 +906,7 @@ export function createDeRtcEngine(): SyncEngine & {
 							createDeRtcCommitAdapter(
 								objectType,
 								objectId,
-								bridge.doc.clientID
+								record.clientId
 							) ?? undefined,
 					} );
 					saveControl.prepareForSave = codec.prepareForSave;
@@ -917,39 +923,40 @@ export function createDeRtcEngine(): SyncEngine & {
 						pendingLocalChanges.push( { changes, origin } );
 						return;
 					}
-					applyChanges( changes, origin );
+					applyEditorChanges( changes, origin );
 				},
 
 				getEditorChanges: ( editedRecord ) =>
 					bridge.isBootstrapped()
-						? syncConfig.getChangesFromCRDTDoc( ydoc, editedRecord )
+						? editorChangesFromRecord(
+								record,
+								editedRecord,
+								objectType
+						  )
 						: {},
 
-				encodeSnapshot: () => encodeDocSnapshot( ydoc ),
+				// No CRDT snapshot or persisted CRDT document (see the
+				// engine docblock): empty values add nothing to saves.
+				encodeSnapshot: () => '',
 
-				containsSnapshot: ( encoded ) =>
-					docContainsSnapshot( ydoc, encoded ),
+				containsSnapshot: () => false,
 
-				serialize: () => serializeCrdtDoc( ydoc ),
+				serialize: () => '',
 
 				observe( observers ) {
-					onRecordUpdate = ( _events, transaction ) => {
+					unsubscribeObservers?.();
+					unsubscribeObservers = record.subscribe( ( origin ) => {
 						// Canonical applications (remote origin), undo
-						// transactions, and proposal restores must reach the
-						// editor; the editor's own edits must not echo back
-						// into it.
+						// reverts, and proposal restores (restore origin)
+						// must reach the editor; the editor's own edits
+						// must not echo back into it.
 						if (
-							DE_RTC_REMOTE_ORIGIN !== transaction.origin &&
-							DE_RTC_RESTORE_ORIGIN !== transaction.origin &&
-							! ( transaction.origin instanceof Y.UndoManager )
+							DE_RTC_REMOTE_ORIGIN === origin ||
+							DE_RTC_RESTORE_ORIGIN === origin
 						) {
-							return;
+							observers.onRemoteChange();
 						}
-						observers.onRemoteChange();
-					};
-
-					recordMap.observeDeep( onRecordUpdate );
-					observersAttached = true;
+					} );
 				},
 
 				addToUndoScope( undoManager, meta ) {
@@ -958,48 +965,50 @@ export function createDeRtcEngine(): SyncEngine & {
 					// lane — before the meta handlers scope in. The restore
 					// origin both reaches the editor like a remote change
 					// and marks the doc dirty, so a revert re-proposes.
-					(
-						undoManager as unknown as DeRtcRevertUndoManager
-					 ).attachEntity?.( {
-						key: recordMap as Y.Map< unknown >,
+					const revertUndo =
+						undoManager as unknown as DeRtcRevertUndoManager;
+					revertUndo.attachEntity?.( {
+						key: record,
 						bridge,
 						feed: undoFeed,
-						applyRevert: ( blocks ) =>
-							applyChanges( { blocks }, DE_RTC_RESTORE_ORIGIN ),
+						applyRevert: ( blocks ) => applyRestore( { blocks } ),
 					} );
-					undoManager.addToScope( recordMap, meta );
+					revertUndo.addToScope( record, meta );
 				},
 
 				destroy() {
-					if ( observersAttached && onRecordUpdate ) {
-						recordMap.unobserveDeep( onRecordUpdate );
-					}
-					recordMap.unobserveDeep( onDocumentChange );
+					unsubscribeObservers?.();
+					unsubscribeObservers = null;
+					unsubscribeDocument();
 					unsubscribeCanonical();
 					if ( entityReviews.get( key )?.review === review ) {
 						entityReviews.delete( key );
 					}
 					review.setRestResolver( null );
 					unregisterSaveBaseVersion();
-					ydoc.destroy();
 				},
 			};
 		},
 
-		createCollection( { syncConfig, objectType } ): EngineCollection {
+		createCollection( { syncConfig } ): EngineCollection {
 			// Collections are INERT under de-rtc (the intent-log precedent):
 			// proposals are serialized post content, which collection rooms
 			// do not have. Awareness still flows so presence works; the
 			// server's collection rooms simply hold an empty canonical whose
 			// rows this codec ignores.
-			const ydoc = createYjsDoc( { collection: true, objectType } );
-			const awareness = syncConfig.createAwareness?.( ydoc );
+			const record = createDeRtcRecord();
+			const awareness = syncConfig.createAwareness?.(
+				createAwarenessDoc( record.clientId ) as never
+			);
 
 			return {
 				awareness,
 
 				createSession: () =>
-					createInertDeRtcCollectionCodec( ydoc, awareness ),
+					createInertDeRtcCollectionCodec(
+						record.clientId,
+						awareness
+					),
 
 				initialize: () => {},
 
@@ -1007,9 +1016,7 @@ export function createDeRtcEngine(): SyncEngine & {
 
 				markSaved() {},
 
-				destroy() {
-					ydoc.destroy();
-				},
+				destroy() {},
 			};
 		},
 	};

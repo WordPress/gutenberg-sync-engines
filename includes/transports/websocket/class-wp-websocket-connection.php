@@ -8,18 +8,21 @@
 if ( ! class_exists( 'WP_WebSocket_Connection' ) ) {
 
 	/**
-	 * A single client connection to the experimental PHP WebSocket sync server.
+	 * One client connection spoken over RFC 6455.
 	 *
-	 * Implements the parts of RFC 6455 the sync transport needs: HTTP upgrade
-	 * handshake parsing, Sec-WebSocket-Accept computation, and frame
-	 * encoding/decoding for text, close, ping, and pong frames. Client frames
-	 * must be masked per the RFC. Fragmented messages are rejected with a
-	 * clean close, which is acceptable for this experimental transport.
+	 * Implements the parts of RFC 6455 the sync transport needs: the upgrade
+	 * handshake, Sec-WebSocket-Accept computation, and frame encoding and
+	 * decoding for text, close, ping, and pong frames. Client frames must be
+	 * masked per the RFC. Fragmented messages are rejected with a clean
+	 * close, which is acceptable for this experimental transport.
+	 *
+	 * The socket itself, and the HTTP request head every framing parses the
+	 * same way, live in WP_Sync_Connection.
 	 *
 	 * @since 7.4.0
 	 * @access private
 	 */
-	class WP_WebSocket_Connection {
+	class WP_WebSocket_Connection extends WP_Sync_Connection {
 		/**
 		 * WebSocket handshake GUID from RFC 6455.
 		 *
@@ -37,14 +40,6 @@ if ( ! class_exists( 'WP_WebSocket_Connection' ) ) {
 		const MAX_PAYLOAD_SIZE = 2097152; // 2 MB.
 
 		/**
-		 * Maximum size (in bytes) of an HTTP handshake request.
-		 *
-		 * @since 7.4.0
-		 * @var int
-		 */
-		const MAX_HANDSHAKE_SIZE = 16384; // 16 KB.
-
-		/**
 		 * Frame opcodes.
 		 *
 		 * @since 7.4.0
@@ -58,185 +53,23 @@ if ( ! class_exists( 'WP_WebSocket_Connection' ) ) {
 		const OPCODE_PONG         = 0xA;
 
 		/**
-		 * Underlying stream resource.
+		 * Completes the upgrade: answers 101 and echoes the subprotocol the
+		 * daemon chose from the offer.
 		 *
-		 * @since 7.4.0
-		 * @var resource
+		 * @since n.e.x.t
+		 *
+		 * @param array $request Parsed request head.
+		 * @param array $context Framing context; `subprotocol` is the
+		 *                       protocol to echo, or '' for none.
+		 * @return true|WP_Error True once upgraded, WP_Error to reject.
 		 */
-		private $stream;
-
-		/**
-		 * Buffered bytes read from the socket, not yet consumed.
-		 *
-		 * @since 7.4.0
-		 * @var string
-		 */
-		private string $read_buffer = '';
-
-		/**
-		 * Buffered bytes waiting to be written to the socket.
-		 *
-		 * @since 7.4.0
-		 * @var string
-		 */
-		private string $write_buffer = '';
-
-		/**
-		 * Whether the WebSocket handshake has completed.
-		 *
-		 * @since 7.4.0
-		 * @var bool
-		 */
-		private bool $is_open = false;
-
-		/**
-		 * Whether the connection has been closed.
-		 *
-		 * @since 7.4.0
-		 * @var bool
-		 */
-		private bool $is_closed = false;
-
-		/**
-		 * Constructor.
-		 *
-		 * @since 7.4.0
-		 *
-		 * @param resource $stream Accepted client stream (non-blocking).
-		 */
-		public function __construct( $stream ) {
-			$this->stream = $stream;
-			stream_set_blocking( $stream, false );
-		}
-
-		/**
-		 * Gets the underlying stream resource.
-		 *
-		 * @since 7.4.0
-		 *
-		 * @return resource Stream resource.
-		 */
-		public function get_stream() {
-			return $this->stream;
-		}
-
-		/**
-		 * Whether the WebSocket handshake has completed.
-		 *
-		 * @since 7.4.0
-		 *
-		 * @return bool True once the connection is upgraded.
-		 */
-		public function is_open(): bool {
-			return $this->is_open && ! $this->is_closed;
-		}
-
-		/**
-		 * Whether the connection has been closed.
-		 *
-		 * @since 7.4.0
-		 *
-		 * @return bool True if closed.
-		 */
-		public function is_closed(): bool {
-			return $this->is_closed;
-		}
-
-		/**
-		 * Whether bytes are waiting to be flushed to the socket.
-		 *
-		 * @since 7.4.0
-		 *
-		 * @return bool True if the write buffer is non-empty.
-		 */
-		public function has_pending_writes(): bool {
-			return '' !== $this->write_buffer;
-		}
-
-		/**
-		 * Reads available bytes from the socket into the buffer.
-		 *
-		 * @since 7.4.0
-		 *
-		 * @return bool False if the peer closed the connection.
-		 */
-		public function read_from_socket(): bool {
-			if ( $this->is_closed ) {
-				return false;
-			}
-
-			$data = fread( $this->stream, 65536 );
-
-			if ( false === $data ) {
-				return ! feof( $this->stream );
-			}
-
-			if ( '' === $data ) {
-				return ! feof( $this->stream );
-			}
-
-			$this->read_buffer .= $data;
+		public function accept_request( array $request, array $context = array() ) {
+			$this->accept_handshake(
+				$request['headers']['sec-websocket-key'],
+				(string) ( $context['subprotocol'] ?? '' )
+			);
 
 			return true;
-		}
-
-		/**
-		 * Attempts to parse a complete HTTP upgrade request from the buffer.
-		 *
-		 * @since 7.4.0
-		 *
-		 * @return array{method: string, path: string, query: array<string, string>, headers: array<string, string>}|null|WP_Error
-		 *         Parsed request, null if the request is incomplete, or WP_Error on malformed input.
-		 */
-		public function parse_handshake_request() {
-			$header_end = strpos( $this->read_buffer, "\r\n\r\n" );
-
-			if ( false === $header_end ) {
-				if ( strlen( $this->read_buffer ) > self::MAX_HANDSHAKE_SIZE ) {
-					return new WP_Error( 'websocket_handshake_too_large', 'Handshake request too large.' );
-				}
-
-				return null;
-			}
-
-			$raw_headers       = substr( $this->read_buffer, 0, $header_end );
-			$this->read_buffer = substr( $this->read_buffer, $header_end + 4 );
-
-			$lines        = explode( "\r\n", $raw_headers );
-			$request_line = array_shift( $lines );
-			$parts        = explode( ' ', $request_line );
-
-			if ( count( $parts ) < 3 ) {
-				return new WP_Error( 'websocket_bad_request', 'Malformed request line.' );
-			}
-
-			$method      = strtoupper( $parts[0] );
-			$request_uri = $parts[1];
-			$path        = (string) wp_parse_url( $request_uri, PHP_URL_PATH );
-			$query_str   = (string) wp_parse_url( $request_uri, PHP_URL_QUERY );
-
-			$query = array();
-			if ( '' !== $query_str ) {
-				parse_str( $query_str, $query );
-			}
-
-			$headers = array();
-			foreach ( $lines as $line ) {
-				$colon = strpos( $line, ':' );
-				if ( false === $colon ) {
-					continue;
-				}
-
-				$name             = strtolower( trim( substr( $line, 0, $colon ) ) );
-				$headers[ $name ] = trim( substr( $line, $colon + 1 ) );
-			}
-
-			return array(
-				'headers' => $headers,
-				'method'  => $method,
-				'path'    => $path,
-				'query'   => $query,
-			);
 		}
 
 		/**
@@ -277,27 +110,18 @@ if ( ! class_exists( 'WP_WebSocket_Connection' ) ) {
 			$response .= "\r\n";
 
 			$this->queue_write( $response );
-			$this->is_open = true;
+			$this->mark_open();
 		}
 
 		/**
-		 * Sends a plain HTTP response (pre-upgrade) and marks the connection
-		 * for closing once flushed.
+		 * Every complete frame the client has sent.
 		 *
-		 * @since 7.4.0
+		 * @since n.e.x.t
 		 *
-		 * @param int    $status_code HTTP status code.
-		 * @param string $reason      HTTP reason phrase.
-		 * @param string $body        Response body.
+		 * @return array<int, array<string, mixed>>|WP_Error Frames, or WP_Error on a protocol violation.
 		 */
-		public function send_http_response( int $status_code, string $reason, string $body = '' ): void {
-			$response = sprintf( "HTTP/1.1 %d %s\r\n", $status_code, $reason )
-				. "Content-Type: text/plain\r\n"
-				. 'Content-Length: ' . strlen( $body ) . "\r\n"
-				. "Connection: close\r\n\r\n"
-				. $body;
-
-			$this->queue_write( $response );
+		public function read_messages() {
+			return $this->read_frames();
 		}
 
 		/**
@@ -312,14 +136,15 @@ if ( ! class_exists( 'WP_WebSocket_Connection' ) ) {
 			$frames = array();
 
 			while ( true ) {
-				$buffer_length = strlen( $this->read_buffer );
+				$buffer          = $this->buffered_bytes();
+				$buffered_length = strlen( $buffer );
 
-				if ( $buffer_length < 2 ) {
+				if ( $buffered_length < 2 ) {
 					break;
 				}
 
-				$byte1 = ord( $this->read_buffer[0] );
-				$byte2 = ord( $this->read_buffer[1] );
+				$byte1 = ord( $buffer[0] );
+				$byte2 = ord( $buffer[1] );
 
 				$fin    = (bool) ( $byte1 & 0x80 );
 				$rsv    = $byte1 & 0x70;
@@ -356,19 +181,19 @@ if ( ! class_exists( 'WP_WebSocket_Connection' ) ) {
 				$offset = 2;
 
 				if ( 126 === $length ) {
-					if ( $buffer_length < $offset + 2 ) {
+					if ( $buffered_length < $offset + 2 ) {
 						break;
 					}
 
-					$unpacked = unpack( 'n', substr( $this->read_buffer, $offset, 2 ) );
+					$unpacked = unpack( 'n', substr( $buffer, $offset, 2 ) );
 					$length   = $unpacked[1];
 					$offset  += 2;
 				} elseif ( 127 === $length ) {
-					if ( $buffer_length < $offset + 8 ) {
+					if ( $buffered_length < $offset + 8 ) {
 						break;
 					}
 
-					$unpacked = unpack( 'J', substr( $this->read_buffer, $offset, 8 ) );
+					$unpacked = unpack( 'J', substr( $buffer, $offset, 8 ) );
 					$length   = $unpacked[1];
 					$offset  += 8;
 				}
@@ -377,21 +202,21 @@ if ( ! class_exists( 'WP_WebSocket_Connection' ) ) {
 					return new WP_Error( 'websocket_payload_too_large', 'Payload exceeds maximum size.' );
 				}
 
-				if ( $buffer_length < $offset + 4 + $length ) {
+				if ( $buffered_length < $offset + 4 + $length ) {
 					break;
 				}
 
-				$mask_key = substr( $this->read_buffer, $offset, 4 );
+				$mask_key = substr( $buffer, $offset, 4 );
 				$offset  += 4;
-				$payload  = substr( $this->read_buffer, $offset, $length );
-
-				$this->read_buffer = substr( $this->read_buffer, $offset + $length );
+				$payload  = substr( $buffer, $offset, $length );
 
 				// Unmask the payload.
 				$unmasked = '';
 				for ( $i = 0; $i < $length; $i++ ) {
 					$unmasked .= $payload[ $i ] ^ $mask_key[ $i % 4 ];
 				}
+
+				$this->take_buffered( $offset + $length );
 
 				$frames[] = array(
 					'opcode'  => $opcode,
@@ -470,68 +295,6 @@ if ( ! class_exists( 'WP_WebSocket_Connection' ) ) {
 			}
 
 			return $header . $payload;
-		}
-
-		/**
-		 * Queues bytes for writing and attempts an immediate flush.
-		 *
-		 * @since 7.4.0
-		 *
-		 * @param string $data Bytes to write.
-		 */
-		private function queue_write( string $data ): void {
-			if ( $this->is_closed ) {
-				return;
-			}
-
-			$this->write_buffer .= $data;
-			$this->flush_writes();
-		}
-
-		/**
-		 * Flushes as much of the write buffer as the socket accepts.
-		 *
-		 * @since 7.4.0
-		 *
-		 * @return bool False if the connection failed while writing.
-		 */
-		public function flush_writes(): bool {
-			if ( $this->is_closed || '' === $this->write_buffer ) {
-				return true;
-			}
-
-			// Intentional silencing: a peer disconnect mid-write raises a
-			// warning; the false return value is handled below.
-			// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
-			$written = @fwrite( $this->stream, $this->write_buffer );
-
-			if ( false === $written ) {
-				$this->close();
-				return false;
-			}
-
-			$this->write_buffer = substr( $this->write_buffer, $written );
-
-			return true;
-		}
-
-		/**
-		 * Closes the underlying stream.
-		 *
-		 * @since 7.4.0
-		 */
-		public function close(): void {
-			if ( $this->is_closed ) {
-				return;
-			}
-
-			$this->is_closed = true;
-			$this->is_open   = false;
-
-			if ( is_resource( $this->stream ) ) {
-				// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
-				@fclose( $this->stream );
-			}
 		}
 	}
 }

@@ -180,4 +180,64 @@ describe( 'createYjsServerSessionCodec', () => {
 			expect( session.onRoomRestart!( [] ) ).toBe( 'disconnect' );
 		} );
 	} );
+
+	describe( 'resync-required voids', () => {
+		it( 'queues one full-state upload that heals the room', () => {
+			const doc = new Y.Doc();
+			const session = createYjsServerSessionCodec( { doc } );
+			const sent: Array< { type: string; data: string } > = [];
+			session.onLocalUpdate( ( update ) => {
+				sent.push( update );
+			} );
+
+			// Two edits; the first send never lands, so the server cannot
+			// apply the second (it depends on items the room lacks).
+			const text = doc.getText( 'content' );
+			text.insert( 0, 'Hello' );
+			text.insert( 5, ' world' );
+			expect( sent ).toHaveLength( 2 );
+			const server = new Y.Doc();
+			Y.applyUpdateV2( server, base64ToUint8Array( sent[ 1 ].data ) );
+			expect( server.getText( 'content' ).toString() ).toBe( '' );
+
+			// Several voids in one batch still cost a single upload.
+			session.receiveDispositions!( [
+				{
+					intentId: 'a',
+					status: 'voided',
+					reason: 'resync-required',
+				},
+				{
+					intentId: 'b',
+					status: 'voided',
+					reason: 'resync-required',
+				},
+			] );
+			expect( sent ).toHaveLength( 3 );
+			expect( sent[ 2 ].type ).toBe( SyncUpdateType.UPDATE );
+
+			Y.applyUpdateV2( server, base64ToUint8Array( sent[ 2 ].data ) );
+			expect( server.getText( 'content' ).toString() ).toBe(
+				'Hello world'
+			);
+		} );
+
+		it( 'ignores applied verdicts and other void reasons', () => {
+			const doc = new Y.Doc();
+			doc.getText( 'content' ).insert( 0, 'Hello' );
+			const session = createYjsServerSessionCodec( { doc } );
+			const listener = jest.fn();
+			session.onLocalUpdate( listener );
+
+			session.receiveDispositions!( [
+				{ intentId: 'a', status: 'applied' },
+				{
+					intentId: 'b',
+					status: 'voided',
+					reason: 'already-merged',
+				},
+			] );
+			expect( listener ).not.toHaveBeenCalled();
+		} );
+	} );
 } );

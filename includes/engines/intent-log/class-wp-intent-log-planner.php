@@ -53,6 +53,9 @@ if ( ! class_exists( 'WP_Intent_Log_Planner' ) ) {
 		 * Deterministic genesis syncId:
 		 * base64url( sha256( "postId:revisionId:path.join('.')" )[0..16) ).
 		 *
+		 * The scheme is shared with de-rtc, so it lives in the base
+		 * (WP_Sync_Block_Identity); this is its intent-log name.
+		 *
 		 * @since 7.2.0
 		 *
 		 * @param int   $post_id     Post ID.
@@ -61,11 +64,7 @@ if ( ! class_exists( 'WP_Intent_Log_Planner' ) ) {
 		 * @return string 22-character base64url syncId.
 		 */
 		public static function genesis_sync_id( int $post_id, int $revision_id, array $path ): string {
-			$input  = $post_id . ':' . $revision_id . ':' . implode( '.', $path );
-			$digest = substr( hash( 'sha256', $input, true ), 0, 16 );
-
-			// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode -- Derives the base64url syncId from a binary digest.
-			return rtrim( strtr( base64_encode( $digest ), '+/', '-_' ), '=' );
+			return WP_Sync_Block_Identity::genesis_sync_id( $post_id, $revision_id, $path );
 		}
 
 		/**
@@ -135,6 +134,13 @@ if ( ! class_exists( 'WP_Intent_Log_Planner' ) ) {
 		 * @return string[] Frame keys.
 		 */
 		public static function frame_read_targets( array $intent ): array {
+			if ( isset( $intent['textSlices'] ) ) {
+				$targets = array();
+				foreach ( WP_Intent_Log_Document::text_slice_intents( $intent ) as $part ) {
+					$targets = array_merge( $targets, self::frame_read_targets( $part ) );
+				}
+				return $targets;
+			}
 			$payload = $intent['payload'];
 			switch ( $intent['type'] ) {
 				case 'insert_text':
@@ -161,6 +167,13 @@ if ( ! class_exists( 'WP_Intent_Log_Planner' ) ) {
 		 * @return string[] Frame keys.
 		 */
 		public static function frame_write_targets( array $intent ): array {
+			if ( isset( $intent['textSlices'] ) ) {
+				$targets = array();
+				foreach ( WP_Intent_Log_Document::text_slice_intents( $intent ) as $part ) {
+					$targets = array_merge( $targets, self::frame_write_targets( $part ) );
+				}
+				return $targets;
+			}
 			$payload = $intent['payload'];
 			switch ( $intent['type'] ) {
 				case 'insert_text':
@@ -382,6 +395,13 @@ if ( ! class_exists( 'WP_Intent_Log_Planner' ) ) {
 		 * @return string[] Required block ids.
 		 */
 		private static function required_targets( array $intent ): array {
+			if ( isset( $intent['textSlices'] ) ) {
+				$targets = array();
+				foreach ( WP_Intent_Log_Document::text_slice_intents( $intent ) as $part ) {
+					$targets = array_merge( $targets, self::required_targets( $part ) );
+				}
+				return $targets;
+			}
 			$payload = $intent['payload'];
 			switch ( $intent['type'] ) {
 				case 'set_property':
@@ -626,6 +646,23 @@ if ( ! class_exists( 'WP_Intent_Log_Planner' ) ) {
 		}
 
 		/**
+		 * Preserve one author's edit while its text moves into several blocks.
+		 *
+		 * @param array $intent Original intent.
+		 * @param array $parts Transformed parts.
+		 * @return array Intent carrying all effects.
+		 */
+		private static function with_text_slices( array $intent, array $parts ): array {
+			$intent['textSlices'] = array();
+			foreach ( $parts as $part ) {
+				foreach ( WP_Intent_Log_Document::text_slice_intents( $part ) as $slice ) {
+					$intent['textSlices'][] = $slice['payload'];
+				}
+			}
+			return $intent;
+		}
+
+		/**
 		 * Transforms `$intent` over one accepted prior from another actor.
 		 * Mirrors transformOne() in the JS twin exactly, including check
 		 * order.
@@ -638,6 +675,43 @@ if ( ! class_exists( 'WP_Intent_Log_Planner' ) ) {
 		 * @return array array( 'outcome' => 'clean'|'escalate'|'void', 'intent' => array, 'reason' => ?string ).
 		 */
 		private static function transform_one( array $intent, array $prior, array $doc ): array {
+			if ( isset( $prior['textSlices'] ) ) {
+				$current = $intent;
+				foreach ( WP_Intent_Log_Document::text_slice_intents( $prior ) as $part ) {
+					$result = self::transform_one( $current, $part, $doc );
+					if ( 'clean' !== $result['outcome'] ) {
+						$result['intent'] = $intent;
+						return $result;
+					}
+					$current = $result['intent'];
+					$doc     = WP_Intent_Log_Document::apply_intent( $doc, $part )['doc'];
+				}
+				return array(
+					'outcome' => 'clean',
+					'intent'  => $current,
+				);
+			}
+			if ( isset( $intent['textSlices'] ) ) {
+				$slices = array();
+				foreach ( WP_Intent_Log_Document::text_slice_intents( $intent ) as $part ) {
+					$result = self::transform_one( $part, $prior, $doc );
+					if ( 'escalate' === $result['outcome'] ) {
+						$result['intent'] = $intent;
+						return $result;
+					}
+					if ( 'clean' === $result['outcome'] ) {
+						$slices[] = $result['intent'];
+					}
+				}
+				return count( $slices ) ? array(
+					'outcome' => 'clean',
+					'intent'  => self::with_text_slices( $intent, $slices ),
+				) : array(
+					'outcome' => 'void',
+					'intent'  => $intent,
+					'reason'  => 'already-deleted',
+				);
+			}
 			$payload       = $intent['payload'];
 			$prior_payload = $prior['payload'];
 			$clean         = static function ( $result_intent ) {
@@ -713,8 +787,23 @@ if ( ! class_exists( 'WP_Intent_Log_Planner' ) ) {
 								)
 							);
 						}
-						if ( 'format_text' === $intent['type'] ) {
-							return $clean( self::with_payload( $intent, array( 'end' => $split_at ) ) );
+						if ( in_array( $intent['type'], array( 'format_text', 'delete_text' ), true ) ) {
+							return $clean(
+								self::with_text_slices(
+									$intent,
+									array(
+										self::with_payload( $intent, array( 'end' => $split_at ) ),
+										self::with_payload(
+											$intent,
+											array(
+												'syncId' => $prior_payload['newSyncId'],
+												'start'  => 0,
+												'end'    => $payload['end'] - $split_at,
+											)
+										),
+									)
+								)
+							);
 						}
 						return $escalate( $intent, 'range-crosses-split' );
 					}

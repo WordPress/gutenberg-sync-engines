@@ -12,7 +12,7 @@ import type {
 	EngineSessionCodec,
 	EngineUpdate,
 } from '@wordpress/sync';
-import { applyServerAwarenessStates } from '../awareness-sync';
+import { applyServerAwarenessStates } from '../../shared/awareness-sync';
 import { SyncUpdateType } from '../../providers/http-polling/types';
 import type { TransportSessionExtensions } from '../../providers/session-extensions';
 import {
@@ -60,20 +60,24 @@ export const YJS_SERVER_HELD_TYPE = 'held';
 export const YJS_SERVER_HELD_RESOLVED_TYPE = 'held-resolved';
 
 /**
+ * Void reason the server gives when an update depends on items the room
+ * does not hold. Matches the reason WP_Yjs_Server_Engine emits.
+ */
+const RESYNC_REQUIRED_REASON = 'resync-required';
+
+/**
  * The yjs-server session codec: EngineSessionCodec plus the transport
  * capabilities this engine declares.
  */
 export interface YjsServerSessionCodec
 	extends EngineSessionCodec,
 		Pick< TransportSessionExtensions, 'onRoomRestart' > {
-	/**
-	 * Transport capability: flush queued updates even with no collaborator
-	 * present. The SERVER's document is the source of truth for every
-	 * (re)joining client, so the room must track a solo session too: updates
-	 * held back while solo are invisible to the client's own next page load,
-	 * which bootstraps from the server snapshot and would wipe the editor
-	 * back to the room's stale state. Ingest is idempotent (redelivered
-	 * updates settle as benign already-merged voids), so solo sends are safe.
+	/*
+	 * No `sendsWhileAlone`: when the advisory channel says this tab is
+	 * alone, the polling manager holds this engine's queued updates in the
+	 * browser. A collaborator arriving, a save (flushHeldUpdates, through
+	 * the entity sync adapter's beforeSave), or the tab going hidden
+	 * releases them. Only de-rtc declares the capability.
 	 */
 }
 
@@ -255,6 +259,29 @@ export function createYjsServerSessionCodec(
 			}
 		},
 		receiveUpdate: ( update ) => processDocUpdate( update ),
+		/*
+		 * The server voids an update with `resync-required` when even the
+		 * full update log cannot supply its dependencies: an earlier send
+		 * of ours never landed. Only this client can close that gap, so it
+		 * queues its full state (self-contained, so it carries the voided
+		 * edit too); the server stores only what it was missing. One
+		 * upload covers every such void in the batch.
+		 */
+		receiveDispositions: ( dispositions ) => {
+			const needsResync = dispositions.some(
+				( disposition ) =>
+					'voided' === disposition.status &&
+					RESYNC_REQUIRED_REASON === disposition.reason
+			);
+			if ( ! needsResync || ! localUpdateListener ) {
+				return;
+			}
+			const update = Y.encodeStateAsUpdateV2( doc );
+			localUpdateListener(
+				createSyncUpdate( update, SyncUpdateType.UPDATE ),
+				update.byteLength
+			);
+		},
 		/*
 		 * Room restart: the client's Y.Doc is bound to the editor and
 		 * cannot be replaced, and two documents built separately can only

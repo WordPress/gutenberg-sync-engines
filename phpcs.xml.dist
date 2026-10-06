@@ -4,6 +4,7 @@
 
 	<!-- What to scan. -->
 	<file>.</file>
+	<exclude-pattern>/_trash/*</exclude-pattern>
 	<exclude-pattern>/vendor/*</exclude-pattern>
 	<exclude-pattern>/node_modules/*</exclude-pattern>
 	<exclude-pattern>/build/*</exclude-pattern>
@@ -55,12 +56,14 @@
 		<exclude-pattern>/tests/*</exclude-pattern>
 	</rule>
 
-	<!-- CLI tooling reads and writes local files directly; the websocket
+	<!-- CLI tooling reads and writes local files directly; the sync
 	     daemon operates on stream sockets, which WP_Filesystem does not
 	     cover. -->
 	<rule ref="WordPress.WP.AlternativeFunctions">
 		<exclude-pattern>/tests/*</exclude-pattern>
 		<exclude-pattern>/includes/transports/websocket/*</exclude-pattern>
+		<exclude-pattern>/includes/transports/class-wp-sync-connection.php</exclude-pattern>
+		<exclude-pattern>/includes/transports/sse/class-wp-sync-sse-connection.php</exclude-pattern>
 		<exclude-pattern>/includes/transports/sse/class-wp-sync-redis.php</exclude-pattern>
 	</rule>
 

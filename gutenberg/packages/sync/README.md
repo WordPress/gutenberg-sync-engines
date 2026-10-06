@@ -76,9 +76,7 @@ Two Yjs instances operating on the same document cause silent data corruption:
 
 <https://github.com/yjs/yjs/issues/438>
 
-Engine plugins that use Yjs must use this shared export. In WordPress, externalize `yjs` to `wp.sync.Y` so the editor and engine use one copy.
-
-Transport providers receive an `EngineSessionCodec`, not a `Y.Doc` or Yjs module. The engine owns the document and supplies updates to the transport.
+Engine plugins that use Yjs must use this shared export. In WordPress, externalize `yjs` to `wp.sync.Y` so the editor and engine use one copy. Transport providers receive an EngineSessionCodec, not a Y.Doc or Yjs module. The engine owns the document and supplies updates to the transport.
 
 ### YJS_VERSION
 

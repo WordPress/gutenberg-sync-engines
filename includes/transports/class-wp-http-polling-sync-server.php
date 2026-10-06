@@ -353,16 +353,12 @@ if ( ! class_exists( 'WP_HTTP_Polling_Sync_Server' ) ) {
 				$client_id = $room['client_id'];
 				$room      = $room['room'];
 
-				// Check that the client_id is not already owned by another user.
-				$existing_awareness = $this->awareness->entries( $room, self::AWARENESS_TIMEOUT );
-				foreach ( $existing_awareness as $entry ) {
-					if ( $client_id === $entry['client_id'] && $wp_user_id !== $entry['wp_user_id'] ) {
-						return new WP_Error(
-							'rest_cannot_edit',
-							__( 'Client ID is already in use by another user.', 'gutenberg' ),
-							array( 'status' => 403 )
-						);
-					}
+				if ( $this->is_client_id_owned_by_another_user( $room, $client_id, $wp_user_id ) ) {
+					return new WP_Error(
+						'rest_cannot_edit',
+						__( 'Client ID is already in use by another user.', 'gutenberg' ),
+						array( 'status' => 403 )
+					);
 				}
 
 				$parsed_room = WP_Sync_Config::parse_room( $room );
@@ -678,6 +674,28 @@ if ( ! class_exists( 'WP_HTTP_Polling_Sync_Server' ) ) {
 				$parsed['entity_name'],
 				$parsed['object_id']
 			);
+		}
+
+		/**
+		 * Whether a room's live awareness already records the client id for
+		 * a different user. Such a client id is refused: taking it would let
+		 * one user overwrite or remove another user's awareness entry.
+		 * Shared by the REST permission callback and out-of-band transports.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param string $room      Room identifier.
+		 * @param int    $client_id Client identifier.
+		 * @param int    $user_id   The user asking for the client id.
+		 * @return bool Whether another user owns the client id.
+		 */
+		public function is_client_id_owned_by_another_user( string $room, int $client_id, int $user_id ): bool {
+			foreach ( $this->awareness->entries( $room, self::AWARENESS_TIMEOUT ) as $entry ) {
+				if ( $client_id === (int) $entry['client_id'] && $user_id !== (int) $entry['wp_user_id'] ) {
+					return true;
+				}
+			}
+			return false;
 		}
 
 		/**

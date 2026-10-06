@@ -5,7 +5,6 @@
  * depth instead of by top-level position.
  */
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
-import * as Y from 'yjs';
 
 import {
 	createDeRtcDocBridge,
@@ -16,14 +15,26 @@ import {
 	DE_RTC_PARKED_TYPE,
 	DE_RTC_SNAPSHOT_TYPE,
 } from '../../../../src/engines/de-rtc/session';
-import { CRDT_RECORD_MAP_KEY } from '../../../../src/engines/yjs/constants';
 // eslint-disable-next-line import/no-unresolved -- Provided at runtime as wp.sync.
 import type { SyncConfig } from '@wordpress/sync';
+import {
+	createDeRtcRecord,
+	type DeRtcRecord,
+} from '../../../../src/engines/de-rtc/record';
 
 jest.mock( '@wordpress/api-fetch', () => ( {
 	__esModule: true,
 	default: jest.fn( () => Promise.resolve( {} ) ),
 } ) );
+
+/**
+ * A local editor edit: the editor's new block tree lands in the record.
+ * @param target
+ * @param blocks
+ */
+function setRecordBlocks( target: DeRtcRecord, blocks: unknown[] ) {
+	target.apply( { blocks }, 'local-editor' );
+}
 
 // Content is opaque JSON, as in the sibling suites.
 jest.mock( '@wordpress/blocks', () => ( {
@@ -34,15 +45,8 @@ jest.mock( '@wordpress/blocks', () => ( {
 
 function makeSyncConfig(): jest.MockedObject< SyncConfig > {
 	return {
-		applyChangesToCRDTDoc: jest.fn( ( doc: Y.Doc, changes: any ) => {
-			const map = doc.getMap( CRDT_RECORD_MAP_KEY );
-			Object.entries( changes ).forEach( ( [ key, value ] ) => {
-				map.set( key, value );
-			} );
-		} ),
-		getChangesFromCRDTDoc: jest.fn( ( doc: Y.Doc ) =>
-			doc.getMap( CRDT_RECORD_MAP_KEY ).toJSON()
-		),
+		// The engine keeps its own plain record; the config only
+		// supplies the awareness factory, which these tests omit.
 	} as unknown as jest.MockedObject< SyncConfig >;
 }
 
@@ -61,24 +65,23 @@ const group = ( inner: unknown[], syncId = 'g', clientId?: string ) => ( {
 const contentOf = ( ...blocks: unknown[] ) => JSON.stringify( blocks );
 
 describe( 'identity-keyed incorporation (bridge)', () => {
-	let doc: Y.Doc;
+	let record: DeRtcRecord;
 	let bridge: ReturnType< typeof createDeRtcDocBridge >;
 	let contests: any[];
 	let resolved: Array< string | number >;
 
 	beforeEach( () => {
-		doc = new Y.Doc();
-		bridge = createDeRtcDocBridge( doc, makeSyncConfig() );
+		record = createDeRtcRecord();
+		bridge = createDeRtcDocBridge( record );
 		contests = [];
 		resolved = [];
 		bridge.onContested( ( event ) => contests.push( event ) );
 		bridge.onContestResolved( ( key ) => resolved.push( key ) );
 	} );
 
-	const local = () =>
-		doc.getMap( CRDT_RECORD_MAP_KEY ).get( 'blocks' ) as any[];
+	const local = () => record.get( 'blocks' ) as any[];
 	const setLocal = ( ...blocks: unknown[] ) =>
-		doc.getMap( CRDT_RECORD_MAP_KEY ).set( 'blocks', blocks );
+		setRecordBlocks( record, blocks );
 
 	it( 'keeps my nested edit, adopts the peer’s nested edit, and needs no equal block counts', () => {
 		bridge.applyCanonical(
@@ -341,18 +344,18 @@ describe( 'revert-edit undo by identity (nested)', () => {
 	async function harness() {
 		const { createDeRtcRevertUndoManager, createDeRtcUndoFeed } =
 			await import( '../../../../src/engines/de-rtc/revert-undo' );
-		const doc = new Y.Doc();
-		const bridge = createDeRtcDocBridge( doc, makeSyncConfig() );
+		const record = createDeRtcRecord();
+		const bridge = createDeRtcDocBridge( record );
 		const feed = createDeRtcUndoFeed();
 		const manager = createDeRtcRevertUndoManager();
 		const applied: unknown[][] = [];
 		manager.attachEntity( {
-			key: doc.getMap( CRDT_RECORD_MAP_KEY ) as Y.Map< unknown >,
+			key: record,
 			bridge,
 			feed,
 			applyRevert: ( blocks ) => {
 				applied.push( blocks );
-				doc.getMap( CRDT_RECORD_MAP_KEY ).set( 'blocks', blocks );
+				setRecordBlocks( record, blocks );
 			},
 		} );
 		const canonical = ( version: string, content: string, own = false ) => {
@@ -366,13 +369,12 @@ describe( 'revert-edit undo by identity (nested)', () => {
 				own,
 			} );
 		};
-		return { doc, bridge, manager, applied, canonical };
+		return { record, bridge, manager, applied, canonical };
 	}
-	const local = ( doc: Y.Doc ) =>
-		doc.getMap( CRDT_RECORD_MAP_KEY ).get( 'blocks' ) as any[];
+	const local = ( record: DeRtcRecord ) => record.get( 'blocks' ) as any[];
 
 	it( 'reverts a nested own edit in place and leaves a peer-touched sibling alone', async () => {
-		const { doc, manager, applied, canonical } = await harness();
+		const { record, manager, applied, canonical } = await harness();
 		canonical(
 			'v1',
 			contentOf( group( [ p( 'One', 'a' ), p( 'Two', 'b' ) ] ) )
@@ -392,21 +394,21 @@ describe( 'revert-edit undo by identity (nested)', () => {
 		manager.undo();
 		expect( applied ).toHaveLength( 1 );
 		expect(
-			local( doc )[ 0 ].innerBlocks.map(
+			local( record )[ 0 ].innerBlocks.map(
 				( b: any ) => b.attributes.content
 			)
 		).toEqual( [ 'One peer', 'Two' ] );
 
 		manager.redo();
 		expect(
-			local( doc )[ 0 ].innerBlocks.map(
+			local( record )[ 0 ].innerBlocks.map(
 				( b: any ) => b.attributes.content
 			)
 		).toEqual( [ 'One peer', 'Two mine' ] );
 	} );
 
 	it( 'undoes a nested insert and a nested delete, re-inserting next to the sibling it followed', async () => {
-		const { doc, manager, canonical } = await harness();
+		const { record, manager, canonical } = await harness();
 		canonical(
 			'v1',
 			contentOf( group( [ p( 'One', 'a' ), p( 'Two', 'b' ) ] ) )
@@ -421,7 +423,7 @@ describe( 'revert-edit undo by identity (nested)', () => {
 		);
 		manager.undo();
 		expect(
-			local( doc )[ 0 ].innerBlocks.map(
+			local( record )[ 0 ].innerBlocks.map(
 				( b: any ) => b.attributes.content
 			)
 		).toEqual( [ 'One', 'Two' ] );
@@ -429,14 +431,14 @@ describe( 'revert-edit undo by identity (nested)', () => {
 		// Redo re-inserts it after One.
 		manager.redo();
 		expect(
-			local( doc )[ 0 ].innerBlocks.map(
+			local( record )[ 0 ].innerBlocks.map(
 				( b: any ) => b.attributes.content
 			)
 		).toEqual( [ 'One', 'New', 'Two' ] );
 	} );
 
 	it( 'does not remove an inserted block a peer has since edited', async () => {
-		const { doc, manager, applied, canonical } = await harness();
+		const { record, manager, applied, canonical } = await harness();
 		canonical( 'v1', contentOf( group( [ p( 'One', 'a' ) ] ) ) );
 		canonical(
 			'v2',
@@ -450,6 +452,6 @@ describe( 'revert-edit undo by identity (nested)', () => {
 
 		manager.undo();
 		expect( applied ).toHaveLength( 0 );
-		expect( local( doc )[ 0 ].innerBlocks ).toHaveLength( 2 );
+		expect( local( record )[ 0 ].innerBlocks ).toHaveLength( 2 );
 	} );
 } );

@@ -21,7 +21,7 @@ import {
 	YJS_SERVER_HELD_RESOLVED_TYPE,
 	YJS_SERVER_HELD_TYPE,
 } from '../../../../src/engines/yjs-server/session';
-import { CRDT_RECORD_MAP_KEY } from '../../../../src/engines/yjs/constants';
+import { CRDT_RECORD_MAP_KEY } from '../../../../src/engines/yjs-server/constants';
 
 jest.mock( '@wordpress/api-fetch', () => ( {
 	__esModule: true,

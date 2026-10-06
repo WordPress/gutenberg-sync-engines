@@ -1,6 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import triggerFetch from '@wordpress/api-fetch';
-import { getSyncManager, isSyncEngineUnavailable } from '../sync';
+import { getEntitySyncManager } from '../entity-sync';
+import { isSyncEngineUnavailable } from '../sync';
+vi.mock( '../sync', () => ( {
+	isSyncEngineUnavailable: vi.fn( () => false ),
+} ) );
 import {
 	getEntityRecord,
 	getEntityRecords,
@@ -11,13 +15,14 @@ import {
 } from '../resolvers';
 import { RECEIVE_INTERMEDIATE_RESULTS } from '../utils';
 vi.mock( '@wordpress/api-fetch' );
-vi.mock( '../sync', () => ( {
-	getSyncManager: vi.fn(),
-	isSyncEngineUnavailable: vi.fn( () => false ),
-	LOCAL_UNDO_IGNORED_ORIGIN: 'local-undo-ignored',
+vi.mock( '../entity-sync', () => ( {
+	getEntitySyncManager: vi.fn(),
 } ) );
 
 describe( 'getEntityRecord', () => {
+	afterEach( () => {
+		delete window.__experimentalEnableRealTimeCollaboration;
+	} );
 	const POST_TYPE = { slug: 'post' };
 	const POST_TYPE_RESPONSE = { json: () => Promise.resolve( POST_TYPE ) };
 	const ENTITIES = [
@@ -47,10 +52,10 @@ describe( 'getEntityRecord', () => {
 
 		syncManager = {
 			load: vi.fn(),
-			update: vi.fn(),
+			loadCollection: vi.fn(),
 		};
-		getSyncManager.mockImplementation( () => syncManager );
-		isSyncEngineUnavailable.mockImplementation( () => false );
+		getEntitySyncManager.mockImplementation( () => syncManager );
+		isSyncEngineUnavailable.mockReturnValue( false );
 	} );
 
 	it( 'yields with requested post type', async () => {
@@ -133,7 +138,6 @@ describe( 'getEntityRecord', () => {
 				kind: 'postType',
 				baseURL: '/wp/v2/posts',
 				baseURLParams: { context: 'edit' },
-				syncConfig: {},
 			},
 		];
 
@@ -157,23 +161,54 @@ describe( 'getEntityRecord', () => {
 		// Verify load was called with correct arguments.
 		expect( syncManager.load ).toHaveBeenCalledTimes( 1 );
 		expect( syncManager.load ).toHaveBeenCalledWith(
-			{},
-			'postType/post',
+			'postType',
+			'post',
 			1,
 			POST_RECORD,
 			{
-				addUndoMeta: expect.any( Function ),
 				editRecord: expect.any( Function ),
 				getEditedRecord: expect.any( Function ),
-				onEscalation: expect.any( Function ),
-				onProposalsChange: expect.any( Function ),
 				onUndoStackChange: expect.any( Function ),
-				onStatusChange: expect.any( Function ),
-				persistCRDTDoc: expect.any( Function ),
 				refetchRecord: expect.any( Function ),
-				restoreUndoMeta: expect.any( Function ),
 			}
 		);
+	} );
+
+	it( 'does not load entity with sync manager when it declines the record', async () => {
+		const POST_RECORD = { id: 1, title: 'Test Post' };
+		const POST_RESPONSE = {
+			json: () => Promise.resolve( POST_RECORD ),
+		};
+		const resolveSelectWithSync = {
+			getEntitiesConfig: vi.fn( () => [
+				{
+					name: 'post',
+					kind: 'postType',
+					baseURL: '/wp/v2/posts',
+					baseURLParams: { context: 'edit' },
+				},
+			] ),
+		};
+		syncManager.shouldSync = vi.fn( () => false );
+
+		triggerFetch.mockImplementation( () => POST_RESPONSE );
+
+		await getEntityRecord(
+			'postType',
+			'post',
+			1
+		)( {
+			dispatch,
+			registry,
+			resolveSelect: resolveSelectWithSync,
+		} );
+
+		expect( syncManager.shouldSync ).toHaveBeenCalledWith(
+			'postType',
+			'post',
+			1
+		);
+		expect( syncManager.load ).not.toHaveBeenCalled();
 	} );
 
 	it( 'does not load entity with sync manager when collaboration is unsupported', async () => {
@@ -187,7 +222,6 @@ describe( 'getEntityRecord', () => {
 				kind: 'postType',
 				baseURL: '/wp/v2/posts',
 				baseURLParams: { context: 'edit' },
-				syncConfig: {},
 			},
 		];
 
@@ -232,7 +266,6 @@ describe( 'getEntityRecord', () => {
 				kind: 'postType',
 				baseURL: '/wp/v2/posts',
 				baseURLParams: { context: 'edit' },
-				syncConfig: {},
 			},
 		];
 
@@ -262,302 +295,68 @@ describe( 'getEntityRecord', () => {
 		).toHaveBeenCalledWith( { hasRedo: false, hasUndo: true } );
 	} );
 
-	it( 'persistCRDTDoc fetches edited post record and does not save when the entity does not support meta', async () => {
-		const ENTITY_RECORD = { id: 1, title: 'Test Record' };
-		const EDITED_RECORD = { id: 1, title: 'Edited Record' };
-		const ENTITY_RESPONSE = {
-			json: () => Promise.resolve( ENTITY_RECORD ),
-		};
-		const ENTITIES_WITH_SYNC = [
-			{
-				name: 'post',
-				kind: 'postType',
-				baseURL: '/wp/v2/posts',
-				baseURLParams: { context: 'edit' },
-				syncConfig: { supportsPersistence: true },
-			},
-		];
+	it.each( [ 'engine', 'adapter' ] )(
+		'restores post locking when the %s is unavailable',
+		async ( missing ) => {
+			// REGRESSION (review 1.1): an unresolvable engine announcement used
+			// to leave the editor with no sync AND no lock — collaboration still
+			// "enabled", the post-locked modal suppressed, concurrent editors
+			// silently overwriting each other on save.
+			const POST_RECORD = { id: 1, title: 'Test Post' };
+			const POST_RESPONSE = {
+				json: () => Promise.resolve( POST_RECORD ),
+			};
+			const ENTITIES_WITH_SYNC = [
+				{
+					name: 'post',
+					kind: 'postType',
+					baseURL: '/wp/v2/posts',
+					baseURLParams: { context: 'edit' },
+					syncConfig: {},
+				},
+			];
 
-		dispatch.saveEntityRecord = vi.fn();
-		syncManager.createPersistedCRDTDoc = vi.fn();
+			getEntitySyncManager.mockImplementation( () => undefined );
+			isSyncEngineUnavailable.mockImplementation(
+				() => missing === 'engine'
+			);
+			window.__experimentalEnableRealTimeCollaboration = true;
+			dispatch.setCollaborationSupported = vi.fn();
+			const createNotice = vi.fn();
+			const registryWithNotices = {
+				batch: ( callback ) => callback(),
+				dispatch: vi.fn( () => ( { createNotice } ) ),
+			};
 
-		const resolveSelectWithSync = {
-			getEntitiesConfig: vi.fn( () => ENTITIES_WITH_SYNC ),
-			getEditedEntityRecord: vi.fn( () =>
-				Promise.resolve( EDITED_RECORD )
-			),
-		};
+			triggerFetch.mockImplementation( () => POST_RESPONSE );
 
-		triggerFetch.mockImplementation( () => ENTITY_RESPONSE );
+			await getEntityRecord(
+				'postType',
+				'post',
+				1
+			)( {
+				dispatch,
+				registry: registryWithNotices,
+				resolveSelect: {
+					getEntitiesConfig: vi.fn( () => ENTITIES_WITH_SYNC ),
+					getEditedEntityRecord: vi.fn(),
+				},
+			} );
 
-		await getEntityRecord(
-			'postType',
-			'post',
-			1
-		)( {
-			dispatch,
-			registry,
-			resolveSelect: resolveSelectWithSync,
-		} );
-
-		// Extract the handlers passed to syncManager.load.
-		const handlers = syncManager.load.mock.calls[ 0 ][ 4 ];
-
-		// Call persistCRDTDoc and wait for the internal promise chain.
-		await handlers.persistCRDTDoc();
-
-		// Should have fetched the full edited entity record.
-		expect(
-			resolveSelectWithSync.getEditedEntityRecord
-		).toHaveBeenCalledWith( 'postType', 'post', 1 );
-
-		// Should not have called saveEntityRecord.
-		expect( dispatch.saveEntityRecord ).not.toHaveBeenCalled();
-		expect( syncManager.createPersistedCRDTDoc ).not.toHaveBeenCalled();
-	} );
-
-	it( 'persistCRDTDoc saves post CRDT docs through the sync endpoint', async () => {
-		const SERIALIZED_DOC = 'serialized-crdt-doc';
-		const POST_RECORD = { id: 1, title: 'Test Post', meta: {} };
-		const EDITED_RECORD = {
-			id: 1,
-			title: 'Edited Post',
-			ping_status: '',
-			meta: { _crdt_document: 'doc2' },
-		};
-		const POST_RESPONSE = {
-			json: () => Promise.resolve( POST_RECORD ),
-		};
-		const ENTITIES_WITH_SYNC = [
-			{
-				name: 'post',
-				kind: 'postType',
-				baseURL: '/wp/v2/posts',
-				baseURLParams: { context: 'edit' },
-				syncConfig: { supportsPersistence: true },
-			},
-		];
-
-		dispatch.saveEntityRecord = vi.fn();
-		syncManager.createPersistedCRDTDoc = vi.fn( () =>
-			Promise.resolve( SERIALIZED_DOC )
-		);
-
-		const resolveSelectWithSync = {
-			getEntitiesConfig: vi.fn( () => ENTITIES_WITH_SYNC ),
-			getEditedEntityRecord: vi.fn( () =>
-				Promise.resolve( EDITED_RECORD )
-			),
-		};
-
-		triggerFetch
-			.mockImplementationOnce( () => POST_RESPONSE )
-			.mockImplementationOnce( () => [] );
-
-		await getEntityRecord(
-			'postType',
-			'post',
-			1
-		)( {
-			dispatch,
-			registry,
-			resolveSelect: resolveSelectWithSync,
-		} );
-
-		// Extract the handlers passed to syncManager.load.
-		const handlers = syncManager.load.mock.calls[ 0 ][ 4 ];
-
-		// Call persistCRDTDoc and wait for the internal promise chain.
-		await handlers.persistCRDTDoc();
-
-		// Should have fetched the full edited entity record.
-		expect(
-			resolveSelectWithSync.getEditedEntityRecord
-		).toHaveBeenCalledWith( 'postType', 'post', 1 );
-
-		expect( syncManager.createPersistedCRDTDoc ).toHaveBeenCalledWith(
-			'postType/post',
-			1
-		);
-		expect( triggerFetch ).toHaveBeenLastCalledWith( {
-			path: '/wp-sync/v1/save',
-			method: 'POST',
-			data: {
-				room: 'postType/post:1',
-				doc: SERIALIZED_DOC,
-			},
-		} );
-		expect( syncManager.update ).not.toHaveBeenCalled();
-		expect( dispatch.saveEntityRecord ).not.toHaveBeenCalled();
-	} );
-
-	it( 'persistCRDTDoc persists post CRDT docs even when there are no unsaved edits', async () => {
-		const SERIALIZED_DOC = 'serialized-crdt-doc';
-		const POST_RECORD = { id: 1, title: 'Test Post', meta: {} };
-		const POST_RESPONSE = {
-			json: () => Promise.resolve( POST_RECORD ),
-		};
-		const ENTITIES_WITH_SYNC = [
-			{
-				name: 'post',
-				kind: 'postType',
-				baseURL: '/wp/v2/posts',
-				baseURLParams: { context: 'edit' },
-				syncConfig: { supportsPersistence: true },
-			},
-		];
-
-		dispatch.saveEntityRecord = vi.fn();
-		syncManager.createPersistedCRDTDoc = vi.fn( () =>
-			Promise.resolve( SERIALIZED_DOC )
-		);
-
-		// Return the same record (no edits) from getEditedEntityRecord.
-		const resolveSelectWithSync = {
-			getEntitiesConfig: vi.fn( () => ENTITIES_WITH_SYNC ),
-			getEditedEntityRecord: vi.fn( () =>
-				Promise.resolve( POST_RECORD )
-			),
-		};
-
-		triggerFetch
-			.mockImplementationOnce( () => POST_RESPONSE )
-			.mockImplementationOnce( () => [] );
-
-		await getEntityRecord(
-			'postType',
-			'post',
-			1
-		)( {
-			dispatch,
-			registry,
-			resolveSelect: resolveSelectWithSync,
-		} );
-
-		const handlers = syncManager.load.mock.calls[ 0 ][ 4 ];
-
-		// Call persistCRDTDoc and wait for the internal promise chain.
-		await handlers.persistCRDTDoc();
-
-		expect( triggerFetch ).toHaveBeenLastCalledWith( {
-			path: '/wp-sync/v1/save',
-			method: 'POST',
-			data: {
-				room: 'postType/post:1',
-				doc: SERIALIZED_DOC,
-			},
-		} );
-		expect( syncManager.update ).not.toHaveBeenCalled();
-		expect( dispatch.saveEntityRecord ).not.toHaveBeenCalled();
-	} );
-
-	it( 'persistCRDTDoc does not persist entities whose sync config does not support persistence', async () => {
-		const TERM_RECORD = { id: 1, name: 'Category', meta: {} };
-		const EDITED_RECORD = {
-			id: 1,
-			name: 'Edited Category',
-			description: '',
-			meta: {},
-		};
-		const TERM_RESPONSE = {
-			json: () => Promise.resolve( TERM_RECORD ),
-		};
-		const ENTITIES_WITH_SYNC = [
-			{
-				name: 'category',
-				kind: 'taxonomy',
-				baseURL: '/wp/v2/categories',
-				baseURLParams: { context: 'edit' },
-				syncConfig: {},
-			},
-		];
-
-		const resolveSelectWithSync = {
-			getEntitiesConfig: vi.fn( () => ENTITIES_WITH_SYNC ),
-			getEditedEntityRecord: vi.fn( () =>
-				Promise.resolve( EDITED_RECORD )
-			),
-		};
-		dispatch.saveEntityRecord = vi.fn();
-		syncManager.createPersistedCRDTDoc = vi.fn();
-
-		triggerFetch.mockImplementation( () => TERM_RESPONSE );
-
-		await getEntityRecord(
-			'taxonomy',
-			'category',
-			1
-		)( {
-			dispatch,
-			registry,
-			resolveSelect: resolveSelectWithSync,
-		} );
-
-		const handlers = syncManager.load.mock.calls[ 0 ][ 4 ];
-
-		await handlers.persistCRDTDoc();
-
-		expect(
-			resolveSelectWithSync.getEditedEntityRecord
-		).not.toHaveBeenCalled();
-		expect( dispatch.saveEntityRecord ).not.toHaveBeenCalled();
-		expect( syncManager.createPersistedCRDTDoc ).not.toHaveBeenCalled();
-	} );
-
-	it( 'drops into the lock posture when the announced sync engine is unavailable', async () => {
-		// REGRESSION (review 1.1): an unresolvable engine announcement used
-		// to leave the editor with no sync AND no lock — collaboration still
-		// "enabled", the post-locked modal suppressed, concurrent editors
-		// silently overwriting each other on save.
-		const POST_RECORD = { id: 1, title: 'Test Post' };
-		const POST_RESPONSE = {
-			json: () => Promise.resolve( POST_RECORD ),
-		};
-		const ENTITIES_WITH_SYNC = [
-			{
-				name: 'post',
-				kind: 'postType',
-				baseURL: '/wp/v2/posts',
-				baseURLParams: { context: 'edit' },
-				syncConfig: {},
-			},
-		];
-
-		getSyncManager.mockImplementation( () => undefined );
-		isSyncEngineUnavailable.mockImplementation( () => true );
-		dispatch.setCollaborationSupported = vi.fn();
-		const createNotice = vi.fn();
-		const registryWithNotices = {
-			batch: ( callback ) => callback(),
-			dispatch: vi.fn( () => ( { createNotice } ) ),
-		};
-
-		triggerFetch.mockImplementation( () => POST_RESPONSE );
-
-		await getEntityRecord(
-			'postType',
-			'post',
-			1
-		)( {
-			dispatch,
-			registry: registryWithNotices,
-			resolveSelect: {
-				getEntitiesConfig: vi.fn( () => ENTITIES_WITH_SYNC ),
-				getEditedEntityRecord: vi.fn(),
-			},
-		} );
-
-		expect( dispatch.setCollaborationSupported ).toHaveBeenCalledWith(
-			false
-		);
-		expect( createNotice ).toHaveBeenCalledWith(
-			'warning',
-			expect.stringContaining( 'Real-time collaboration is unavailable' ),
-			expect.objectContaining( {
-				id: 'core-data-sync-engine-unavailable',
-			} )
-		);
-	} );
+			expect( dispatch.setCollaborationSupported ).toHaveBeenCalledWith(
+				false
+			);
+			expect( createNotice ).toHaveBeenCalledWith(
+				'warning',
+				expect.stringContaining(
+					'Real-time collaboration is unavailable'
+				),
+				expect.objectContaining( {
+					id: 'core-data-sync-engine-unavailable',
+				} )
+			);
+		}
+	);
 
 	it( 'does not touch the collaboration flag when sync is merely disabled', async () => {
 		const POST_RECORD = { id: 1, title: 'Test Post' };
@@ -575,7 +374,7 @@ describe( 'getEntityRecord', () => {
 		];
 
 		// Collaboration off entirely: no manager, but NOT an engine failure.
-		getSyncManager.mockImplementation( () => undefined );
+		getEntitySyncManager.mockImplementation( () => undefined );
 		isSyncEngineUnavailable.mockImplementation( () => false );
 		dispatch.setCollaborationSupported = vi.fn();
 
@@ -597,105 +396,6 @@ describe( 'getEntityRecord', () => {
 		expect( dispatch.setCollaborationSupported ).not.toHaveBeenCalled();
 	} );
 
-	it( 'mirrors review items to the store and aggregates notices past the threshold', async () => {
-		const ENTITIES_WITH_SYNC = [
-			{
-				name: 'post',
-				kind: 'postType',
-				baseURL: '/wp/v2/posts',
-				baseURLParams: { context: 'edit' },
-				syncConfig: {},
-			},
-		];
-		const notices = {
-			createNotice: vi.fn(),
-			removeNotice: vi.fn(),
-		};
-		const registryWithNotices = {
-			batch: ( callback ) => callback(),
-			dispatch: vi.fn( () => notices ),
-		};
-		dispatch.setSyncReviewItems = vi.fn();
-		triggerFetch.mockImplementation( () => ( {
-			json: () => Promise.resolve( { id: 1, title: 'Test Post' } ),
-		} ) );
-
-		await getEntityRecord(
-			'postType',
-			'post',
-			1
-		)( {
-			dispatch,
-			registry: registryWithNotices,
-			resolveSelect: {
-				getEntitiesConfig: vi.fn( () => ENTITIES_WITH_SYNC ),
-				getEditedEntityRecord: vi.fn(),
-			},
-		} );
-
-		const handlers = syncManager.load.mock.calls[ 0 ][ 4 ];
-		const makeItem = ( id ) => ( {
-			id,
-			unitId: id,
-			isLocal: true,
-			actorId: 'actor',
-			reason: 'frame-conflict',
-			intentType: 'insert_text',
-			summary: 'text',
-		} );
-
-		// Below the threshold: the list is mirrored and the per-item
-		// escalation notice is created.
-		handlers.onProposalsChange( [ makeItem( 'p1' ) ] );
-		handlers.onEscalation( {
-			isLocal: true,
-			proposalId: 'p1',
-			summary: 'text',
-		} );
-		expect( dispatch.setSyncReviewItems ).toHaveBeenCalledWith(
-			'postType',
-			'post',
-			1,
-			[ makeItem( 'p1' ) ]
-		);
-		expect( notices.createNotice ).toHaveBeenCalledTimes( 1 );
-
-		// A burst past the threshold sweeps per-item notices, creates one
-		// aggregate notice, and suppresses further per-item notices.
-		const burst = [ 'p1', 'p2', 'p3', 'p4' ].map( makeItem );
-		handlers.onProposalsChange( burst );
-		burst.forEach( ( item ) =>
-			handlers.onEscalation( {
-				isLocal: true,
-				proposalId: item.id,
-				summary: 'text',
-			} )
-		);
-		expect( notices.removeNotice ).toHaveBeenCalledWith(
-			'core-data-sync-escalation-postType-post-1-p1'
-		);
-		expect( notices.createNotice ).toHaveBeenCalledWith(
-			'warning',
-			expect.stringContaining( '4' ),
-			expect.objectContaining( {
-				id: 'core-data-sync-review-aggregate-postType-post-1',
-			} )
-		);
-		expect( notices.createNotice ).toHaveBeenCalledTimes( 2 );
-
-		// Emptying the list clears the aggregate notice and the store key.
-		handlers.onProposalsChange( [] );
-		expect( notices.removeNotice ).toHaveBeenCalledWith(
-			'core-data-sync-review-aggregate-postType-post-1'
-		);
-		expect( dispatch.setSyncReviewItems ).toHaveBeenLastCalledWith(
-			'postType',
-			'post',
-			1,
-			[]
-		);
-	} );
-
 	it( 'provides transient properties when read/write config is supplied', async () => {
 		const POST_RECORD = { id: 1, title: 'Test Post' };
 		const POST_RESPONSE = {
@@ -707,7 +407,6 @@ describe( 'getEntityRecord', () => {
 				kind: 'postType',
 				baseURL: '/wp/v2/posts',
 				baseURLParams: { context: 'edit' },
-				syncConfig: {},
 				transientEdits: {
 					foo: {
 						read: () => 'bar',
@@ -736,21 +435,15 @@ describe( 'getEntityRecord', () => {
 		// Verify load was called with correct arguments.
 		expect( syncManager.load ).toHaveBeenCalledTimes( 1 );
 		expect( syncManager.load ).toHaveBeenCalledWith(
-			{},
-			'postType/post',
+			'postType',
+			'post',
 			1,
 			{ ...POST_RECORD, foo: 'bar' },
 			{
-				addUndoMeta: expect.any( Function ),
 				editRecord: expect.any( Function ),
 				getEditedRecord: expect.any( Function ),
-				onEscalation: expect.any( Function ),
-				onProposalsChange: expect.any( Function ),
 				onUndoStackChange: expect.any( Function ),
-				onStatusChange: expect.any( Function ),
-				persistCRDTDoc: expect.any( Function ),
 				refetchRecord: expect.any( Function ),
-				restoreUndoMeta: expect.any( Function ),
 			}
 		);
 	} );
@@ -766,7 +459,6 @@ describe( 'getEntityRecord', () => {
 				kind: 'postType',
 				baseURL: '/wp/v2/posts',
 				baseURLParams: { context: 'edit' },
-				syncConfig: {},
 			},
 		];
 
@@ -954,12 +646,12 @@ describe( 'getEntityRecords', () => {
 			resolveSelect,
 		} );
 
-		// Permissions should have been cached
+		// Permissions should have been cached. `canUser` is keyed by the
+		// resource, so one entry covers all four actions.
 		expect( dispatch.receiveUserPermissions ).toHaveBeenCalled();
-		expect( finishResolutions ).toHaveBeenCalledWith(
-			'canUser',
-			expect.any( Array )
-		);
+		expect( finishResolutions ).toHaveBeenCalledWith( 'canUser', [
+			[ { kind: 'postType', name: 'post', id: 1 } ],
+		] );
 		expect( finishResolutions ).toHaveBeenCalledWith(
 			'getEntityRecord',
 			expect.any( Array )
@@ -1235,19 +927,19 @@ describe( 'canUser', () => {
 	];
 	const resolveSelect = { getEntitiesConfig: vi.fn( () => ENTITIES ) };
 
-	let dispatch, registry;
+	let dispatch;
 	beforeEach( async () => {
-		registry = {
-			select: vi.fn( () => ( {
-				hasStartedResolution: () => false,
-			} ) ),
-			batch: ( callback ) => callback(),
-		};
 		dispatch = Object.assign( vi.fn(), {
 			receiveUserPermissions: vi.fn(),
-			finishResolutions: vi.fn(),
 		} );
 		triggerFetch.mockReset();
+	} );
+
+	it( 'drops the action from the resolution args', () => {
+		expect( canUser.getResolutionArgs( 'create', 'media', 123 ) ).toEqual( [
+			'media',
+			123,
+		] );
 	} );
 
 	it( 'does nothing when there is an API error', async () => {
@@ -1255,13 +947,9 @@ describe( 'canUser', () => {
 			Promise.reject( { status: 404 } )
 		);
 
-		await canUser(
-			'create',
-			'media'
-		)( { dispatch, registry, resolveSelect } );
-		await canUser( 'create', { kind: 'postType', name: 'attachment' } )( {
+		await canUser( 'media' )( { dispatch, resolveSelect } );
+		await canUser( { kind: 'postType', name: 'attachment' } )( {
 			dispatch,
-			registry,
 			resolveSelect,
 		} );
 
@@ -1279,10 +967,7 @@ describe( 'canUser', () => {
 			headers: new Map(),
 		} ) );
 
-		await canUser(
-			'create',
-			'media'
-		)( { dispatch, registry, resolveSelect } );
+		await canUser( 'media' )( { dispatch, resolveSelect } );
 
 		expect( dispatch.receiveUserPermissions ).toHaveBeenCalledWith( {
 			'create/media': false,
@@ -1294,9 +979,8 @@ describe( 'canUser', () => {
 
 	it( 'throws an error when an entity resource object is malformed', async () => {
 		await expect(
-			canUser( 'create', { name: 'wp_block' } )( {
+			canUser( { name: 'wp_block' } )( {
 				dispatch,
-				registry,
 				resolveSelect,
 			} )
 		).rejects.toThrow( 'The entity resource object is not valid.' );
@@ -1307,10 +991,7 @@ describe( 'canUser', () => {
 			headers: new Map( [ [ 'allow', 'GET' ] ] ),
 		} ) );
 
-		await canUser(
-			'create',
-			'media'
-		)( { dispatch, registry, resolveSelect } );
+		await canUser( 'media' )( { dispatch, resolveSelect } );
 
 		expect( triggerFetch ).toHaveBeenCalledWith( {
 			path: '/wp/v2/media',
@@ -1331,9 +1012,8 @@ describe( 'canUser', () => {
 			headers: new Map( [ [ 'allow', 'GET' ] ] ),
 		} ) );
 
-		await canUser( 'create', { kind: 'postType', name: 'attachment' } )( {
+		await canUser( { kind: 'postType', name: 'attachment' } )( {
 			dispatch,
-			registry,
 			resolveSelect,
 		} );
 
@@ -1353,10 +1033,7 @@ describe( 'canUser', () => {
 			headers: new Map( [ [ 'allow', 'POST, GET, PUT, DELETE' ] ] ),
 		} ) );
 
-		await canUser(
-			'create',
-			'media'
-		)( { dispatch, registry, resolveSelect } );
+		await canUser( 'media' )( { dispatch, resolveSelect } );
 
 		expect( triggerFetch ).toHaveBeenCalledWith( {
 			path: '/wp/v2/media',
@@ -1374,9 +1051,8 @@ describe( 'canUser', () => {
 			headers: new Map( [ [ 'allow', 'POST, GET, PUT, DELETE' ] ] ),
 		} ) );
 
-		await canUser( 'create', { kind: 'postType', name: 'attachment' } )( {
+		await canUser( { kind: 'postType', name: 'attachment' } )( {
 			dispatch,
-			registry,
 			resolveSelect,
 		} );
 
@@ -1396,11 +1072,7 @@ describe( 'canUser', () => {
 			headers: new Map( [ [ 'allow', 'POST, GET, PUT, DELETE' ] ] ),
 		} ) );
 
-		await canUser(
-			'create',
-			'blocks',
-			123
-		)( { dispatch, registry, resolveSelect } );
+		await canUser( 'blocks', 123 )( { dispatch, resolveSelect } );
 
 		expect( triggerFetch ).toHaveBeenCalledWith( {
 			path: '/wp/v2/blocks/123',
@@ -1418,15 +1090,11 @@ describe( 'canUser', () => {
 			headers: new Map( [ [ 'allow', 'POST, GET, PUT, DELETE' ] ] ),
 		} ) );
 
-		await canUser( 'create', {
+		await canUser( {
 			kind: 'postType',
 			name: 'wp_block',
 			id: 123,
-		} )( {
-			dispatch,
-			registry,
-			resolveSelect,
-		} );
+		} )( { dispatch, resolveSelect } );
 
 		expect( triggerFetch ).toHaveBeenCalledWith( {
 			path: '/wp/v2/blocks/123',
@@ -1439,203 +1107,21 @@ describe( 'canUser', () => {
 		);
 	} );
 
-	it( 'runs apiFetch only once per resource', async () => {
-		registry = {
-			...registry,
-			select: () => ( {
-				hasStartedResolution: ( _, [ action ] ) => action === 'read',
-			} ),
-		};
-
+	it( 'receives every action permission from a single request', async () => {
 		triggerFetch.mockImplementation( () => ( {
 			headers: new Map( [ [ 'allow', 'POST, GET' ] ] ),
 		} ) );
 
-		await canUser(
-			'create',
-			'blocks'
-		)( { dispatch, registry, resolveSelect } );
-		await canUser(
-			'read',
-			'blocks'
-		)( { dispatch, registry, resolveSelect } );
+		await canUser( 'blocks' )( { dispatch, resolveSelect } );
 
 		expect( triggerFetch ).toHaveBeenCalledTimes( 1 );
 
-		expect( dispatch.receiveUserPermissions ).toHaveBeenCalledWith(
-			expect.objectContaining( {
-				'create/blocks': true,
-				'read/blocks': true,
-			} )
-		);
-	} );
-
-	it( 'runs apiFetch only once per entity', async () => {
-		registry = {
-			...registry,
-			select: () => ( {
-				hasStartedResolution: ( _, [ action ] ) => action === 'read',
-			} ),
-		};
-
-		triggerFetch.mockImplementation( () => ( {
-			headers: new Map( [ [ 'allow', 'POST, GET' ] ] ),
-		} ) );
-
-		await canUser( 'create', {
-			kind: 'postType',
-			name: 'wp_block',
-		} )( {
-			dispatch,
-			registry,
-			resolveSelect,
+		expect( dispatch.receiveUserPermissions ).toHaveBeenCalledWith( {
+			'create/blocks': true,
+			'read/blocks': true,
+			'update/blocks': false,
+			'delete/blocks': false,
 		} );
-		await canUser( 'read', {
-			kind: 'postType',
-			name: 'wp_block',
-		} )( {
-			dispatch,
-			registry,
-			resolveSelect,
-		} );
-
-		expect( triggerFetch ).toHaveBeenCalledTimes( 1 );
-
-		expect( dispatch.receiveUserPermissions ).toHaveBeenCalledWith(
-			expect.objectContaining( {
-				'create/postType/wp_block': true,
-				'read/postType/wp_block': true,
-			} )
-		);
-	} );
-
-	it( 'retrieves all permissions even when ID is not given', async () => {
-		registry = {
-			...registry,
-			select: () => ( {
-				hasStartedResolution: ( _, [ action ] ) => action === 'read',
-			} ),
-		};
-
-		triggerFetch.mockImplementation( () => ( {
-			headers: new Map( [ [ 'allow', 'POST, GET' ] ] ),
-		} ) );
-
-		await canUser(
-			'create',
-			'blocks'
-		)( { dispatch, registry, resolveSelect } );
-		await canUser(
-			'read',
-			'blocks'
-		)( { dispatch, registry, resolveSelect } );
-		await canUser(
-			'update',
-			'blocks'
-		)( { dispatch, registry, resolveSelect } );
-		await canUser(
-			'delete',
-			'blocks'
-		)( { dispatch, registry, resolveSelect } );
-
-		expect( dispatch.receiveUserPermissions ).toHaveBeenCalledWith(
-			expect.objectContaining( {
-				'create/blocks': true,
-				'read/blocks': true,
-				'update/blocks': false,
-				'delete/blocks': false,
-			} )
-		);
-	} );
-
-	it( 'runs apiFetch only once per resource ID', async () => {
-		registry = {
-			...registry,
-			select: () => ( {
-				hasStartedResolution: ( _, [ action ] ) => action === 'create',
-			} ),
-		};
-
-		triggerFetch.mockImplementation( () => ( {
-			headers: new Map( [ [ 'allow', 'POST, GET, PUT, DELETE' ] ] ),
-		} ) );
-
-		await canUser(
-			'create',
-			'blocks',
-			123
-		)( { dispatch, registry, resolveSelect } );
-		await canUser(
-			'read',
-			'blocks',
-			123
-		)( { dispatch, registry, resolveSelect } );
-		await canUser(
-			'update',
-			'blocks',
-			123
-		)( { dispatch, registry, resolveSelect } );
-		await canUser(
-			'delete',
-			'blocks',
-			123
-		)( { dispatch, registry, resolveSelect } );
-
-		expect( triggerFetch ).toHaveBeenCalledTimes( 1 );
-
-		expect( dispatch.receiveUserPermissions ).toHaveBeenCalledWith(
-			expect.objectContaining( {
-				'create/blocks/123': true,
-				'read/blocks/123': true,
-				'update/blocks/123': true,
-				'delete/blocks/123': true,
-			} )
-		);
-	} );
-
-	it( 'runs apiFetch only once per entity ID', async () => {
-		registry = {
-			...registry,
-			select: () => ( {
-				hasStartedResolution: ( _, [ action ] ) => action === 'create',
-			} ),
-		};
-
-		triggerFetch.mockImplementation( () => ( {
-			headers: new Map( [ [ 'allow', 'POST, GET, PUT, DELETE' ] ] ),
-		} ) );
-
-		await canUser( 'create', {
-			kind: 'postType',
-			name: 'wp_block',
-			id: 123,
-		} )( { dispatch, registry, resolveSelect } );
-		await canUser( 'read', {
-			kind: 'postType',
-			name: 'wp_block',
-			id: 123,
-		} )( { dispatch, registry, resolveSelect } );
-		await canUser( 'update', {
-			kind: 'postType',
-			name: 'wp_block',
-			id: 123,
-		} )( { dispatch, registry, resolveSelect } );
-		await canUser( 'delete', {
-			kind: 'postType',
-			name: 'wp_block',
-			id: 123,
-		} )( { dispatch, registry, resolveSelect } );
-
-		expect( triggerFetch ).toHaveBeenCalledTimes( 1 );
-
-		expect( dispatch.receiveUserPermissions ).toHaveBeenCalledWith(
-			expect.objectContaining( {
-				'create/postType/wp_block/123': true,
-				'read/postType/wp_block/123': true,
-				'update/postType/wp_block/123': true,
-				'delete/postType/wp_block/123': true,
-			} )
-		);
 	} );
 } );
 

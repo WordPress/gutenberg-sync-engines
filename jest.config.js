@@ -52,6 +52,10 @@ module.exports = {
 	},
 	moduleNameMapper: {
 		...( defaultConfig.moduleNameMapper || {} ),
+		// The contract tests import core-data source. Match WordPress's single
+		// API-fetch instance and use the local CJS uuid with this Jest runner.
+		'^uuid$': require.resolve( 'uuid' ),
+		'^@wordpress/api-fetch$': require.resolve( '@wordpress/api-fetch' ),
 		'^@wordpress/sync$': SYNC_SRC,
 		// Stateless grammar parser used by the intent-log manager to read
 		// persisted syncIds out of loaded record content; resolved from the
@@ -99,6 +103,12 @@ module.exports = {
 		'^@wordpress/theme$': path.join(
 			FRAMEWORK_ROOT,
 			'packages/theme/build-module/index.mjs'
+		),
+		// The Jest tooling is this plugin's own: the subtree runs its tests
+		// with another runner and no longer installs these packages.
+		'^@wordpress/(jest-console|jest-preset-default)(.*)$': path.join(
+			__dirname,
+			'node_modules/@wordpress/$1$2'
 		),
 		'^@wordpress/(.*)$': path.join( FRAMEWORK_MODULES, '@wordpress/$1' ),
 		'^react$': path.join( FRAMEWORK_MODULES, 'react' ),

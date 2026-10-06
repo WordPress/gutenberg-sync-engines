@@ -10,7 +10,7 @@
 /**
  * Internal dependencies
  */
-import { restErrorParts } from '../rest-error';
+import { restErrorParts } from '../../shared/rest-error';
 
 /**
  * A hold, as the server's `held` row carries it

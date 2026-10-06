@@ -211,8 +211,11 @@ switch, [room-lifetime.md](room-lifetime.md).
 
 Server (`includes/class-gutenberg-sync-engines-advisory-presence.php`):
 
--   Per-tab presence tokens in a transient per room (never in sync
-    storage: presence reads must not create a room's storage post).
+-   Per-tab presence tokens in a transient per room, or in the backend
+    the `wp_sync_tab_list_backend` filter returns: with the Presence API
+    plugin installed, one `gsetab-` row per tab in its table
+    (`WP_Sync_Presence_API_Tab_List_Backend`). Never in sync storage:
+    presence reads must not create a room's storage post.
     Stamped at editor page render, refreshed on every heartbeat, removed
     by a leave beacon on `pagehide`, expired after 300 s (a hidden tab's
     heartbeat slows to 120 s, so the TTL must span two beats).
@@ -221,7 +224,10 @@ Server (`includes/class-gutenberg-sync-engines-advisory-presence.php`):
     stores outgoing handshake messages in per-recipient mailboxes (size
     and count capped, short expiry), and answers with the other tokens in
     the room, whether anyone else is present (tokens plus live sync
-    awareness), and this tab's mailbox.
+    awareness), and this tab's mailbox. Because every answer hands out
+    the peers' tokens, a token works only for the user it was first
+    recorded for: a probe, leave, or sync request presenting another
+    user's token is ignored.
 -   Page-render settings under `window._gutenbergSyncEnginesSettings
 .advisory`: room, token, whether others are present, the STUN list
     (filterable), the peer cap, and the enabled flag.
@@ -341,6 +347,7 @@ shared secret — the shape every JWT library parses. Claims:
 {
   "user_id": 4,
   "blog_id": 1,
+  "iss": "example.com",
   "rooms": [ "postType/post:12", "postType/*", "taxonomy/*", "root/*" ],
   "iat": 1757300000,
   "exp": 1757300120
@@ -349,14 +356,24 @@ shared secret — the shape every JWT library parses. Claims:
 
 -   `user_id`, `blog_id`: the signed-in user and the site (multisite
     blog id; 1 on a single site). The names match the VIP real-time
-    collaboration server's tokens on purpose. A relay keys its rosters
-    by `blog_id` AND room, never by room alone: room names are not
-    site-qualified, so one relay (and one secret) serving several
-    WordPress sites would otherwise put two sites' tabs in one roster
-    and send each site's presence to the other. The access token refusal
-    already keeps a tab's presence away from a server without the
-    secret; this keeps it away from the wrong site behind a shared
-    one.
+    collaboration server's tokens on purpose.
+-   `iss` (issuer, the standard JWT claim) the network site URL without
+    its scheme or trailing slash, in lowercase (`example.com`,
+	`example.com/blog`). A stored random id would be copied into a
+	staging copy of the database. Tokens from plugin versions before
+	it have no `iss`; read a missing one as `''` (so those installs
+	still share rosters) and refuse any value that is not a string.
+
+    A relay keys its rosters by `iss`, `blog_id`, AND room, never by
+    room alone. Room names are not site-qualified and every single site
+    is blog 1, so without the others one relay serving several installs
+    would put their tabs in one roster and send each install's presence
+    and save notices to the other (issue #126). Installs that share a
+    relay share its secret, so they must trust each other: each can
+    sign a token naming another. The plugin's daemon does not check
+    `iss`: it serves one install, and its command-line process can
+    compute a different site URL than the web request that made the
+    token.
 -   `rooms`: what the tab may follow. An entry is an exact room name,
     or `<kind>/*`, which allows every **collection** room of that kind
     — a room name without an object id, such as `taxonomy/category`
@@ -364,7 +381,11 @@ shared secret — the shape every JWT library parses. Claims:
     three wildcards (collection rooms carry presence only over this
     lane). A follow for any other room is refused with an error frame.
     Without this claim a user could watch who is editing any post and
-    nudge them to poll — small, but cheap to close.
+    nudge them to poll — small, but cheap to close. The plugin's daemon
+    applies the same rule to advisory follows. Its sync subscriptions
+    are not held to the claim: the websocket transport asks for its
+    token without a room (one socket syncs every room the editor
+    opens), so the daemon checks those against the user's capabilities.
 -   `iat`, `exp`: Unix seconds; an access token lives 2 minutes. Verifiers
     allow 30 seconds of clock skew.
 
@@ -393,7 +414,8 @@ JSON text frames. Tab → relay:
 
 -   The first frame for a `room` **follows** it: check the access token's
     `rooms`, then bind this socket to that `client_id` for the room
-    (the roster is the access token's site's, see `blog_id` above). A
+    (the roster is the access token's install and site, see `iss`
+    above). A
     later frame with a different `client_id` for the same room is a
     protocol violation: close with `1008` (it could impersonate another
     tab). `client_id` is a positive integer; `room` matches

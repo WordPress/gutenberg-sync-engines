@@ -5,7 +5,6 @@
  * work is never collateral.
  */
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
-import * as Y from 'yjs';
 
 import { createDeRtcDocBridge } from '../../../../src/engines/de-rtc/doc-bridge';
 import {
@@ -13,9 +12,10 @@ import {
 	createDeRtcUndoFeed,
 } from '../../../../src/engines/de-rtc/revert-undo';
 import { createDeRtcSessionCodec } from '../../../../src/engines/de-rtc/session';
-import { CRDT_RECORD_MAP_KEY } from '../../../../src/engines/yjs/constants';
-// eslint-disable-next-line import/no-unresolved -- Provided at runtime as wp.sync.
-import type { SyncConfig } from '@wordpress/sync';
+import {
+	createDeRtcRecord,
+	type DeRtcRecord,
+} from '../../../../src/engines/de-rtc/record';
 
 jest.mock( '@wordpress/blocks', () => ( {
 	parse: ( content: string ) => ( content ? JSON.parse( content ) : [] ),
@@ -23,18 +23,13 @@ jest.mock( '@wordpress/blocks', () => ( {
 		JSON.stringify( blocks ),
 } ) );
 
-function makeSyncConfig(): jest.MockedObject< SyncConfig > {
-	return {
-		applyChangesToCRDTDoc: jest.fn( ( doc: Y.Doc, changes: any ) => {
-			const map = doc.getMap( CRDT_RECORD_MAP_KEY );
-			Object.entries( changes ).forEach( ( [ key, value ] ) => {
-				map.set( key, value );
-			} );
-		} ),
-		getChangesFromCRDTDoc: jest.fn( ( doc: Y.Doc ) =>
-			doc.getMap( CRDT_RECORD_MAP_KEY ).toJSON()
-		),
-	} as unknown as jest.MockedObject< SyncConfig >;
+/**
+ * A local editor edit: the editor's new block tree lands in the record.
+ * @param target
+ * @param blocks
+ */
+function setRecordBlocks( target: DeRtcRecord, blocks: unknown[] ) {
+	target.apply( { blocks }, 'local-editor' );
 }
 
 const A = { name: 'core/paragraph', attributes: { content: 'Alpha' } };
@@ -51,26 +46,25 @@ const B = { name: 'core/paragraph', attributes: { content: 'Beta' } };
 const contentOf = ( ...blocks: unknown[] ) => JSON.stringify( blocks );
 
 describe( 'de-rtc revert-edit undo', () => {
-	let doc: Y.Doc;
+	let record: DeRtcRecord;
 	let bridge: ReturnType< typeof createDeRtcDocBridge >;
 	let feed: ReturnType< typeof createDeRtcUndoFeed >;
 	let manager: ReturnType< typeof createDeRtcRevertUndoManager >;
 	let applied: unknown[][];
 
 	beforeEach( () => {
-		doc = new Y.Doc();
-		const syncConfig = makeSyncConfig();
-		bridge = createDeRtcDocBridge( doc, syncConfig );
+		record = createDeRtcRecord();
+		bridge = createDeRtcDocBridge( record );
 		feed = createDeRtcUndoFeed();
 		manager = createDeRtcRevertUndoManager();
 		applied = [];
 		manager.attachEntity( {
-			key: doc.getMap( CRDT_RECORD_MAP_KEY ) as Y.Map< unknown >,
+			key: record,
 			bridge,
 			feed,
 			applyRevert: ( blocks ) => {
 				applied.push( blocks );
-				doc.getMap( CRDT_RECORD_MAP_KEY ).set( 'blocks', blocks );
+				setRecordBlocks( record, blocks );
 			},
 		} );
 	} );

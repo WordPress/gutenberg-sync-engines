@@ -123,14 +123,19 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Plugin' ) ) {
 			require_once GUTENBERG_SYNC_ENGINES_PATH . 'includes/class-wp-sync-room-lock.php';
 			require_once GUTENBERG_SYNC_ENGINES_PATH . 'includes/class-wp-sync-atomic-option.php';
 
-			// Awareness, behind the same kind of drop-in seam as the lock.
+			// Awareness and the tab list, behind the same kind of drop-in seam as the lock.
 			require_once GUTENBERG_SYNC_ENGINES_PATH . 'includes/interface-wp-sync-awareness-backend.php';
 			require_once GUTENBERG_SYNC_ENGINES_PATH . 'includes/class-wp-sync-awareness.php';
 			require_once GUTENBERG_SYNC_ENGINES_PATH . 'includes/class-wp-sync-presence-api-awareness-backend.php';
+			require_once GUTENBERG_SYNC_ENGINES_PATH . 'includes/interface-wp-sync-tab-list-backend.php';
+			require_once GUTENBERG_SYNC_ENGINES_PATH . 'includes/class-wp-sync-presence-api-tab-list-backend.php';
+
+			// Code the base provides to more than one engine.
+			require_once GUTENBERG_SYNC_ENGINES_PATH . 'includes/shared/class-wp-sync-block-identity.php';
+			require_once GUTENBERG_SYNC_ENGINES_PATH . 'includes/shared/class-wp-sync-post-genesis-props.php';
+			require_once GUTENBERG_SYNC_ENGINES_PATH . 'includes/shared/class-wp-sync-review-permissions.php';
 
 			$engines = GUTENBERG_SYNC_ENGINES_PATH . 'includes/engines/';
-			require_once $engines . 'class-wp-sync-post-genesis-props.php';
-			require_once $engines . 'class-wp-sync-review-permissions.php';
 			require_once $engines . 'intent-log/class-wp-intent-log-document.php';
 			require_once $engines . 'intent-log/class-wp-intent-log-planner.php';
 			require_once $engines . 'intent-log/class-wp-intent-log-rich-text.php';
@@ -152,12 +157,15 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Plugin' ) ) {
 			require_once $engines . 'yjs-server/class-wp-yjs-server-review-controller.php';
 
 			$transports = GUTENBERG_SYNC_ENGINES_PATH . 'includes/transports/';
+			require_once $transports . 'class-wp-sync-connection.php';
 			require_once $transports . 'class-wp-http-polling-sync-server.php';
 			require_once $transports . 'sse/interface-wp-sync-change-waiter.php';
 			require_once $transports . 'sse/class-wp-sync-storage-change-waiter.php';
 			require_once $transports . 'sse/class-wp-sync-redis.php';
 			require_once $transports . 'sse/class-wp-sync-redis-notifications.php';
 			require_once $transports . 'sse/class-wp-sync-sse-server.php';
+			require_once $transports . 'sse/class-wp-sync-sse-connection.php';
+			require_once $transports . 'sse/class-wp-sync-sse-daemon-transport.php';
 			WP_Sync_Redis_Notifications::register();
 			require_once $transports . 'websocket/class-wp-websocket-access-token.php';
 			require_once $transports . 'websocket/class-wp-websocket-token-controller.php';
@@ -208,6 +216,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Plugin' ) ) {
 		private function register(): void {
 			add_filter( '__unstable_wp_sync_storage', array( $this, 'filter_sync_storage' ) );
 			add_filter( 'wp_sync_awareness_backend', array( $this, 'filter_awareness_backend' ) );
+			add_filter( 'wp_sync_tab_list_backend', array( $this, 'filter_tab_list_backend' ) );
 			add_filter( 'wp_sync_engines', array( $this, 'register_engines' ), 10, 2 );
 			WP_De_RTC_Sync_Meta_Colocation::register();
 			WP_De_RTC_Base_Version_Preflight::register();
@@ -267,6 +276,21 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Plugin' ) ) {
 		}
 
 		/**
+		 * Hands the tab list to the Presence API when it is available.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param WP_Sync_Tab_List_Backend|null $backend The backend so far.
+		 * @return WP_Sync_Tab_List_Backend|null Backend to use.
+		 */
+		public function filter_tab_list_backend( $backend ) {
+			if ( null === $backend && WP_Sync_Presence_API_Tab_List_Backend::is_available() ) {
+				return new WP_Sync_Presence_API_Tab_List_Backend();
+			}
+			return $backend;
+		}
+
+		/**
 		 * Adds this plugin's engines to the framework's engine registry.
 		 *
 		 * @since 0.1.0
@@ -300,6 +324,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Plugin' ) ) {
 		public function register_transports( array $transports, WP_Sync_Storage $storage, WP_Sync_Engine_Registry $engines ): array {
 			$transports[] = new WP_HTTP_Polling_Sync_Server( $storage, $engines );
 			$transports[] = new WP_Sync_SSE_Server( $storage, $engines );
+			$transports[] = new WP_Sync_SSE_Daemon_Transport( $storage, $engines );
 			$transports[] = new WP_WebSocket_Sync_Transport( $storage, $engines );
 			return $transports;
 		}
@@ -324,6 +349,11 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Plugin' ) ) {
 			if ( in_array( WP_WebSocket_Sync_Transport::TRANSPORT_SLUG, (array) $transports, true ) ) {
 				$config[ WP_WebSocket_Sync_Transport::TRANSPORT_SLUG ] = array(
 					'url' => WP_WebSocket_Sync_Transport::get_socket_url(),
+				);
+			}
+			if ( in_array( WP_Sync_SSE_Daemon_Transport::TRANSPORT_SLUG, (array) $transports, true ) ) {
+				$config[ WP_Sync_SSE_Daemon_Transport::TRANSPORT_SLUG ] = array(
+					'url' => WP_Sync_SSE_Daemon_Transport::get_stream_url(),
 				);
 			}
 			return $config;
@@ -451,10 +481,10 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Plugin' ) ) {
 			if ( ! in_array( $engines->get_engine_slug_for_room( '' ), array( 'intent-log', 'de-rtc' ), true ) ) {
 				return;
 			}
-			$stamper = GUTENBERG_SYNC_ENGINES_PATH . 'includes/engines/intent-log/sync-id.js';
+			$stamper = GUTENBERG_SYNC_ENGINES_PATH . 'includes/shared/sync-id.js';
 			wp_enqueue_script(
-				'gutenberg-sync-engines-intent-log-stamper',
-				GUTENBERG_SYNC_ENGINES_URL . 'includes/engines/intent-log/sync-id.js',
+				'gutenberg-sync-engines-block-identity-stamper',
+				GUTENBERG_SYNC_ENGINES_URL . 'includes/shared/sync-id.js',
 				array( 'wp-data' ),
 				file_exists( $stamper ) ? (string) filemtime( $stamper ) : GUTENBERG_SYNC_ENGINES_VERSION,
 				true

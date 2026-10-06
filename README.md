@@ -45,6 +45,12 @@ engine as a feature plugin for wider testing.
   change to (server-sent events), woken by Redis when a Redis address is
   configured and by half-second storage checks otherwise. Needs a proxy
   that passes streams through unbuffered.
+- **sse-daemon**: the same stream, written by the sync daemon that the
+  websocket transport runs, on the same port. It holds no PHP worker per
+  tab, and it works where a proxy blocks the WebSocket upgrade. A change
+  that lands through WordPress reaches the stream within about a second.
+  For local dev, `npm run rtc:sse` starts the daemon and selects it. See
+  [docs/sse-daemon.md](docs/sse-daemon.md).
 - **websocket**: the server pushes updates over a persistent connection
   served by a bundled PHP daemon (`wp collaboration sync-server`). For
   local dev, `npm run rtc:ws` starts everything in one command (and
@@ -116,21 +122,24 @@ The plugin registers via:
 
 ## Development
 
-A modified copy of Gutenberg at runtime is vendored as a **git subtree** in
-`gutenberg/` and mounted by `.wp-env.json` so the local WordPress environment
-runs the exact Gutenberg the engines were built against. No separate checkout
-needed.
+The framework is maintained in a separate Gutenberg branch and copied into `gutenberg/` as a **squashed Git subtree**. Each plugin commit pins one exact
+framework commit. The plugin loads this bundled copy when no standalone
+Gutenberg plugin is active.
 
 ### Setup
 
 ```bash
-composer install          # PHP tooling (PHPCS/WPCS, PHPUnit + polyfills)
-npm install               # JS tooling (@wordpress/scripts, wp-env, Playwright)
-npm run build             # Build this plugin's client bundle
-
-# Build the vendored Gutenberg.
-cd gutenberg && npm install --ignore-scripts && npm run build && cd ..
+composer install          # PHP tooling
+npm install               # Plugin dependencies
+cd gutenberg && npm ci --ignore-scripts && npm run build && cd ..
+npm run build             # Plugin client bundle
 ```
+
+A normal clone includes the Gutenberg source. After switching plugin
+revisions, rebuild it if the bundled version changed.
+
+Framework development, rebasing, and updating the pin are described in
+[docs/gutenberg-subtree.md](docs/gutenberg-subtree.md).
 
 ### Environment
 

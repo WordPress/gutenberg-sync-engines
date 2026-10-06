@@ -3,6 +3,8 @@
  */
 import { getBlock, locateBlock } from './intent-log/document.js';
 import { mintSyncId } from './intent-log/sync-id.js';
+import { textSliceIntents } from './intent-log/text-slices.js';
+import { applyIntent } from './intent-log/reducer.js';
 import type {
 	EngineBlock,
 	EngineDocument,
@@ -19,8 +21,9 @@ import type { SyncUndoManager, SyncUndoStackState } from '@wordpress/sync';
  *
  * - The undo stack tracks UNITS — the intent batches the manager authors
  *   from one capture (a typing burst coalesced by CAPTURE_SYNC_DELAY) or
- *   one property push. Tracking is purely client-side (no txnId stamping,
- *   so server unit-escalation semantics are untouched).
+ *   one property push. Capture grouping is client-side. Inverses of a
+ *   sliced edit share a txnId, preserved through redo, so conflicts
+ *   cannot apply only part of that edit.
  * - A unit becomes undoable once SETTLED: every member acked, and every
  *   accepted member's authoritative (transformed) row absorbed into the
  *   replica's log with its landing seq. Inverses derive from ACCEPTED
@@ -93,6 +96,30 @@ export interface IntentLogUndoManager extends SyncUndoManager {
 
 	/** Drops all state (manager unloadAll). */
 	reset: () => void;
+}
+
+/**
+ * Invert all slices in reverse application order as one user action.
+ * @param entry      Accepted row.
+ * @param docBefore  Document before the row.
+ * @param currentDoc Current document.
+ */
+export function deriveInverses(
+	entry: IntentEnvelope,
+	docBefore: EngineDocument,
+	currentDoc: EngineDocument | null
+): Array< { type: string; payload: Record< string, unknown > } > {
+	const inverses = [];
+	let doc = docBefore;
+	for ( const part of textSliceIntents( entry ) ) {
+		const inverse = deriveInverse( part, doc, currentDoc );
+		if ( ! inverse ) {
+			return [];
+		}
+		inverses.unshift( inverse );
+		doc = applyIntent( doc, part ).doc;
+	}
+	return inverses;
 }
 
 /**
@@ -569,18 +596,26 @@ export function createIntentLogUndoManager(
 		const session = unit.session;
 		const currentDoc = session.getDocument();
 		const envelopes: IntentEnvelope[] = [];
+		const inverseTransactions = new Map< string, string >();
 		for ( const member of accepted ) {
 			const docBefore = session.getDocumentAt( member.seq! );
 			if ( ! docBefore ) {
 				continue; // Below the retained floor: not derivable.
 			}
-			const inverse = deriveInverse(
+			const inverses = deriveInverses(
 				member.entry!,
 				docBefore,
 				currentDoc
 			);
-			if ( ! inverse ) {
+			if ( ! inverses.length ) {
 				continue;
+			}
+			// Redo must retain the atomic group made by a sliced undo.
+			const originalTxn = member.entry!.txnId;
+			let txnId = inverses.length > 1 ? mintSyncId() : undefined;
+			if ( originalTxn ) {
+				txnId = inverseTransactions.get( originalTxn ) ?? mintSyncId();
+				inverseTransactions.set( originalTxn, txnId );
 			}
 			// Each inverse authors at ITS member's frame: a merged unit's
 			// rows need not be contiguous (peer rows can interleave between
@@ -588,7 +623,8 @@ export function createIntentLogUndoManager(
 			// frame lets the planner transform over exactly the peer rows
 			// after that member.
 			envelopes.push(
-				...session.authorBatch( [ inverse ], {
+				...session.authorBatch( inverses, {
+					txnId,
 					baseSeq: member.seq! + 1,
 					observe: false,
 				} )

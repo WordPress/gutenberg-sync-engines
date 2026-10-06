@@ -1,7 +1,7 @@
 {
   "$schema": "./gutenberg/schemas/json/wp-env.json",
   "core": "WordPress/WordPress",
-  "plugins": [ ".", "https://downloads.wordpress.org/plugin/redis-cache.3.0.0.zip" ],
+  "plugins": [ "https://downloads.wordpress.org/plugin/presence-api.zip", ".", "https://downloads.wordpress.org/plugin/redis-cache.3.0.0.zip" ],
   "themes": [ "./gutenberg/test/emptytheme" ],
   "port": 8889,
   "autoPort": true,

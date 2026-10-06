@@ -94,6 +94,31 @@ export class SseExchange {
 	private controller?: AbortController;
 	private events?: AsyncGenerator< SyncResponse >;
 	private signature = '';
+
+	/**
+	 * Where the stream is opened.
+	 *
+	 * The `sse` transport streams from the REST route on the web tier; the
+	 * `sse-daemon` transport points this at the sync daemon instead, which
+	 * serves the same frames from a different process. Set once, before the
+	 * exchange runs, through `setStreamUrl()`.
+	 */
+	private streamUrl = '/wp-sync/v1/sse';
+
+	/**
+	 * Extra headers the stream request carries, or none.
+	 *
+	 * The `sse` transport streams from the web tier, where the REST nonce
+	 * apiFetch already sends is the credential. The `sse-daemon` transport
+	 * streams from another process, which authenticates the way the
+	 * websocket transport's daemon does: a one-time token from
+	 * `/wp-sync/v1/ws-token`, which the daemon checks against the same
+	 * `logged_in` cookie. Only the envelope differs, because a handshake
+	 * can carry the token in a subprotocol offer and an ordinary request
+	 * can set a header.
+	 */
+	private authProvider?: () => Promise< Record< string, string > >;
+
 	private cursors = new Map< string, number >();
 	private retryAfter = 0;
 	private failures = 0;
@@ -120,6 +145,39 @@ export class SseExchange {
 
 	public get available(): boolean {
 		return Date.now() >= this.retryAfter;
+	}
+
+	/**
+	 * Points the exchange at a different stream endpoint.
+	 *
+	 * An open stream is closed first: it is a response from wherever the old
+	 * URL pointed, and the next open has to reach the new one.
+	 *
+	 * @param {string} url The stream URL.
+	 */
+	public setStreamUrl( url: string ): void {
+		if ( url === this.streamUrl ) {
+			return;
+		}
+		this.close();
+		this.streamUrl = url;
+	}
+
+	/**
+	 * Sets (or clears) how the stream request authenticates.
+	 *
+	 * A FUNCTION, not a value, because the daemon's credential is
+	 * single-use: the one-time token is consumed the first time the daemon
+	 * sees it, so every open needs a fresh one. A cached token would
+	 * authenticate the first stream and fail every reconnect after it.
+	 *
+	 * @param {Function} provider Returns the headers for one stream open.
+	 */
+	public setAuthProvider(
+		provider?: () => Promise< Record< string, string > >
+	): void {
+		this.close();
+		this.authProvider = provider;
 	}
 
 	/**
@@ -184,13 +242,42 @@ export class SseExchange {
 				if ( ! this.events ) {
 					this.controller = new AbortController();
 					this.resetTimeout();
-					const response = await apiFetch( {
-						path: '/wp-sync/v1/sse',
-						method: 'POST',
-						data: payload,
-						parse: false,
-						signal: this.controller.signal,
-					} );
+					// A fresh credential for THIS open: the daemon consumes
+					// the one it is given, so a cached one would fail the
+					// first reconnect.
+					const auth = this.authProvider
+						? await this.authProvider()
+						: undefined;
+					/*
+					 * The daemon is not a REST endpoint. `apiFetch` resolves
+					 * a `path` against the REST root (so an absolute URL
+					 * became `/wp-json/http://host:port/...`) and attaches an
+					 * X-WP-Nonce, which is a WordPress credential the daemon
+					 * has no use for and no business receiving. An absolute
+					 * stream URL therefore goes out as a plain fetch with
+					 * exactly the headers the stream needs; the web-tier
+					 * `sse` transport keeps apiFetch, which is the right
+					 * client there.
+					 */
+					const response = /^https?:\/\//.test( this.streamUrl )
+						? await fetch( this.streamUrl, {
+								method: 'POST',
+								headers: {
+									'Content-Type': 'application/json',
+									...( auth || {} ),
+								},
+								body: JSON.stringify( payload ),
+								credentials: 'include',
+								signal: this.controller.signal,
+						  } )
+						: await apiFetch( {
+								path: this.streamUrl,
+								method: 'POST',
+								data: payload,
+								parse: false,
+								signal: this.controller.signal,
+								...( auth || {} ),
+						  } );
 					if ( ! response.ok ) {
 						throw await response.json();
 					}

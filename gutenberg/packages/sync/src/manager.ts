@@ -521,8 +521,8 @@ export function createSyncManager(
 			entityState.providers.forEach( ( provider ) => provider.retry?.() );
 		}
 		for ( const [ , collectionState ] of collectionStates ) {
-			collectionState.providers.forEach(
-				( provider ) => provider.retry?.()
+			collectionState.providers.forEach( ( provider ) =>
+				provider.retry?.()
 			);
 		}
 	}
@@ -803,7 +803,7 @@ export function createSyncManager(
 					restoreProposal: debugWrap(
 						engine.review.restoreProposal.bind( engine.review )
 					),
-			  }
+				}
 			: {} ),
 	};
 }

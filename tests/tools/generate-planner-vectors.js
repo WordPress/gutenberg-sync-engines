@@ -352,6 +352,99 @@ for ( const [ seed, steps, clientCount, agentChance, propertyOps ] of [
 	} );
 }
 
+// Exact text-slice geometry, including prior compound deletions and joins.
+for ( const mode of [ 'format', 'delete', 'join', 'conflict', 'unicode' ] ) {
+	const revision = { postId: 99, revisionId: 3 };
+	const server = createServer( makeGenesisDoc( revision ) );
+	const recorder = [];
+	server.recorder = recorder;
+	const id = genesisSyncId( revision, [ 0 ] );
+	let counter = 0;
+	const send = (
+		type,
+		payload,
+		actorId = 'alice',
+		baseSeq = server.log.length
+	) => {
+		const edit = createIntent( type, payload, {
+			actorId,
+			baseSeq,
+			intentId: `slice-${ mode }-${ counter++ }`,
+		} );
+		serverIngestBatch( server, [ edit ] );
+		return edit;
+	};
+	if ( mode === 'unicode' ) {
+		send( 'replace_attr_content', {
+			syncId: id,
+			newText: 'A😀éBC',
+			observedVersion: 0,
+		} );
+	}
+	const base = server.log.length;
+	send( 'split_block', { syncId: id, offset: 3, newSyncId: 'slice-tail' } );
+	send( 'split_block', {
+		syncId: 'slice-tail',
+		offset: 2,
+		newSyncId: 'slice-tail-2',
+	} );
+	if ( mode === 'join' ) {
+		send( 'merge_blocks', {
+			survivorId: id,
+			absorbedId: 'slice-tail',
+			joinOffset: 3,
+		} );
+	}
+	if ( mode === 'conflict' ) {
+		send(
+			'insert_text',
+			{ syncId: 'slice-tail', offset: 1, text: 'PEER' },
+			'carol'
+		);
+	}
+	const deleting = [ 'delete', 'join', 'conflict' ].includes( mode );
+	const edit = send(
+		deleting ? 'delete_text' : 'format_text',
+		{
+			syncId: id,
+			start: 1,
+			end: 6,
+			...( deleting
+				? { removedText: 't was' }
+				: { format: 'bold', on: true } ),
+		},
+		'bob',
+		base
+	);
+	serverIngestBatch( server, [ edit ] );
+	// A later edit based before the compound deletion must see every slice.
+	if ( mode === 'delete' ) {
+		send(
+			'insert_text',
+			{ syncId: 'slice-tail-2', offset: 3, text: '!' },
+			'carol',
+			base + 2
+		);
+	}
+	CASES.push( {
+		name: `text slices ${ mode }`,
+		genesis: revision,
+		batches: recorder,
+		expected: {
+			dispositions: Object.fromEntries( server.dispositions ),
+			proposals: server.proposals.map( ( p ) => ( {
+				intentId: p.intent.intentId,
+				actorId: p.actorId,
+				reason: p.reason,
+			} ) ),
+			log: server.log,
+			finalDoc: JSON.parse(
+				canonicalJson( serverDocAt( server, server.log.length ) )
+			),
+		},
+	} );
+}
+
 /*
  * Hand-authored cross-request case: a typist whose editor keeps showing a
  * set-aside letter. The browser cannot drop the letter mid-burst, so every

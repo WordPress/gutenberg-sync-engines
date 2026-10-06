@@ -12,6 +12,16 @@
       }
     },
     {
+      "step": "installPlugin",
+      "pluginData": {
+        "resource": "wordpress.org/plugins",
+        "slug": "presence-api"
+      },
+      "options": {
+        "activate": true
+      }
+    },
+    {
       "step": "activatePlugin",
       "pluginName": "Gutenberg Sync Engines",
       "pluginPath": "gutenberg-sync-engines/gutenberg-sync-engines.php"

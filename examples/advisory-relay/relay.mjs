@@ -31,7 +31,8 @@ if ( ! SECRET ) {
  *
  * The token is `header.payload.signature`, base64url each. The signature
  * is HMAC-SHA256 over `header.payload`. The claims are `user_id`,
- * `blog_id`, `rooms` (room names, or `<kind>/*`), `iat`, and `exp`.
+ * `blog_id`, `iss` (the install), `rooms` (room names, or `<kind>/*`),
+ * `iat`, and `exp`.
  *
  * @param {string} token The access token.
  * @return {object|null} The claims, or null.
@@ -64,11 +65,13 @@ function verifyAccessToken( token ) {
 	const valid =
 		Number.isInteger( claims.user_id ) &&
 		Number.isInteger( claims.blog_id ) &&
+		// Tokens from plugin versions before `iss` have none.
+		[ 'string', 'undefined' ].includes( typeof claims.iss ) &&
 		Array.isArray( claims.rooms ) &&
 		claims.rooms.every( ( room ) => typeof room === 'string' ) &&
 		Number.isInteger( claims.exp ) &&
 		now < claims.exp + 30; // 30 s of clock skew.
-	return valid ? claims : null;
+	return valid ? { ...claims, iss: claims.iss ?? '' } : null;
 }
 
 /**
@@ -88,15 +91,17 @@ function allowsRoom( rooms, room ) {
 }
 
 /**
- * The followers of each room, keyed by site AND room (room names are
- * not site-qualified, and one relay may serve several sites). Each
- * follower entry holds what the roster shows for that tab.
+ * The followers of each room, keyed by install, site, AND room. Room
+ * names are not site-qualified, every single site is blog 1, and one
+ * relay may serve several installs that share its secret. Each follower
+ * entry holds what the roster shows for that tab.
  *
  * @type {Map<string, Map<import('ws').WebSocket, {client_id: number, token: string, presence: object|null}>>}
  */
 const rooms = new Map();
 
-const key = ( ws, room ) => `${ ws.claims.blog_id }/${ room }`;
+const key = ( ws, room ) =>
+	JSON.stringify( [ ws.claims.iss, ws.claims.blog_id, room ] );
 const send = ( ws, frame ) => ws.send( JSON.stringify( frame ) );
 
 /**
@@ -219,7 +224,7 @@ function leave( ws ) {
 		if ( followers.size === 0 ) {
 			rooms.delete( roomKey );
 		} else {
-			sendRoster( roomKey, roomKey.slice( roomKey.indexOf( '/' ) + 1 ) );
+			sendRoster( roomKey, JSON.parse( roomKey ).at( -1 ) );
 		}
 	}
 }

@@ -33,7 +33,8 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Advisory_Presence' ) ) {
 	 * and expired tokens). Under the "keep" policy rooms live on as a
 	 * shared working copy and nothing here resets them.
 	 *
-	 * Tokens live in a transient keyed by the room and mailboxes in options
+	 * Tokens live in a transient keyed by the room (or the
+	 * `wp_sync_tab_list_backend` filter's backend) and mailboxes in options
 	 * rows updated by compare-and-swap, both outside the sync storage on
 	 * purpose: a presence read must never create a room's storage post
 	 * (the storage API's own room lookup does).
@@ -166,6 +167,14 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Advisory_Presence' ) ) {
 		 * @var WP_Sync_Storage|null
 		 */
 		private $storage;
+
+		/**
+		 * The tab list backend: null for the transient, false until resolved.
+		 *
+		 * @since n.e.x.t
+		 * @var WP_Sync_Tab_List_Backend|null|false
+		 */
+		private $tab_list_backend = false;
 
 		/**
 		 * Constructor.
@@ -410,7 +419,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Advisory_Presence' ) ) {
 			}
 			$room  = (string) $probe['room'];
 			$token = (string) $probe['token'];
-			if ( ! self::is_enabled() || ! $this->valid_token( $token ) || ! $this->can_probe_room( $room ) ) {
+			if ( ! self::is_enabled() || ! $this->valid_token( $token ) || ! $this->can_probe_room( $room ) || $this->is_token_owned_by_another_user( $room, $token ) ) {
 				return null;
 			}
 
@@ -651,7 +660,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Advisory_Presence' ) ) {
 		 * @return bool Whether the room was reset.
 		 */
 		public function note_sync_request( string $room, string $token, int $client_id ): bool {
-			if ( ! $this->valid_token( $token ) || ! $this->is_entity_room( $room ) ) {
+			if ( ! $this->valid_token( $token ) || ! $this->is_entity_room( $room ) || $this->is_token_owned_by_another_user( $room, $token ) ) {
 				return false;
 			}
 
@@ -684,6 +693,9 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Advisory_Presence' ) ) {
 		 * @return bool Whether the room was reset.
 		 */
 		public function leave( string $room, string $token, int $client_id ): bool {
+			if ( $this->is_token_owned_by_another_user( $room, $token ) ) {
+				return false;
+			}
 			$this->forget_token( $room, $token );
 			if ( ! $this->is_entity_room( $room ) ) {
 				return false;
@@ -836,6 +848,25 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Advisory_Presence' ) ) {
 				return false;
 			}
 			return WP_Sync_Config::can_user_sync_entity_type( $parsed['entity_kind'], $parsed['entity_name'], $parsed['object_id'] );
+		}
+
+		/**
+		 * Whether a live token in the room belongs to a user other than the
+		 * current one. A token belongs to the user it was first recorded
+		 * for, and every probe answer hands each tab its peers' tokens, so
+		 * without this check another editor of the post could present a
+		 * peer's token to read and empty that tab's handshake mailbox, send
+		 * handshake messages in its name, or make it leave the room.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param string $room  The room name.
+		 * @param string $token The token presented.
+		 * @return bool Whether another user owns the token.
+		 */
+		private function is_token_owned_by_another_user( string $room, string $token ): bool {
+			$owner = (int) ( $this->read_tokens( $room )[ $token ]['u'] ?? 0 );
+			return $owner > 0 && get_current_user_id() !== $owner;
 		}
 
 		/**
@@ -1047,7 +1078,10 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Advisory_Presence' ) ) {
 		 * @return array<string, array<string, int>> token => { t, u, c }.
 		 */
 		private function read_tokens( string $room ): array {
-			$stored = get_transient( $this->tokens_key( $room ) );
+			$backend = $this->tab_list_backend();
+			$stored  = null !== $backend
+				? self::newest_tokens( self::tokens_from_tabs( $backend->tabs( $room, self::PRESENCE_TTL ) ) )
+				: get_transient( $this->tokens_key( $room ) );
 			if ( ! is_array( $stored ) ) {
 				return array();
 			}
@@ -1070,6 +1104,71 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Advisory_Presence' ) ) {
 				);
 			}
 			return $live;
+		}
+
+		/**
+		 * Resolves the tab list backend once per instance.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @return WP_Sync_Tab_List_Backend|null Backend, or null for the transient.
+		 */
+		private function tab_list_backend(): ?WP_Sync_Tab_List_Backend {
+			if ( false === $this->tab_list_backend ) {
+				/**
+				 * Filters the store holding the editor tabs open on a room.
+				 *
+				 * @since n.e.x.t
+				 *
+				 * @param WP_Sync_Tab_List_Backend|null $backend Backend, or null for the transient.
+				 */
+				$backend                = apply_filters( 'wp_sync_tab_list_backend', null );
+				$this->tab_list_backend = $backend instanceof WP_Sync_Tab_List_Backend ? $backend : null;
+			}
+			return $this->tab_list_backend;
+		}
+
+		/**
+		 * A backend's tabs in the shape the transient stores.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param array<string, array<string, mixed>> $tabs token => tab.
+		 * @return array<string, array<string, mixed>> token => entry.
+		 */
+		private static function tokens_from_tabs( array $tabs ): array {
+			$tokens = array();
+			foreach ( $tabs as $token => $tab ) {
+				$tokens[ (string) $token ] = array_merge(
+					$tab['state'] ?? array(),
+					array(
+						't' => (int) ( $tab['updated_at'] ?? 0 ),
+						'u' => (int) ( $tab['user_id'] ?? 0 ),
+					)
+				);
+			}
+			return $tokens;
+		}
+
+		/**
+		 * The most recently refreshed tokens, at most MAX_TOKENS_PER_ROOM.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param array<string, array<string, mixed>> $tokens token => entry.
+		 * @return array<string, array<string, mixed>> The newest of them.
+		 */
+		private static function newest_tokens( array $tokens ): array {
+			if ( count( $tokens ) <= self::MAX_TOKENS_PER_ROOM ) {
+				return $tokens;
+			}
+			uasort(
+				$tokens,
+				static function ( $a, $b ) {
+					return $b['t'] <=> $a['t'];
+				}
+			);
+			return array_slice( $tokens, 0, self::MAX_TOKENS_PER_ROOM, true );
 		}
 
 		/**
@@ -1116,17 +1215,14 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Advisory_Presence' ) ) {
 				$tokens[ $token ]['a'] = (string) get_avatar_url( $user->ID, array( 'size' => 48 ) );
 			}
 
-			if ( count( $tokens ) > self::MAX_TOKENS_PER_ROOM ) {
-				uasort(
-					$tokens,
-					static function ( $a, $b ) {
-						return $b['t'] <=> $a['t'];
-					}
-				);
-				$tokens = array_slice( $tokens, 0, self::MAX_TOKENS_PER_ROOM, true );
+			$backend = $this->tab_list_backend();
+			if ( null !== $backend ) {
+				$entry = $tokens[ $token ];
+				$backend->put( $room, $token, array_diff_key( $entry, array_flip( array( 't', 'u' ) ) ), $entry['u'], self::PRESENCE_TTL );
+				return;
 			}
 
-			set_transient( $this->tokens_key( $room ), $tokens, self::TOKENS_TRANSIENT_EXPIRY );
+			set_transient( $this->tokens_key( $room ), self::newest_tokens( $tokens ), self::TOKENS_TRANSIENT_EXPIRY );
 		}
 
 		/**
@@ -1201,6 +1297,13 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Advisory_Presence' ) ) {
 		 * @return void
 		 */
 		private function forget_token( string $room, string $token ): void {
+			$backend = $this->tab_list_backend();
+			if ( null !== $backend ) {
+				$backend->forget( $room, $token );
+				$this->delete_mailbox( $room, $token );
+				return;
+			}
+
 			$tokens = $this->read_tokens( $room );
 			unset( $tokens[ $token ] );
 			if ( 0 === count( $tokens ) ) {

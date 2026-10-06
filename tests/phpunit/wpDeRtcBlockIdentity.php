@@ -91,8 +91,8 @@ class Tests_Collaboration_WpDeRtcBlockIdentity extends WP_UnitTestCase {
 		$ids = self::ids_by_path( $stamped );
 		$this->assertSame( array( '0', '0.0', '0.1', '1', '2' ), array_map( 'strval', array_keys( $ids ) ), 'Every named block, at every depth, is listed in pre-order.' );
 		foreach ( $ids as $path => $sync_id ) {
-			$expected = WP_Intent_Log_Planner::genesis_sync_id( 42, 0, array_map( 'intval', explode( '.', $path ) ) );
-			$this->assertSame( $expected, $sync_id, "Block at path {$path} carries the intent-log genesis id (the editor stamper's function)." );
+			$expected = WP_Sync_Block_Identity::genesis_sync_id( 42, 0, array_map( 'intval', explode( '.', $path ) ) );
+			$this->assertSame( $expected, $sync_id, "Block at path {$path} carries the shared genesis id (the editor stamper's function)." );
 		}
 
 		// A textual splice: nothing but the ids changed (slashes in the
@@ -114,14 +114,14 @@ class Tests_Collaboration_WpDeRtcBlockIdentity extends WP_UnitTestCase {
 		$this->assertCount( 2, $records );
 
 		$parsed = parse_blocks( $stamped );
-		$this->assertSame( WP_Intent_Log_Planner::genesis_sync_id( 42, 0, array( 1 ) ), $parsed[2]['attrs']['metadata']['syncId'] );
+		$this->assertSame( WP_Sync_Block_Identity::genesis_sync_id( 42, 0, array( 1 ) ), $parsed[2]['attrs']['metadata']['syncId'] );
 	}
 
 	public function test_existing_metadata_gains_an_id_without_losing_its_keys() {
 		$stamped = WP_De_RTC_Block_Identity::stamp_genesis( self::NESTED_CONTENT, 42 );
 		$named   = WP_De_RTC_Block_Identity::collect( $stamped )[4];
 		$this->assertSame( 'Hero', $named['attrs']['metadata']['name'] );
-		$this->assertSame( WP_Intent_Log_Planner::genesis_sync_id( 42, 0, array( 2 ) ), $named['attrs']['metadata']['syncId'] );
+		$this->assertSame( WP_Sync_Block_Identity::genesis_sync_id( 42, 0, array( 2 ) ), $named['attrs']['metadata']['syncId'] );
 	}
 
 	public function test_duplicate_ids_are_reminted_keeping_the_first_holder() {
@@ -161,8 +161,8 @@ class Tests_Collaboration_WpDeRtcBlockIdentity extends WP_UnitTestCase {
 		$stamped = WP_De_RTC_Block_Identity::stamp_genesis( $content, 42 );
 		$this->assertSame(
 			array(
-				'1' => WP_Intent_Log_Planner::genesis_sync_id( 42, 0, array( 1 ) ),
-				'2' => WP_Intent_Log_Planner::genesis_sync_id( 42, 0, array( 2 ) ),
+				'1' => WP_Sync_Block_Identity::genesis_sync_id( 42, 0, array( 1 ) ),
+				'2' => WP_Sync_Block_Identity::genesis_sync_id( 42, 0, array( 2 ) ),
 			),
 			self::ids_by_path( $stamped )
 		);

@@ -12,63 +12,74 @@ release, which the release script generates from the commit history.
 
 ### Added
 
--   Conflict review in the editor, owned by this plugin. A block whose
-    edit was set aside shows a card in its place with a "Review
-    conflict" action. The action opens a dialog that compares the
-    proposed version and the current version with the version both
-    started from, and Accept applies the merged result for everyone.
-    Tables and multi-block sections get their own comparison. Editor
-    notices for set-aside edits are gone.
+- WebSocket access tokens name their install (`iss`), so the example
+  advisory relay keeps separate installs that share it apart. Update
+  every install that shares a relay: tokens from older versions have no
+  `iss`, and the relay still groups those installs together
+  ([#126](https://github.com/WordPress/gutenberg-sync-engines/issues/126)).
+- New `sse-daemon` transport: the same receive stream as `sse`, written
+  by the sync daemon instead of a PHP worker, so a tab holds no worker
+  and the stream passes proxies that block WebSocket upgrades
+  ([#132](https://github.com/WordPress/gutenberg-sync-engines/pull/132)).
+- Conflict review in the editor, owned by this plugin. A block whose
+  edit was set aside shows a card in its place with a "Review
+  conflict" action. The action opens a dialog that compares the
+  proposed version and the current version with the version both
+  started from, and Accept applies the merged result for everyone.
+  Tables and multi-block sections get their own comparison. Editor
+  notices for set-aside edits are gone.
+- Review of blocks held by the security filter (wp_kses). A held block
+  shows a card with its markup as inert text. Users allowed to publish
+  unfiltered HTML can open a dialog to approve, edit, or remove it.
+- de-rtc: a review card waits for a pause in typing (1.2 seconds, 20
+  seconds at most) before it replaces a block its author is still
+  typing in. The typing that follows a set-aside edit joins the same
+  review record, so the reviewer sees the whole sentence.
+- intent-log: the same card wait. The server now remembers a person's
+  set-aside edits between requests, so the typing that follows one
+  is set aside into the same record instead of landing in the
+  paragraph at the wrong place.
+- A "Changes to review" panel in the document sidebar. It lists the
+  set-aside changes that have no block to show a card on, such as a
+  post title or a proposed new block.
+- The review cards and dialogs show real contents. Each engine
+  supplies what was proposed, what the document has now, and the
+  version both started from.
+- intent-log: accepting a review writes the reviewer's merged result
+  as a new change under the reviewer's account.
+- de-rtc: the review route takes a new `accepted` resolution that
+  carries the reviewer's merged content.
+- yjs-server: markup that the security filter strips is now held for
+  review, where it used to be discarded. The filtered block still
+  lands at once. A new route, `/wp-sync/v1/yjs-server/resolve`,
+  approves or discards a hold.
 
--   Review of blocks held by the security filter (wp_kses). A held block
-    shows a card with its markup as inert text. Users allowed to publish
-    unfiltered HTML can open a dialog to approve, edit, or remove it.
+### Changed
 
--   de-rtc: a review card waits for a pause in typing (1.2 seconds, 20
-    seconds at most) before it replaces a block its author is still
-    typing in. The typing that follows a set-aside edit joins the same
-    review record, so the reviewer sees the whole sentence.
-
--   intent-log: the same card wait. The server now remembers a person's
-    set-aside edits between requests, so the typing that follows one
-    is set aside into the same record instead of landing in the
-    paragraph at the wrong place.
-
--   A "Changes to review" panel in the document sidebar. It lists the
-    set-aside changes that have no block to show a card on, such as a
-    post title or a proposed new block.
-
--   The review cards and dialogs show real contents. Each engine
-    supplies what was proposed, what the document has now, and the
-    version both started from.
-
--   intent-log: accepting a review writes the reviewer's merged result
-    as a new change under the reviewer's account.
-
--   de-rtc: the review route takes a new `accepted` resolution that
-    carries the reviewer's merged content.
-
--   yjs-server: markup that the security filter strips is now held for
-    review, where it used to be discarded. The filtered block still
-    lands at once. A new route, `/wp-sync/v1/yjs-server/resolve`,
-    approves or discards a hold.
+- The bundled Gutenberg includes the entity sync interface from
+  [Gutenberg #83410](https://github.com/WordPress/gutenberg/pull/83410).
+  The plugin registers its adapter at startup for all existing engines and
+  transports; no separate opt-in is required.
+- The de-rtc engine no longer keeps a Yjs document in the browser. Under
+  de-rtc, other people's text carets no longer show (who is editing still
+  does), saves no longer store a Yjs copy of the post in post meta, and
+  the editor treats autosaves as it does without collaboration.
 
 ### Fixed
 
--   Intent-log: a change to protected markup by an author without the
-    `unfiltered_html` capability (editing a custom HTML block, for
-    example) silently stripped the previously approved markup out of
-    the document while the new markup was parked for review. The change
-    derives as a remove/apply format pair and only the apply half was
-    gated; removing a protected format now requires approval too, so
-    the pair parks together and the block keeps its approved content
-    until review.
-
--   Intent-log: restoring a parked format application (the shape a
-    custom HTML block's held content takes) now re-authors the format
-    under the restorer's account. It previously closed the proposal
-    without re-authoring anything, so approving such a hold never
-    brought the content back.
+- Intent-log: a change to protected markup by an author without the
+  `unfiltered_html` capability (editing a custom HTML block, for
+  example) silently stripped the previously approved markup out of
+  the document while the new markup was parked for review. The change
+  derives as a remove/apply format pair and only the apply half was
+  gated; removing a protected format now requires approval too, so
+  the pair parks together and the block keeps its approved content
+  until review.
+- Intent-log: restoring a parked format application (the shape a
+  custom HTML block's held content takes) now re-authors the format
+  under the restorer's account. It previously closed the proposal
+  without re-authoring anything, so approving such a hold never
+  brought the content back.
 
 ## 0.0.2 — September 2026
 
@@ -84,7 +95,7 @@ release, which the release script generates from the commit history.
     holds no stream. A tab that types keeps its stream open: edits go out
     on the updates request beside it, marked `rows_received_separately: true` (a new
     optional request field), and the stream stays the only path that
-    delivers rows ([#106](https://github.com/Automattic/gutenberg-sync-engines/issues/106)).
+    delivers rows ([#106](https://github.com/WordPress/gutenberg-sync-engines/issues/106)).
     Local Redis starts and is removed through wp-env
     lifecycle hooks. Needs a proxy that passes streams through; see
     `docs/transports.md`.
@@ -93,6 +104,14 @@ release, which the release script generates from the commit history.
     it from the `wp_sync_awareness_backend` filter. The interface is per
     client rather than per room, so a backend can write one client's entry
     without rewriting anyone else's. The room array remains the default.
+-   The list of editor tabs open on a post, which the advisory channel
+    finds peers in, gained the same kind of seam: implement
+    `WP_Sync_Tab_List_Backend` and return it from the
+    `wp_sync_tab_list_backend` filter. On a site running the Presence API
+    plugin, each tab is now its own row in that plugin's table, so two
+    tabs checking in at once can no longer drop each other. One transient
+    per room remains the default
+    ([#113](https://github.com/WordPress/gutenberg-sync-engines/issues/113)).
 -   On a site running the Presence API feature plugin, that plugin's
     shared `wp_presence` table now holds awareness. Each client is one row
     upserted in place, so two clients polling in the same instant cannot
@@ -116,6 +135,17 @@ release, which the release script generates from the commit history.
     `wp_sync_long_poll_max_wait_ms` filter is gone.
 
 ### Changed
+
+-   The plugin now requires the
+    [Presence API](https://wordpress.org/plugins/presence-api/) plugin and
+    WordPress 7.0, so who is in a room is kept in its `wp_presence` table
+    by default. When presence recording is turned off, awareness falls
+    back to the built-in store and the editor keeps showing collaborators.
+
+-   Intent-log now preserves formatting and safe deletions across concurrent
+    paragraph splits, including repeated splits and joins. Each edit keeps
+    one outcome, and undo covers all affected paragraphs. Protocol 2 requires
+    open editors using the previous version to reconnect with updated assets.
 
 -   Every awareness read and write in the plugin now goes through one
     `WP_Sync_Awareness` class, where the transports, the advisory channel
@@ -236,7 +266,7 @@ release, which the release script generates from the commit history.
     `examples/advisory-relay/` is
     a reference relay to run or port; `docs/plan/advisory-channel.md`
     documents the access token and the message formats
-    ([#92](https://github.com/Automattic/gutenberg-sync-engines/issues/92)).
+    ([#92](https://github.com/WordPress/gutenberg-sync-engines/issues/92)).
 
 -   The advisory channel can run over a WebSocket instead of WebRTC
     (`websocket-advisory`): each tab opens one socket to the same sync
@@ -284,7 +314,7 @@ sync-server`), and the daemon relays presence and "go and poll"
     needing a second trip to the Gutenberg → Experiments screen. Other
     experiments are left as they are, and the experiment checkbox keeps
     working afterward. Network-wide activation turns it on for every site
-    ([#82](https://github.com/Automattic/gutenberg-sync-engines/issues/82)).
+    ([#82](https://github.com/WordPress/gutenberg-sync-engines/issues/82)).
 -   Under the de-rtc engine, every block now carries a durable identity
     (`metadata.syncId`), the same scheme the intent-log engine uses.
     Blocks of a saved post get a deterministic id from the post id and
@@ -352,7 +382,7 @@ sync-server`), and the daemon relays presence and "go and poll"
     with ordinary sync messages) and the browser no longer falls back to
     it; a decision that fails to send reopens in the review panel so it
     can be retried
-    ([#40](https://github.com/Automattic/gutenberg-sync-engines/issues/40)).
+    ([#40](https://github.com/WordPress/gutenberg-sync-engines/issues/40)).
 -   Real-time collaboration is now turned on by the **Real-time
     collaboration** Gutenberg experiment instead of the Settings → Writing
     checkbox, following the framework
@@ -380,37 +410,37 @@ sync-server`), and the daemon relays presence and "go and poll"
 
 ### All changes since v0.0.0
 
--   Add simplified block level awareness, testing options ([#95](https://github.com/Automattic/gutenberg-sync-engines/pull/95))
--   Storage: keep presence in the object cache and make idle polls read-only ([#94](https://github.com/Automattic/gutenberg-sync-engines/pull/94))
--   Let a host run its own WebSocket relay for the notices between editor tabs ([#93](https://github.com/Automattic/gutenberg-sync-engines/pull/93))
--   Advisory channel: a WebSocket link beside WebRTC (webrtc-advisory, websocket-advisory) ([#91](https://github.com/Automattic/gutenberg-sync-engines/pull/91))
--   Storage: move rooms from post meta to plugin-owned tables ([#88](https://github.com/Automattic/gutenberg-sync-engines/pull/88))
--   Unsaved changes: a setting for what happens when the last editor leaves a post ([#89](https://github.com/Automattic/gutenberg-sync-engines/pull/89))
--   Transports: Short polling as base transport, a WebRTC advisory channel between tabs, and WebSocket as an upgrade transport ([#87](https://github.com/Automattic/gutenberg-sync-engines/pull/87))
--   CI: run the automerge-php conformance suite in the official php image ([#86](https://github.com/Automattic/gutenberg-sync-engines/pull/86))
--   Changelog: write highlights by hand, let git supply the rest ([#85](https://github.com/Automattic/gutenberg-sync-engines/pull/85))
--   DE-RTC: Durable block identity and merging inside nested blocks ([#84](https://github.com/Automattic/gutenberg-sync-engines/pull/84))
--   Activating the plugin turns on the real-time collaboration experiment ([#83](https://github.com/Automattic/gutenberg-sync-engines/pull/83))
--   intent-log core: type-check the JS core with checkJs and drop the drifting .d.ts sidecars ([#81](https://github.com/Automattic/gutenberg-sync-engines/pull/81))
--   Move Node-only intent-log tooling out of src; parseArgs for CLI scripts ([#79](https://github.com/Automattic/gutenberg-sync-engines/pull/79))
--   Review lane: one row type, `parked`, for both engines ([#77](https://github.com/Automattic/gutenberg-sync-engines/pull/77))
--   de-rtc: compare blocks by saved form, so authorship credits only changed blocks ([#80](https://github.com/Automattic/gutenberg-sync-engines/pull/80))
--   de-rtc: drop protocol-1 content rows and the other transition code ([#78](https://github.com/Automattic/gutenberg-sync-engines/pull/78))
--   Host cost report: one command that measures what real-time collaboration adds to a server ([#73](https://github.com/Automattic/gutenberg-sync-engines/pull/73))
--   de-rtc: never mistake a room's own genesis content for external work ([#71](https://github.com/Automattic/gutenberg-sync-engines/pull/71))
--   intent-log: keep a just-created block on the editor's clientId ([#66](https://github.com/Automattic/gutenberg-sync-engines/issues/66)) ([#69](https://github.com/Automattic/gutenberg-sync-engines/pull/69))
--   Add testing instructions for console script ([#67](https://github.com/Automattic/gutenberg-sync-engines/pull/67))
--   websocket: make Ctrl+C actually stop the sync server ([#68](https://github.com/Automattic/gutenberg-sync-engines/pull/68))
--   de-rtc: pin restored unfiltered-html approvals so they stop refreezing the post ([#65](https://github.com/Automattic/gutenberg-sync-engines/pull/65))
--   Send complete fixes to the human, rename issue commands, tune language rule ([#63](https://github.com/Automattic/gutenberg-sync-engines/pull/63))
--   de-rtc: record that approval of a risky block is one-shot ([#41](https://github.com/Automattic/gutenberg-sync-engines/issues/41)) ([#61](https://github.com/Automattic/gutenberg-sync-engines/pull/61))
--   diagnostics: materialize a room with its own recorded engine, not the site's current one ([#62](https://github.com/Automattic/gutenberg-sync-engines/pull/62))
--   yjs-server: fill registered attribute defaults at genesis ([#38](https://github.com/Automattic/gutenberg-sync-engines/issues/38)) ([#54](https://github.com/Automattic/gutenberg-sync-engines/pull/54))
--   intent-log: clone documents with a plain-data walk, not structuredClone ([#58](https://github.com/Automattic/gutenberg-sync-engines/pull/58))
+-   Add simplified block level awareness, testing options ([#95](https://github.com/WordPress/gutenberg-sync-engines/pull/95))
+-   Storage: keep presence in the object cache and make idle polls read-only ([#94](https://github.com/WordPress/gutenberg-sync-engines/pull/94))
+-   Let a host run its own WebSocket relay for the notices between editor tabs ([#93](https://github.com/WordPress/gutenberg-sync-engines/pull/93))
+-   Advisory channel: a WebSocket link beside WebRTC (webrtc-advisory, websocket-advisory) ([#91](https://github.com/WordPress/gutenberg-sync-engines/pull/91))
+-   Storage: move rooms from post meta to plugin-owned tables ([#88](https://github.com/WordPress/gutenberg-sync-engines/pull/88))
+-   Unsaved changes: a setting for what happens when the last editor leaves a post ([#89](https://github.com/WordPress/gutenberg-sync-engines/pull/89))
+-   Transports: Short polling as base transport, a WebRTC advisory channel between tabs, and WebSocket as an upgrade transport ([#87](https://github.com/WordPress/gutenberg-sync-engines/pull/87))
+-   CI: run the automerge-php conformance suite in the official php image ([#86](https://github.com/WordPress/gutenberg-sync-engines/pull/86))
+-   Changelog: write highlights by hand, let git supply the rest ([#85](https://github.com/WordPress/gutenberg-sync-engines/pull/85))
+-   DE-RTC: Durable block identity and merging inside nested blocks ([#84](https://github.com/WordPress/gutenberg-sync-engines/pull/84))
+-   Activating the plugin turns on the real-time collaboration experiment ([#83](https://github.com/WordPress/gutenberg-sync-engines/pull/83))
+-   intent-log core: type-check the JS core with checkJs and drop the drifting .d.ts sidecars ([#81](https://github.com/WordPress/gutenberg-sync-engines/pull/81))
+-   Move Node-only intent-log tooling out of src; parseArgs for CLI scripts ([#79](https://github.com/WordPress/gutenberg-sync-engines/pull/79))
+-   Review lane: one row type, `parked`, for both engines ([#77](https://github.com/WordPress/gutenberg-sync-engines/pull/77))
+-   de-rtc: compare blocks by saved form, so authorship credits only changed blocks ([#80](https://github.com/WordPress/gutenberg-sync-engines/pull/80))
+-   de-rtc: drop protocol-1 content rows and the other transition code ([#78](https://github.com/WordPress/gutenberg-sync-engines/pull/78))
+-   Host cost report: one command that measures what real-time collaboration adds to a server ([#73](https://github.com/WordPress/gutenberg-sync-engines/pull/73))
+-   de-rtc: never mistake a room's own genesis content for external work ([#71](https://github.com/WordPress/gutenberg-sync-engines/pull/71))
+-   intent-log: keep a just-created block on the editor's clientId ([#66](https://github.com/WordPress/gutenberg-sync-engines/issues/66)) ([#69](https://github.com/WordPress/gutenberg-sync-engines/pull/69))
+-   Add testing instructions for console script ([#67](https://github.com/WordPress/gutenberg-sync-engines/pull/67))
+-   websocket: make Ctrl+C actually stop the sync server ([#68](https://github.com/WordPress/gutenberg-sync-engines/pull/68))
+-   de-rtc: pin restored unfiltered-html approvals so they stop refreezing the post ([#65](https://github.com/WordPress/gutenberg-sync-engines/pull/65))
+-   Send complete fixes to the human, rename issue commands, tune language rule ([#63](https://github.com/WordPress/gutenberg-sync-engines/pull/63))
+-   de-rtc: record that approval of a risky block is one-shot ([#41](https://github.com/WordPress/gutenberg-sync-engines/issues/41)) ([#61](https://github.com/WordPress/gutenberg-sync-engines/pull/61))
+-   diagnostics: materialize a room with its own recorded engine, not the site's current one ([#62](https://github.com/WordPress/gutenberg-sync-engines/pull/62))
+-   yjs-server: fill registered attribute defaults at genesis ([#38](https://github.com/WordPress/gutenberg-sync-engines/issues/38)) ([#54](https://github.com/WordPress/gutenberg-sync-engines/pull/54))
+-   intent-log: clone documents with a plain-data walk, not structuredClone ([#58](https://github.com/WordPress/gutenberg-sync-engines/pull/58))
 -   LOOP.md: lesson — element-in-DOM locator timeouts mean a stalled main thread
--   de-rtc: one way to send Adopt and Reject decisions ([#40](https://github.com/Automattic/gutenberg-sync-engines/issues/40)) ([#53](https://github.com/Automattic/gutenberg-sync-engines/pull/53))
--   de-rtc: keep poll-failure recovery off the commit lane ([#51](https://github.com/Automattic/gutenberg-sync-engines/pull/51))
--   Review in the SPI, swappable storage backends, and a dead-code sweep ([#49](https://github.com/Automattic/gutenberg-sync-engines/pull/49))
+-   de-rtc: one way to send Adopt and Reject decisions ([#40](https://github.com/WordPress/gutenberg-sync-engines/issues/40)) ([#53](https://github.com/WordPress/gutenberg-sync-engines/pull/53))
+-   de-rtc: keep poll-failure recovery off the commit lane ([#51](https://github.com/WordPress/gutenberg-sync-engines/pull/51))
+-   Review in the SPI, swappable storage backends, and a dead-code sweep ([#49](https://github.com/WordPress/gutenberg-sync-engines/pull/49))
 
 ## Pre-release history
 

@@ -46,6 +46,15 @@ class Tests_Collaboration_GutenbergSyncEnginesAdvisoryPresence extends WP_UnitTe
 			$reflection->setAccessible( true );
 		}
 		$reflection->setValue( null, array() );
+
+		Fake_Presence_API::reset();
+		WP_Sync_Awareness::reset_backend_for_testing();
+	}
+
+	public function tear_down() {
+		Fake_Presence_API::reset();
+		WP_Sync_Awareness::reset_backend_for_testing();
+		parent::tear_down();
 	}
 
 	/**
@@ -340,6 +349,119 @@ class Tests_Collaboration_GutenbergSyncEnginesAdvisoryPresence extends WP_UnitTe
 		// A returning tab with the old token starts with an empty mailbox.
 		wp_set_current_user( self::$editor_id );
 		$this->assertSame( array(), $this->beat( 'tok-a' )['signals'] );
+	}
+
+	/**
+	 * Every answer hands a tab its peers' tokens, so a token must not work
+	 * for anyone but the user it was first recorded for.
+	 *
+	 * @dataProvider data_tab_list_stores
+	 *
+	 * @param bool $presence_api Whether the Presence API holds the tab list.
+	 */
+	public function test_a_peers_token_is_refused_for_another_user( bool $presence_api ) {
+		Fake_Presence_API::$enabled = $presence_api;
+		$room                       = $this->room();
+
+		// The victim's tab, then the other editor's, which sends it an offer.
+		$this->beat( 'tok-a', array( 'client_id' => 11 ) );
+		wp_set_current_user( self::$other_editor_id );
+		$peers = $this->beat(
+			'tok-b',
+			array(
+				'signals' => array(
+					array(
+						'to'   => 'tok-a',
+						'kind' => 'offer',
+						'data' => 'sdp-offer',
+					),
+				),
+			)
+		)['peers'];
+		$this->assertSame( array( 'tok-a' ), array_column( $peers, 'token' ) );
+
+		// The other editor presents the victim's token: no answer (so no
+		// mailbox), nothing filed in the victim's name, no leave, no join.
+		$this->assertSame(
+			array(),
+			$this->beat(
+				'tok-a',
+				array(
+					'signals' => array(
+						array(
+							'to'   => 'tok-b',
+							'kind' => 'answer',
+							'data' => 'forged',
+						),
+					),
+				)
+			)
+		);
+		$leave = new WP_REST_Request( 'POST', '/gutenberg-sync-engines/v1/advisory/leave' );
+		$leave->set_param( 'room', $room );
+		$leave->set_param( 'token', 'tok-a' );
+		$this->presence->handle_leave( $leave );
+		$this->assertFalse( $this->presence->note_sync_request( $room, 'tok-a', 22 ) );
+
+		$answer = $this->beat( 'tok-b' );
+		$this->assertSame( array(), $answer['signals'], 'Nothing was filed in the victim\'s name' );
+		$this->assertSame(
+			array(
+				array(
+					'token'     => 'tok-a',
+					'client_id' => 11,
+					'user_id'   => self::$editor_id,
+				),
+			),
+			$answer['peers'],
+			'The victim\'s tab is still there, still theirs'
+		);
+
+		// The victim still gets the offer.
+		wp_set_current_user( self::$editor_id );
+		$this->assertSame( array( 'sdp-offer' ), array_column( $this->beat( 'tok-a' )['signals'], 'data' ) );
+	}
+
+	public function data_tab_list_stores(): array {
+		return array(
+			'transient'    => array( false ),
+			'presence api' => array( true ),
+		);
+	}
+
+	public function test_with_the_presence_api_each_tab_is_its_own_row_in_its_table() {
+		Fake_Presence_API::$enabled = true;
+		$room                       = $this->room();
+
+		$this->beat( 'tok-a' );
+		wp_set_current_user( self::$other_editor_id );
+		$answer = $this->beat( 'tok-b' );
+
+		$this->assertTrue( $answer['others'] );
+		$this->assertSame( array( 'tok-a' ), array_column( $answer['peers'], 'token' ) );
+		$this->assertSame( array( 'gsetab-tok-a', 'gsetab-tok-b' ), array_keys( Fake_Presence_API::$rows[ $room ] ) );
+		$this->assertFalse( get_transient( Gutenberg_Sync_Engines_Advisory_Presence::TOKENS_TRANSIENT_PREFIX . md5( $room ) ) );
+
+		// Awareness does not read the tab rows.
+		$awareness = new WP_Sync_Awareness( new WP_Sync_Post_Meta_Storage() );
+		$this->assertSame( array(), $awareness->entries( $room, 30 ) );
+
+		$request = new WP_REST_Request( 'POST', '/gutenberg-sync-engines/v1/advisory/leave' );
+		$request->set_param( 'room', $room );
+		$request->set_param( 'token', 'tok-b' );
+		$this->presence->handle_leave( $request );
+		$this->assertSame( array( 'gsetab-tok-a' ), array_keys( Fake_Presence_API::$rows[ $room ] ) );
+	}
+
+	public function test_without_the_filter_the_tab_list_stays_in_the_transient() {
+		Fake_Presence_API::$enabled = true;
+		remove_all_filters( 'wp_sync_tab_list_backend' );
+		$room = $this->room();
+
+		$this->beat( 'tok-a' );
+
+		$this->assertArrayNotHasKey( $room, Fake_Presence_API::$rows );
+		$this->assertSame( array( 'tok-a' ), array_keys( get_transient( Gutenberg_Sync_Engines_Advisory_Presence::TOKENS_TRANSIENT_PREFIX . md5( $room ) ) ) );
 	}
 
 	public function test_company_is_also_seen_through_live_sync_awareness() {

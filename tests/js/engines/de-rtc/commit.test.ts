@@ -5,7 +5,6 @@
  * without losing edits. The transport carries no proposals at all.
  */
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
-import * as Y from 'yjs';
 
 import type { DeRtcCommitResponse } from '../../../../src/engines/de-rtc/commit';
 import { hashDeRtcContent } from '../../../../src/engines/de-rtc/descriptor';
@@ -15,9 +14,10 @@ import {
 	DE_RTC_ANNOUNCE_TYPE,
 	DE_RTC_SNAPSHOT_TYPE,
 } from '../../../../src/engines/de-rtc/session';
-import { CRDT_RECORD_MAP_KEY } from '../../../../src/engines/yjs/constants';
-// eslint-disable-next-line import/no-unresolved -- Provided at runtime as wp.sync.
-import type { SyncConfig } from '@wordpress/sync';
+import {
+	createDeRtcRecord,
+	type DeRtcRecord,
+} from '../../../../src/engines/de-rtc/record';
 
 jest.mock( '@wordpress/blocks', () => ( {
 	parse: ( content: string ) => ( content ? JSON.parse( content ) : [] ),
@@ -25,26 +25,24 @@ jest.mock( '@wordpress/blocks', () => ( {
 		JSON.stringify( blocks ),
 } ) );
 
+/**
+ * A local editor edit: the editor's new block tree lands in the record.
+ * @param target
+ * @param blocks
+ */
+function setRecordBlocks( target: DeRtcRecord, blocks: unknown[] ) {
+	target.apply( { blocks }, 'local-editor' );
+}
+
 const BLOCK_A = { name: 'core/paragraph', attributes: { content: 'Alpha' } };
 const BLOCK_B = { name: 'core/paragraph', attributes: { content: 'Beta' } };
 const contentOf = ( ...blocks: unknown[] ) => JSON.stringify( blocks );
 
-const syncConfig = {
-	applyChangesToCRDTDoc: ( doc: Y.Doc, changes: any ) => {
-		const map = doc.getMap( CRDT_RECORD_MAP_KEY );
-		Object.entries( changes ).forEach( ( [ key, value ] ) => {
-			map.set( key, value );
-		} );
-	},
-	getChangesFromCRDTDoc: ( doc: Y.Doc ) =>
-		doc.getMap( CRDT_RECORD_MAP_KEY ).toJSON(),
-} as unknown as SyncConfig;
-
 function makeCommitSession(
 	commit: ( update: any ) => Promise< DeRtcCommitResponse >
 ) {
-	const doc = new Y.Doc();
-	const bridge = createDeRtcDocBridge( doc, syncConfig );
+	const record = createDeRtcRecord();
+	const bridge = createDeRtcDocBridge( record );
 	const session = createDeRtcSessionCodec( { bridge, commit } );
 	const sent: Array< { type: string; data: string } > = [];
 	session.onLocalUpdate( ( update: any ) => sent.push( update ) );
@@ -56,9 +54,9 @@ function makeCommitSession(
 		} ),
 	} );
 	const edit = ( blocks: unknown[] ) => {
-		doc.getMap( CRDT_RECORD_MAP_KEY ).set( 'blocks', blocks );
+		setRecordBlocks( record, blocks );
 	};
-	return { doc, bridge, session, sent, edit };
+	return { record, bridge, session, sent, edit };
 }
 
 /** Flushes pending microtasks. */

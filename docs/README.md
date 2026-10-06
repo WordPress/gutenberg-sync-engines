@@ -2,6 +2,10 @@
 
 Start here if you want to:
 
+- **See the proposal in one page** → [data-flow.md](data-flow.md) —
+  how an edit reaches other editors in the Gutenberg trunk experiment
+  and under each engine and transport here, from the block editor's
+  side and from the network and security side.
 - **Pick an engine or transport** →
   [engine-comparison.md](engine-comparison.md) — what each engine is,
   how they score against the principles, feature parity, resource
@@ -14,7 +18,11 @@ Start here if you want to:
   typing, same-paragraph conflicts, machine writes, deep lag…) traced
   through all three engines.
 - **Compare transports** → [transports.md](transports.md) — polling vs
-  server-sent events vs websocket, and the operational notes for both.
+  server-sent events vs websocket, and the operational notes for each.
+- **Run the receive stream from the sync daemon** →
+  [sse-daemon.md](sse-daemon.md) — how the `sse-daemon` transport
+  shares the daemon with the websocket transport, and where it differs
+  from `sse`.
 - **Understand de-rtc's relationship to its upstream design** →
   [de-rtc-fidelity.md](de-rtc-fidelity.md) — the audit of our port
   against the Distributed Editing vision.
@@ -27,6 +35,12 @@ Start here if you want to:
   outline and a badge instead of live cursors.
 - **Look up a term** → [glossary.md](glossary.md) — the project's own
   vocabulary in plain words.
+- **Understand the entity sync integration** →
+  [entity-sync-adapter.md](entity-sync-adapter.md) — the default
+  adapter, its checks, and the remaining migration limits.
+- **Update the bundled Gutenberg framework** →
+  [gutenberg-subtree.md](gutenberg-subtree.md) — setup, rebasing,
+  updating the pin, and release packaging.
 - **See what we plan to build next** → [plan/](plan/README.md) — one
   file per bug or feature, written in plain language with an example
   and a way to tell when it is done.

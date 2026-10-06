@@ -10,7 +10,7 @@ between versions. Setup and tests are covered in the
 All code must follow the
 [WordPress Coding Standards and best practices](https://developer.wordpress.org/coding-standards/).
 
-- **WordPress**: The minimum required version is 6.9.
+- **WordPress**: The minimum required version is 7.0.
 - **PHP**: The minimum required version is 7.4.
 
 ## Guidelines

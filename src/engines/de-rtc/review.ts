@@ -1,7 +1,7 @@
 /**
  * Internal dependencies
  */
-import { restErrorParts } from '../rest-error';
+import { restErrorParts } from '../../shared/rest-error';
 
 /**
  * A parked (escalated) proposal as the server's `parked` row

@@ -389,6 +389,35 @@ class Tests_Collaboration_WpIntentLogEngine extends WP_Test_REST_TestCase {
 		$this->assertSame( $first['dispositions'], $second['dispositions'] );
 	}
 
+	public function test_old_protocol_is_refused_before_reading_rows() {
+		$this->assertErrorResponse( 'rest_sync_engine_mismatch', $this->poll( array(), array( 'engine_protocol' => 1 ) ), 409 );
+		$this->assertIsArray( $this->poll( array(), array( 'engine_protocol' => 2 ) ) );
+	}
+
+	public function test_clients_cannot_supply_server_generated_slices() {
+		$result = $this->poll(
+			array(
+				self::intent_update(
+					array(
+						'intentId'   => 'forged-slices',
+						'baseSeq'    => 0,
+						'type'       => 'format_text',
+						'payload'    => array(
+							'syncId' => 'p',
+							'field'  => 'content',
+							'start'  => 0,
+							'end'    => 1,
+							'format' => 'bold',
+							'on'     => true,
+						),
+						'textSlices' => array(),
+					)
+				),
+			)
+		);
+		$this->assertSame( 'invalid-payload', $result['dispositions'][0]['reason'] );
+	}
+
 	public function test_malformed_intent_and_server_emitted_types_are_rejected() {
 		$bad_type = $this->poll(
 			array(
@@ -592,6 +621,77 @@ class Tests_Collaboration_WpIntentLogEngine extends WP_Test_REST_TestCase {
 				array( 'client_id' => $client_id )
 			);
 			$this->assertSame( 'applied', $response['dispositions'][0]['status'], "intent at seq {$base_seq}+{$i}" );
+		}
+	}
+
+	public function test_text_slices_survive_checkpoint_and_fresh_bootstrap() {
+		$interval = static function () {
+			return 3;
+		};
+		add_filter( 'wp_sync_intent_log_checkpoint_interval', $interval );
+		try {
+			$this->poll();
+			$target = self::paragraph_id();
+			$this->poll(
+				array(
+					self::intent_update(
+						array(
+							'intentId' => 'split-for-checkpoint',
+							'baseSeq'  => 0,
+							'type'     => 'split_block',
+							'payload'  => array(
+								'syncId'    => $target,
+								'field'     => 'content',
+								'offset'    => 5,
+								'newSyncId' => 'checkpoint-tail',
+							),
+						)
+					),
+				)
+			);
+			$result = $this->poll(
+				array(
+					self::intent_update(
+						array(
+							'intentId' => 'format-for-checkpoint',
+							'baseSeq'  => 0,
+							'type'     => 'format_text',
+							'payload'  => array(
+								'syncId' => $target,
+								'field'  => 'content',
+								'start'  => 3,
+								'end'    => 8,
+								'format' => 'bold',
+								'on'     => true,
+							),
+						)
+					),
+				),
+				array( 'client_id' => 202 )
+			);
+			$this->assertSame( 'applied', $result['dispositions'][0]['status'] );
+			$this->type_intents( 7, 2 );
+			$join     = $this->poll( array(), array( 'client_id' => 303 ) );
+			$snapshot = json_decode( $join['updates'][0]['data'], true );
+			$this->assertNotEmpty( $snapshot['checkpoint'] );
+			$this->assertGreaterThan( 2, $snapshot['seq'] );
+			$head = WP_Intent_Log_Document::get_block( $snapshot['doc'], $target );
+			$tail = WP_Intent_Log_Document::get_block( $snapshot['doc'], 'checkpoint-tail' );
+			$span = $head['fields']['content']['formats'][0];
+			$this->assertSame( 2, $span['end'] - $span['start'] );
+			$this->assertSame(
+				array(
+					array(
+						'start'  => 0,
+						'end'    => 3,
+						'format' => 'bold',
+					),
+				),
+				$tail['fields']['content']['formats']
+			);
+			$this->assertStringNotContainsString( 'textSlices', wp_json_encode( $snapshot['doc'] ) );
+		} finally {
+			remove_filter( 'wp_sync_intent_log_checkpoint_interval', $interval );
 		}
 	}
 

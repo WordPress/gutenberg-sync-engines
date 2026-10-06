@@ -38,6 +38,8 @@ export interface EngineDocument {
 }
 
 export interface IntentEnvelope {
+	/** Server-generated ranges of one edit; never accepted from a client. */
+	textSlices?: Record< string, unknown >[];
 	intentId: string;
 	actorId: string;
 	baseSeq: number;

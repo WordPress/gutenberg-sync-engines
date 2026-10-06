@@ -195,6 +195,97 @@ function harness( userId = 1, clientId = 11, captureTimeout = 0 ) {
 }
 
 describe( 'intent-log collaborative undo', () => {
+	it.each( [ 'format_text', 'delete_text' ] )(
+		'undo and redo keep a split %s atomic',
+		( type ) => {
+			const { wire, session, link, undo, edit, serverText } = harness();
+			const peer = createIntentLogSession( { userId: 2, clientId: 22 } );
+			const peerLink = connect( wire, peer );
+			peerLink.poll();
+			// Both edits are authored against the unsplit text; the split arrives first.
+			edit( [
+				{
+					type,
+					payload: {
+						syncId: 'p1',
+						field: 'content',
+						start: 3,
+						end: 8,
+						...( type === 'format_text'
+							? { format: 'bold', on: true }
+							: { removedText: 'lo wo' } ),
+					},
+				},
+			] );
+			peer.author( 'split_block', {
+				syncId: 'p1',
+				field: 'content',
+				offset: 5,
+				newSyncId: 'tail',
+			} );
+			peerLink.poll();
+			link.poll();
+			const expected = wire.doc();
+			if ( type === 'delete_text' ) {
+				expect( serverText( 'p1' ) ).toBe( 'Hel' );
+				expect( serverText( 'tail' ) ).toBe( 'rld' );
+			}
+			undo.undo();
+			link.poll();
+			expect( serverText( 'p1' ) ).toBe( 'Hello' );
+			expect( serverText( 'tail' ) ).toBe( ' world' );
+			undo.redo();
+			link.poll();
+			expect( wire.doc() ).toEqual( expected );
+			expect( session.getDocument() ).toEqual( expected );
+		}
+	);
+
+	it( 'redo holds back every slice when a peer changed one selected range', () => {
+		const { wire, link, undo, edit, serverText } = harness();
+		const peer = createIntentLogSession( { userId: 2, clientId: 22 } );
+		const peerLink = connect( wire, peer );
+		peerLink.poll();
+		edit( [
+			{
+				type: 'delete_text',
+				payload: {
+					syncId: 'p1',
+					field: 'content',
+					start: 3,
+					end: 8,
+					removedText: 'lo wo',
+				},
+			},
+		] );
+		peer.author( 'split_block', {
+			syncId: 'p1',
+			field: 'content',
+			offset: 5,
+			newSyncId: 'tail',
+		} );
+		peerLink.poll();
+		link.poll();
+		undo.undo();
+		link.poll();
+		peerLink.poll();
+		peer.author( 'insert_text', {
+			syncId: 'tail',
+			field: 'content',
+			offset: 1,
+			text: 'PEER',
+		} );
+		peerLink.poll();
+		link.poll();
+		undo.redo();
+		const results = link.poll();
+		expect(
+			results?.filter( ( result ) => result.status === 'escalated' )
+		).toHaveLength( 2 );
+		expect( serverText( 'p1' ) ).toBe( 'Hello' );
+		expect( serverText( 'tail' ) ).toBe( ' PEERworld' );
+	} );
+
 	it( 'a settled text edit undoes and redoes, converging on the server', () => {
 		const { link, undo, edit, serverText } = harness();
 

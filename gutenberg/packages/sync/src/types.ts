@@ -164,7 +164,7 @@ export interface SyncReviewItem {
 /**
  * The review surface an engine with an escalation lane exposes: the open
  * parked-conflict list per entity, a change subscription, and the two
- * resolution verbs. When a {@link SyncEngine} supplies one (its optional
+ * resolution verbs. When a `SyncEngine` supplies one (its optional
  * `review` member), the generic manager presents the items through the
  * record handlers (`onProposalsChange`/`onEscalation`) and delegates
  * `SyncManager.resolveProposal`/`restoreProposal` to it — so any composed

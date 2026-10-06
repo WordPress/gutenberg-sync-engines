@@ -59,7 +59,7 @@ PHP implementation must reproduce these bytes exactly. The JS reference
 implementation lives beside the vectors
 (`tests/js/engines/intent-log/genesis-sync-id.js`); the editor never mints
 genesis ids itself — the server does, and the build-free stamper script
-(`includes/engines/intent-log/sync-id.js`) mirrors it with WebCrypto.
+(`includes/shared/sync-id.js`) mirrors it with WebCrypto.
 
 Lifecycle: duplication remints; 1:1 transforms carry the ID; split keeps the
 ID on the first half and mints fresh for the second (stamping `syncParent`);
@@ -256,7 +256,7 @@ An intent escalates to the proposal lane iff:
    set-aside one until their editor observes the clash.
 
 Everything else auto-merges. Formats avoid POSITIONAL escalation (a format
-range crossing a concurrent split clips to the first half; format frames may
+range crossing a concurrent split follows both halves; format frames may
 drift — cosmetic, recoverable), but a format over content a concurrent
 replace-class prior rewrote still escalates with that prior's reason — the
 content under the range is gone, not merely shifted. Moves never conflict
@@ -367,9 +367,8 @@ escalation rates need the divergence fixtures from the benchmark plan.
 - Format spans are kept unnormalized (overlapping same-type spans allowed).
 - Ordering uses ordered child arrays (the log is totally ordered); the
   fractional-index representation for the map layer is deferred.
-- A `delete_text`/`replace_text` range that crosses a concurrent split point
-  escalates rather than splitting into two intents (open item). Formats clip
-  instead (they never escalate).
+- A `replace_text` range crossing a concurrent split still requires review.
+  Formatting and deletion carry all affected text slices in one edit.
 - Format ranges are exempt from frame rules 5/6: under a frame conflict a
   format span may land shifted (cosmetic drift, recoverable), by design.
 - `removedText`/inversion payloads are carried but not updated by transforms
@@ -401,3 +400,47 @@ markup characters, concurrent merges cannot corrupt HTML, and the capture
 bridge derives `split_block`/`merge_blocks` from identity + concatenation
 signals and `format_text` from span diffs — the engine's split/merge and
 format semantics are reachable from real typing.
+
+## Text slices across splits (protocol 2)
+
+This adapts the [text instance concept described by Notion](https://www.notion.com/blog/how-notion-handles-concurrent-editing-with-crdts)
+to our server-ordered, bounded-history model.
+
+A text instance is addressed here by its block, named field, and authoring
+version (`baseSeq`). The retained log supplies its movement history. A
+range crossing a split becomes several slices of that same edit. Further
+splits and joins transform each slice, including joins with unrelated text.
+This uses versioned positions; it does not introduce permanent character IDs
+or a database search index. Exact-result tests cover repeated splits, unrelated joins, and replacement.
+For the supported history window, persistent instance metadata adds no needed
+position information: the log already supplies it. We therefore keep the
+document format unchanged. Longer offline recovery would need a new design.
+
+Accepted `format_text` and `delete_text` rows may carry `textSlices`, an array
+of full payloads in the same coordinate frame. The outer payload retains the
+range from before its first division into slices; only the slices drive replay.
+There is one envelope, ID, attribution, disposition,
+and cancellation. Clients cannot submit this server-generated field. Replay
+and prediction expand the slices; ranges in the same field apply from right
+to left, so deleting one does not shift a later range. A conflict in any slice
+holds back the original edit. Slices already deleted by a concurrent deletion
+can disappear; a removed block or replaced field remains a conflict.
+
+Formatting reaches both halves. Deletion preserves the split and retains the
+existing concurrent-insertion conflict rule. Replacement across a split still
+requires review. Format boundary extension is unchanged. Undo expands one
+accepted row into one atomic transaction of ordinary inverse edits.
+
+Protocol 2 can replay protocol 1 documents and rows, which have no textSlices.
+Protocol 1 clients must be refused before receiving protocol 2 rows. No room
+reset or document migration is needed. Slices live only in retained operations;
+checkpoints contain ordinary text and formats. The existing history floor and
+room generation remain authoritative: origin identity does not reconstruct
+positions from discarded history.
+
+Editor capture still requires an exact nonempty split shape. An empty added
+paragraph could instead be an insertion or a duplicate, and a split captured
+with simultaneous typing may not preserve the concatenation signal. Those
+ambiguous snapshots keep the existing general-diff fallback. We do not infer
+text movement from matching empty strings. Recognizing those actions reliably
+requires explicit editor action information in a later framework change.
