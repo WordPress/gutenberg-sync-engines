@@ -96,15 +96,19 @@ export function createConflictFanOut(): ConflictFanOut {
 					if (
 						open.some( ( conflict ) => conflict.id === conflictId )
 					) {
-						instance.resolveConflict(
+						// Hand the engine's outcome back: the registry reads a
+						// missing one as resolved, which would hide a 'stale'.
+						return instance.resolveConflict(
 							objectType,
 							objectId,
 							conflictId,
 							decision
 						);
-						return;
 					}
 				}
+				// No instance holds the id: the record closed elsewhere first,
+				// which the registry reads as resolved.
+				return undefined;
 			},
 		},
 	};

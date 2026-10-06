@@ -13,6 +13,7 @@ import {
 	registerConflictSource,
 	resetConflictSourcesForTesting,
 } from '../../../src/review/conflicts';
+import { createConflictFanOut } from '../../../src/review/fan-out';
 import {
 	useDecideConflict,
 	withSeenCurrent,
@@ -113,6 +114,26 @@ describe( 'useDecideConflict', () => {
 	it( 'tells the reviewer when the engine refused the decision as stale', async () => {
 		// The engine answers once the server has: a promise.
 		registerEngine( Promise.resolve( 'stale' ) );
+		dispatch( editorStore ).setEditedPost( 'post', 1 );
+		render( <DecideButton decision={ ACCEPT } /> );
+
+		await click();
+
+		expect( notices() ).toEqual( [
+			expect.stringMatching( /changed before your decision arrived/ ),
+		] );
+	} );
+
+	it( 'tells the reviewer when an engine behind the fan-out refused the decision as stale', async () => {
+		// de-rtc and yjs-server register through a fan-out over their
+		// per-session instances; the instance's answer must come through.
+		const fanOut = createConflictFanOut();
+		fanOut.add( {
+			getOpenConflicts: () => [ PARAGRAPH_CONFLICT ],
+			subscribe: () => () => {},
+			resolveConflict: () => Promise.resolve( 'stale' ),
+		} );
+		registerConflictSource( fanOut.source );
 		dispatch( editorStore ).setEditedPost( 'post', 1 );
 		render( <DecideButton decision={ ACCEPT } /> );
 
