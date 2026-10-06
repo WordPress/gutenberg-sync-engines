@@ -85,28 +85,33 @@ export interface DeRtcReviewState {
 	 * authenticated REST route, not the advisory transport. This is the
 	 * only outbound lane; the server rejects client-sent resolution rows.
 	 */
-	setRestResolver: (
-		resolver:
-			| ( (
-					proposalId: string,
-					resolution: DeRtcResolution,
-					content?: string
-			  ) => Promise< unknown > )
-			| null
-	) => void;
+	setRestResolver: ( resolver: DeRtcRestResolver | null ) => void;
 	/**
 	 * Optimistically closes a parked proposal and POSTs the resolution.
 	 * The `restored` resolution is sent AFTER the caller re-applied the
 	 * parked content as ordinary local edits; `accepted` carries the
-	 * reviewer's replacement content for the server to apply. Settles
+	 * reviewer's replacement content for the server to apply, and the
+	 * version of the content the reviewer saw (`seenVersion`). Settles
 	 * with what became of the decision, and never rejects.
 	 */
 	resolve: (
 		proposalId: string,
 		resolution: DeRtcResolution,
-		content?: string
+		content?: string,
+		seenVersion?: string
 	) => Promise< DeRtcResolveOutcome >;
 }
+
+/**
+ * The REST resolution lane: POSTs one decision. `seenVersion` comes with
+ * an accepted result only.
+ */
+export type DeRtcRestResolver = (
+	proposalId: string,
+	resolution: DeRtcResolution,
+	content?: string,
+	seenVersion?: string
+) => Promise< unknown >;
 
 /**
  * Creates the per-entity review ledger.
@@ -117,13 +122,7 @@ export function createDeRtcReviewState(): DeRtcReviewState {
 	const open = new Map< string, DeRtcParkedProposal >();
 	const resolvedIds = new Set< string >();
 	const listeners = new Set< () => void >();
-	let restResolver:
-		| ( (
-				proposalId: string,
-				resolution: DeRtcResolution,
-				content?: string
-		  ) => Promise< unknown > )
-		| null = null;
+	let restResolver: DeRtcRestResolver | null = null;
 
 	const notify = () => {
 		listeners.forEach( ( listener ) => listener() );
@@ -205,7 +204,7 @@ export function createDeRtcReviewState(): DeRtcReviewState {
 			restResolver = nextResolver;
 		},
 
-		resolve( proposalId, resolution, content ) {
+		resolve( proposalId, resolution, content, seenVersion ) {
 			// Optimistic: the server acks idempotently, so an unknown id
 			// still resolves server-side. A folded task resolves EVERY
 			// revision it superseded with it (merge-not-stack: one
@@ -235,7 +234,7 @@ export function createDeRtcReviewState(): DeRtcReviewState {
 			return Promise.all(
 				ids.map( ( id ) => {
 					if ( id === proposalId ) {
-						return resolver( id, resolution, content );
+						return resolver( id, resolution, content, seenVersion );
 					}
 					return resolver(
 						id,

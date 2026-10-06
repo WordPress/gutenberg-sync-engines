@@ -37,6 +37,7 @@ import { createDeRtcCommitAdapter } from './commit';
 import { registerSaveBaseVersion } from './save-base-version';
 import { applyServerAwarenessStates } from '../awareness-sync';
 import { registerAwareness } from '../../awareness/registry';
+import { createDeRtcCanonicalContents } from './canonical-contents';
 import {
 	createDeRtcDocBridge,
 	DE_RTC_REMOTE_ORIGIN,
@@ -204,6 +205,11 @@ export function createDeRtcEngine(): SyncEngine & {
 		/** The same open tasks as SyncConflict records. */
 		getConflicts: () => SyncConflict[];
 		/**
+		 * The version a record's `current` side is read from, which is
+		 * the version a reviewer of that record sees.
+		 */
+		seenVersion: ( proposalId: string ) => string | null;
+		/**
 		 * Replaces a contested block with the reviewer's content, as an
 		 * ordinary local edit.
 		 */
@@ -365,7 +371,8 @@ export function createDeRtcEngine(): SyncEngine & {
 				return handle.review.resolve(
 					conflictId,
 					'accepted',
-					decision.content
+					decision.content,
+					handle.seenVersion( conflictId ) ?? undefined
 				);
 			}
 			return handle.review.resolve( conflictId, 'dismissed' );
@@ -403,30 +410,31 @@ export function createDeRtcEngine(): SyncEngine & {
 			// type; the transport's resolution-row lane is gone and the
 			// server rejects client-sent resolved rows. The room string
 			// mirrors the providers' convention.
-			// An accepted result also names the version this client's
-			// document reflects, which is the version the reviewer saw.
-			// The server refuses the result when the record's blocks have
-			// changed since that version.
-			review.setRestResolver( ( proposalId, resolution, content ) => {
-				const seenVersion = bridge.lastVersion();
-				return apiFetch( {
-					data: {
-						client_id: ydoc.clientID,
-						proposalId,
-						resolution,
-						...( undefined !== content ? { content } : {} ),
-						...( 'accepted' === resolution && seenVersion
-							? { seenVersion }
-							: {} ),
-						room: objectId
-							? `${ objectType }:${ objectId }`
-							: objectType,
-					},
-					method: 'POST',
-					path: '/wp-sync/v1/de-rtc/resolve',
-				} );
-			} );
+			// An accepted result also names the version the reviewer saw
+			// (see seenVersion on the review handle). The server refuses
+			// the result when the record's blocks have changed since that
+			// version.
+			review.setRestResolver(
+				( proposalId, resolution, content, seenVersion ) =>
+					apiFetch( {
+						data: {
+							client_id: ydoc.clientID,
+							proposalId,
+							resolution,
+							...( undefined !== content ? { content } : {} ),
+							...( 'accepted' === resolution && seenVersion
+								? { seenVersion }
+								: {} ),
+							room: objectId
+								? `${ objectType }:${ objectId }`
+								: objectType,
+						},
+						method: 'POST',
+						path: '/wp-sync/v1/de-rtc/resolve',
+					} )
+			);
 			const undoFeed = createDeRtcUndoFeed();
+			const canonicalContents = createDeRtcCanonicalContents();
 			const authorship = createDeRtcAuthorship( undoFeed );
 			// Save-through-the-room: this post's REST saves carry
 			// base_version while the session lives. `prepareForSave` is
@@ -481,6 +489,45 @@ export function createDeRtcEngine(): SyncEngine & {
 					stored?.toJSON?.() ??
 					( Array.isArray( stored ) ? stored : [] )
 				);
+			};
+
+			/*
+			 * The blocks a parked record's `current` side is read from:
+			 * the newest canonical content the session holds, because
+			 * that is what an accepted result replaces on the server.
+			 * This client's document is not that content while it holds
+			 * text the server did not take. In the window of the author
+			 * of a parked change the document still holds the parked
+			 * text, so reading it would show `current` equal to
+			 * `proposed`. The document is the fallback before any
+			 * canonical content has arrived.
+			 *
+			 * Parsed once per version: the records are read again on
+			 * every document change while one is open.
+			 */
+			let parsedCanonical: { version: string; blocks: any[] } | null =
+				null;
+			const currentSide = (): {
+				version: string | null;
+				blocks: any[];
+			} => {
+				const canonical = canonicalContents.latest();
+				if ( ! canonical ) {
+					parsedCanonical = null;
+					return {
+						version: bridge.lastVersion(),
+						blocks: localBlocks(),
+					};
+				}
+
+				if ( parsedCanonical?.version !== canonical.version ) {
+					parsedCanonical = {
+						version: canonical.version,
+						blocks: parseCanonicalBlocks( canonical.content ),
+					};
+				}
+
+				return parsedCanonical;
 			};
 
 			/**
@@ -602,20 +649,20 @@ export function createDeRtcEngine(): SyncEngine & {
 					 * The three sides, as the contract wants them:
 					 * `base` from the row's baseHtml (null on rows
 					 * that predate the field), `proposed` from the
-					 * parked blocks, `current` from THIS client's
-					 * document: the same blocks by identity, else the
-					 * covering top-level span.
+					 * parked blocks, `current` from the canonical
+					 * content (see currentSide): the same blocks by
+					 * identity, else the covering top-level span.
 					 */
-					const local = localBlocks();
+					const canonical = currentSide().blocks;
 					let current = '';
 					if ( byIdentity ) {
 						current = ids
-							.map( ( id ) => findBlockBySyncId( local, id ) )
+							.map( ( id ) => findBlockBySyncId( canonical, id ) )
 							.filter( Boolean )
 							.map( serializeBlock )
 							.join( '\n\n' );
 					} else if ( indexes.length ) {
-						current = local
+						current = canonical
 							.slice( first, last + 1 )
 							.map( serializeBlock )
 							.join( '\n\n' );
@@ -703,11 +750,11 @@ export function createDeRtcEngine(): SyncEngine & {
 
 			/*
 			 * The records as the listeners last read them. A record's
-			 * `current` is read from this client's document on every
-			 * read, so a version landing in a block under review changes
-			 * the record without any row opening or closing. The
-			 * listeners hear about that too (see onDocumentChange), or a
-			 * review dialog would go on showing the block as it was.
+			 * `current` is read again on every read, so a version landing
+			 * in a block under review changes the record without any row
+			 * opening or closing. The listeners hear about that too (see
+			 * onDocumentChange), or a review dialog would go on showing
+			 * the block as it was.
 			 */
 			let publishedConflicts = '';
 			const reviewHandle: EntityReviewHandle = {
@@ -762,6 +809,20 @@ export function createDeRtcEngine(): SyncEngine & {
 					publishedConflicts = JSON.stringify( conflicts );
 					return conflicts;
 				},
+				seenVersion: ( proposalId ) => {
+					const parked = review
+						.getOpen()
+						.find(
+							( candidate ) => candidate.proposalId === proposalId
+						);
+					// A post field's `current` is still read from this
+					// client's document.
+					if ( parked?.property ) {
+						return bridge.lastVersion();
+					}
+
+					return currentSide().version;
+				},
 				writeContested: ( contestKey, content ) => {
 					const index = contested.get( contestKey )?.index ?? 0;
 					overlayParkedBlocks( {
@@ -808,6 +869,10 @@ export function createDeRtcEngine(): SyncEngine & {
 				}
 			};
 			recordMap.observeDeep( onDocumentChange );
+			// A version can be held before the document takes it (it waits
+			// while this client types), and the records change then too.
+			const unsubscribeCanonical =
+				canonicalContents.onChange( onDocumentChange );
 
 			let observersAttached = false;
 			let onRecordUpdate:
@@ -826,6 +891,7 @@ export function createDeRtcEngine(): SyncEngine & {
 						bridge,
 						review,
 						undoFeed,
+						canonicalContents,
 						// The Save/Sync inversion, stage 2:
 						// commits ride the autosave endpoint; the
 						// transport stays advisory. Null for types
@@ -909,6 +975,7 @@ export function createDeRtcEngine(): SyncEngine & {
 						recordMap.unobserveDeep( onRecordUpdate );
 					}
 					recordMap.unobserveDeep( onDocumentChange );
+					unsubscribeCanonical();
 					if ( entityReviews.get( key )?.review === review ) {
 						entityReviews.delete( key );
 					}

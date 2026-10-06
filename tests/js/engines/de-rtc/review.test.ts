@@ -886,6 +886,209 @@ describe( 'de-rtc review lane (client)', () => {
 		} );
 	} );
 
+	describe( "the current side in the author's own window", () => {
+		const B_PEER = {
+			name: 'core/paragraph',
+			attributes: { content: 'Beta, rewritten by a peer' },
+		};
+
+		beforeEach( () => {
+			// Edits and snapshots land in the same tick here; the typing-
+			// burst quiet gate would put every snapshot on a timer.
+			setDeRtcBurstQuietMsForTesting( 0 );
+		} );
+
+		afterEach( () => {
+			setDeRtcBurstQuietMsForTesting( 500 );
+		} );
+
+		const documentBlocks = ( entity: any ) =>
+			( entity.getEditorChanges( { blocks: [] } as any ) as any ).blocks;
+
+		/**
+		 * The author rewrites Beta, and the change is set aside because a
+		 * collaborator's rewrite of the same block became version 2
+		 * first. The author's document keeps their own text: a version
+		 * waits while a local edit is unanswered.
+		 */
+		function parkOwnChange() {
+			const made = makeEntity();
+			const { entity, session } = made;
+			session.receiveUpdate(
+				snapshotRow( 'v1', contentOf( BLOCK_A, BLOCK_B ) )
+			);
+			entity.applyLocalChanges(
+				{ blocks: [ BLOCK_A, BLOCK_C ] } as any,
+				'editor',
+				{}
+			);
+			session.receiveUpdate(
+				snapshotRow( 'v2', contentOf( BLOCK_A, B_PEER ) )
+			);
+			session.receiveUpdate( {
+				type: DE_RTC_PARKED_TYPE,
+				data: JSON.stringify( {
+					proposalId: 'p-own-1',
+					reason: 'manual-conflict-required',
+					authorClientId: session.clientId,
+					author: 7,
+					at: 1000,
+					baseVersion: 'v1',
+					changedBlocks: [
+						{
+							index: 1,
+							html: contentOf( BLOCK_C ),
+							baseHtml: contentOf( BLOCK_B ),
+						},
+					],
+				} ),
+			} );
+			// The parked text is still in the author's document.
+			expect( documentBlocks( entity ) ).toEqual( [ BLOCK_A, BLOCK_C ] );
+			return made;
+		}
+
+		it( 'is the canonical block, not the parked text', () => {
+			parkOwnChange();
+
+			const [ conflict ] = engine.conflicts.getOpenConflicts(
+				'postType/book',
+				'1'
+			);
+			expect( conflict ).toMatchObject( {
+				id: 'p-own-1',
+				base: contentOf( BLOCK_B ),
+				proposed: contentOf( BLOCK_C ),
+				current: contentOf( B_PEER ),
+			} );
+		} );
+
+		it( 'follows a version the document has not taken yet, and the listeners hear it', () => {
+			const { entity, session } = parkOwnChange();
+			const changed = jest.fn();
+			engine.conflicts.subscribe( 'postType/book', '1', changed );
+			engine.conflicts.getOpenConflicts( 'postType/book', '1' );
+
+			const newer = {
+				name: 'core/paragraph',
+				attributes: { content: 'Beta, rewritten again' },
+			};
+			session.receiveUpdate(
+				snapshotRow( 'v3', contentOf( BLOCK_A, newer ) )
+			);
+
+			expect( documentBlocks( entity ) ).toEqual( [ BLOCK_A, BLOCK_C ] );
+			expect( changed ).toHaveBeenCalled();
+			expect(
+				engine.conflicts.getOpenConflicts( 'postType/book', '1' )[ 0 ]
+					.current
+			).toBe( contentOf( newer ) );
+		} );
+
+		it( 'an accepted result names the version the current side was read from', async () => {
+			parkOwnChange();
+			const [ conflict ] = engine.conflicts.getOpenConflicts(
+				'postType/book',
+				'1'
+			);
+
+			const outcome = await engine.conflicts.resolveConflict(
+				'postType/book',
+				'1',
+				'p-own-1',
+				{
+					action: 'accept',
+					content: contentOf( BLOCK_C ),
+					current: conflict.current,
+				}
+			);
+
+			// The document is still at version 1. Naming that version
+			// would get the result refused: the block differs between
+			// versions 1 and 2, and the reviewer saw version 2.
+			expect( outcome ).toBe( 'resolved' );
+			expect( apiFetchMock ).toHaveBeenCalledWith(
+				expect.objectContaining( {
+					data: expect.objectContaining( {
+						proposalId: 'p-own-1',
+						resolution: 'accepted',
+						seenVersion: 'v2',
+					} ),
+				} )
+			);
+		} );
+
+		it( 'finds the block by its identity when the canonical content moved it', () => {
+			const withId = ( syncId: string, content: string ) => ( {
+				name: 'core/paragraph',
+				attributes: { content, metadata: { syncId } },
+			} );
+			const { entity, session } = makeEntity();
+			session.receiveUpdate(
+				snapshotRow(
+					'v1',
+					contentOf( withId( 'a', 'Alpha' ), withId( 'b', 'Beta' ) )
+				)
+			);
+			entity.applyLocalChanges(
+				{
+					blocks: [
+						withId( 'a', 'Alpha' ),
+						withId( 'b', 'Beta, by the author' ),
+					],
+				} as any,
+				'editor',
+				{}
+			);
+			// Version 2 rewrote the block and put a new block above it.
+			session.receiveUpdate(
+				snapshotRow(
+					'v2',
+					contentOf(
+						withId( 'new', 'New first block' ),
+						withId( 'a', 'Alpha' ),
+						withId( 'b', 'Beta, by a peer' )
+					)
+				)
+			);
+			session.receiveUpdate( {
+				type: DE_RTC_PARKED_TYPE,
+				data: JSON.stringify( {
+					proposalId: 'p-own-1',
+					reason: 'manual-conflict-required',
+					authorClientId: session.clientId,
+					baseVersion: 'v1',
+					changedBlocks: [
+						{
+							index: 1,
+							syncId: 'b',
+							html: contentOf(
+								withId( 'b', 'Beta, by the author' )
+							),
+						},
+					],
+				} ),
+			} );
+
+			expect(
+				engine.conflicts.getOpenConflicts( 'postType/book', '1' )[ 0 ]
+					.current
+			).toBe( contentOf( withId( 'b', 'Beta, by a peer' ) ) );
+		} );
+
+		it( 'falls back to the document when no canonical content is held', () => {
+			const { session } = parkOwnChange();
+
+			// A room restart: every version this client held is gone.
+			( session as any ).onRoomRestart();
+
+			expect(
+				engine.conflicts.getOpenConflicts( 'postType/book', '1' )[ 0 ]
+					.current
+			).toBe( contentOf( BLOCK_C ) );
+		} );
+	} );
+
 	it( 'an unknown entity yields an empty review surface', () => {
 		expect( engine.review.getOpenItems( 'postType/book', '999' ) ).toEqual(
 			[]

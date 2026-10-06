@@ -906,6 +906,13 @@ applies.
   the hold's `sanitized` (and announces the hold again with the block
   as it reads now). intent-log has no route: its accepted result is
   an ordinary edit that the server merges or sets aside.
+  de-rtc reads the `current` side of a block record from the newest
+  canonical content the session holds
+  (`src/engines/de-rtc/canonical-contents.ts`), never from the
+  client's document, and `seenVersion` is that content's version. The
+  document can hold text the server did not take: in the window of
+  the author of a set-aside change it still holds that change, so it
+  would show `current` equal to `proposed`.
   A card WAITS while its author is still typing in the block
   (`src/review/typing-hold.ts`: 1.2 s without typing, 20 s at most),
   but only for records an engine marks `followsTyping`, which promises

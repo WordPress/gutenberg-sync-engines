@@ -16,6 +16,10 @@ import type {
 import { applyServerAwarenessStates } from '../awareness-sync';
 import { announceLocalWrite } from '../../providers/advisory/announce';
 import type { TransportSessionExtensions } from '../../providers/session-extensions';
+import {
+	createDeRtcCanonicalContents,
+	type DeRtcCanonicalContents,
+} from './canonical-contents';
 import type { DeRtcCommitAdapter } from './commit';
 import { buildDeRtcClientUpdate, hashDeRtcContent } from './descriptor';
 import { DE_RTC_REMOTE_ORIGIN, type DeRtcDocBridge } from './doc-bridge';
@@ -93,6 +97,14 @@ export interface DeRtcSessionOptions {
 	 * proposals tagged. Optional: collections and undo-less tests skip it.
 	 */
 	undoFeed?: import('./revert-undo').DeRtcUndoFeed;
+
+	/**
+	 * The entity's record of canonical content by version. The session
+	 * writes every version it receives into it; the engine's review lane
+	 * reads the newest one. Optional: a session without one keeps its
+	 * own.
+	 */
+	canonicalContents?: DeRtcCanonicalContents;
 
 	/**
 	 * The entity's review ledger. Parked/resolved rows feed it, and it
@@ -185,14 +197,9 @@ export function createDeRtcSessionCodec(
 	// string). The descriptor builder needs the exact content
 	// of the proposal's declared base version. Bounded: old versions can
 	// never become a proposal base again.
-	const canonicalContents = new Map< string, string >();
-	const recordCanonicalContent = ( version: string, content: string ) => {
-		canonicalContents.set( version, content );
-		while ( canonicalContents.size > 8 ) {
-			const oldest = canonicalContents.keys().next().value as string;
-			canonicalContents.delete( oldest );
-		}
-	};
+	const canonicalContents =
+		options.canonicalContents ?? createDeRtcCanonicalContents();
+	const recordCanonicalContent = canonicalContents.record;
 
 	/*
 	 * Announce-model catch-up state: announcements carry no
