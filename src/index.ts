@@ -31,14 +31,8 @@ import { privateApis } from '@wordpress/sync';
  */
 import { unlock } from './lock-unlock';
 import { createIntentLogEngineAdapter } from './engines/intent-log-adapter';
-import {
-	createYjsServerEngineAdapter,
-	yjsServerConflictSource,
-} from './engines/yjs-server-adapter';
-import {
-	createDeRtcEngineAdapter,
-	deRtcConflictSource,
-} from './engines/de-rtc-adapter';
+import { createYjsServerEngineAdapter } from './engines/yjs-server-adapter';
+import { createDeRtcEngineAdapter } from './engines/de-rtc-adapter';
 import { intentLogConflictSource } from './engines/intent-log-manager';
 import { registerConflictSource } from './review';
 import { createHttpPollingProvider } from './providers/http-polling/http-polling-provider';
@@ -56,11 +50,10 @@ registerSyncEngine( createYjsServerEngineAdapter() );
 registerSyncEngine( createDeRtcEngineAdapter() );
 
 // Conflict review: the in-canvas cards and dialogs (src/review/) render
-// from the engines' conflict sources. yjs-server publishes security holds
-// only (a CRDT merge detects no conflicts to set aside).
+// from the engines' conflict sources. de-rtc and yjs-server register one
+// per engine instance from their adapters; intent-log keeps one module-level
+// source.
 registerConflictSource( intentLogConflictSource );
-registerConflictSource( deRtcConflictSource );
-registerConflictSource( yjsServerConflictSource );
 
 // Transports: how updates move. Each carries the slug + protocol the server
 // announces and negotiates against.

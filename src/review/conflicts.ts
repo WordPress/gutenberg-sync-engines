@@ -1,9 +1,10 @@
 /**
- * The plugin-local conflict registry: every engine adapter registers its
- * SyncConflictSource here at module load, and the review UI reads, watches,
- * and resolves conflicts through it without knowing which engine is active.
- * Only the active engine holds state for an entity, so the union of the
- * sources is at most one non-empty list.
+ * The plugin-local conflict registry: every engine registers its
+ * SyncConflictSource here (at module load, or when the adapter creates an
+ * engine for a session), and the review UI reads, watches, and resolves
+ * conflicts through it without knowing which engine is active. Only the
+ * active engine holds state for an entity, so the union of the sources is
+ * at most one non-empty list.
  *
  * Conflict data deliberately does NOT go through core-data's store (the
  * bundled Gutenberg's review items, which upstream Gutenberg never had)
@@ -72,8 +73,9 @@ function attachSource(
 }
 
 /**
- * Registers an engine's conflict source. Called by each engine adapter at
- * module load. Entities already being watched pick the new source up.
+ * Registers an engine's conflict source. A source may arrive after the UI
+ * started watching a post (engines are created per session): entities
+ * already being watched pick the new source up and their listeners run.
  *
  * @param source The engine's source.
  */
