@@ -21,12 +21,14 @@ export const REASON_LABELS = {
  * Whether the current user may approve content held for unfiltered-HTML
  * review. UI hint only, since ingest re-enforces per the authoring user's
  * capability regardless of what the client shows. The plugin's PHP sets
- * the flag on its client settings (enqueue_editor_assets).
+ * the flag on its client settings (enqueue_editor_assets). Only an
+ * explicit `true` allows: when the settings or the flag are missing, the
+ * answer is no.
  *
  * @return {boolean} Whether approval is available.
  */
 export function canApproveUnfilteredHtml() {
-	return false !== window._gutenbergSyncEnginesSettings?.canUnfilteredHtml;
+	return true === window._gutenbergSyncEnginesSettings?.canUnfilteredHtml;
 }
 
 /**

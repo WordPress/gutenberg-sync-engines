@@ -5,6 +5,7 @@ import {
 	SequesteredBlockBody,
 	sequestrationOf,
 } from '../../../src/review/components/sequestered-block';
+import { canApproveUnfilteredHtml } from '../../../src/review/components/review-data';
 import { KSES_NEW } from './fixtures';
 
 describe( 'SequesteredBlockBody', () => {
@@ -28,6 +29,19 @@ describe( 'SequesteredBlockBody', () => {
 		expect(
 			screen.getByText( /<script>alert\(0\);<\/script>/ )
 		).toBeVisible();
+	} );
+
+	it( 'offers no action when the plugin settings are missing', () => {
+		expect( window._gutenbergSyncEnginesSettings ).toBeUndefined();
+		render(
+			<SequesteredBlockBody
+				sequestration={ KSES_NEW }
+				canReview={ canApproveUnfilteredHtml() }
+				onReview={ () => {} }
+			/>
+		);
+
+		expect( screen.queryByRole( 'button' ) ).not.toBeInTheDocument();
 	} );
 
 	it( 'offers Review changes to a user who can approve', async () => {
