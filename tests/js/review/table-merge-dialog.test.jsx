@@ -175,6 +175,62 @@ describe( 'TableMergeDialogBody', () => {
 		} );
 	} );
 
+	it( 'Accept keeps every cell, the footer, and the cell alignment of a table with no header row', async () => {
+		const user = userEvent.setup();
+		const onAccept = jest.fn();
+		// A table as the editor inserts it (no header row), with a footer
+		// and one right-aligned cell. Your version changed one cell.
+		const headerlessTable = ( changedCell ) =>
+			'<!-- wp:table -->\n' +
+			'<figure class="wp-block-table"><table class="has-fixed-layout"><tbody>' +
+			'<tr><td>a</td><td>b</td><td class="has-text-align-right" data-align="right">c</td></tr>' +
+			`<tr><td>d</td><td>${ changedCell }</td><td>f</td></tr>` +
+			'</tbody><tfoot><tr><td>x</td><td>y</td><td>z</td></tr></tfoot></table></figure>\n' +
+			'<!-- /wp:table -->';
+		const { base, yours, current } = tableGridsOf( {
+			...TABLE_CONFLICT,
+			base: headerlessTable( 'e' ),
+			proposed: headerlessTable( 'E' ),
+			current: headerlessTable( 'e' ),
+		} );
+		render(
+			<TableMergeDialogBody
+				base={ base }
+				yours={ yours }
+				current={ current }
+				onAccept={ onAccept }
+				onCancel={ () => {} }
+			/>
+		);
+
+		// The panes render the tables without a header row.
+		const yourTable = screen.getByRole( 'table', { name: 'Your version' } );
+		expect(
+			within( yourTable ).queryByRole( 'columnheader' )
+		).not.toBeInTheDocument();
+		expect( within( yourTable ).getByText( 'E' ) ).toHaveClass(
+			'gse-review-table-diff__cell--changed'
+		);
+		expect( within( yourTable ).getByText( 'a' ) ).not.toHaveClass(
+			'gse-review-table-diff__cell--added'
+		);
+
+		await user.click( screen.getByRole( 'button', { name: 'Accept' } ) );
+
+		const { head, body, foot } = onAccept.mock.calls.at( -1 )[ 0 ];
+		const contents = ( rows ) =>
+			rows.map( ( row ) =>
+				row.cells.map( ( cell ) => String( cell.content ) )
+			);
+		expect( head ).toEqual( [] );
+		expect( contents( body ) ).toEqual( [
+			[ 'a', 'b', 'c' ],
+			[ 'd', 'E', 'f' ],
+		] );
+		expect( contents( foot ) ).toEqual( [ [ 'x', 'y', 'z' ] ] );
+		expect( body[ 0 ].cells[ 2 ].align ).toBe( 'right' );
+	} );
+
 	it( 'Cancel closes without accepting', async () => {
 		const user = userEvent.setup();
 		const onAccept = jest.fn();
@@ -195,7 +251,7 @@ describe( 'TableMergeDialogBody', () => {
 
 describe( 'tableGridsOf', () => {
 	it( "reads the three grids out of a record's serialized sides", () => {
-		expect( tableGridsOf( TABLE_CONFLICT ) ).toEqual( {
+		expect( tableGridsOf( TABLE_CONFLICT ) ).toMatchObject( {
 			...TABLE_GRIDS,
 			isBaseMissing: false,
 		} );
@@ -203,8 +259,8 @@ describe( 'tableGridsOf', () => {
 
 	it( 'stands the current version in for a missing base', () => {
 		const grids = tableGridsOf( { ...TABLE_CONFLICT, base: null } );
-		expect( grids.base ).toEqual( TABLE_GRIDS.current );
-		expect( grids.yours ).toEqual( TABLE_GRIDS.yours );
+		expect( grids.base ).toMatchObject( TABLE_GRIDS.current );
+		expect( grids.yours ).toMatchObject( TABLE_GRIDS.yours );
 		expect( grids.isBaseMissing ).toBe( true );
 	} );
 } );

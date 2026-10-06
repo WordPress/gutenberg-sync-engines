@@ -23,18 +23,20 @@ function cellClassName( modifier ) {
  * A pane diff (one version against the base) as displayable head and body
  * cells: added rows and columns and changed cells highlighted.
  *
- * @param {Object} diff A diff from diffGridAgainstBase.
+ * @param {Object}   diff A diff from diffGridAgainstBase.
+ * @param {string[]} head The version's header labels (empty when its
+ *                        table has no header row).
  * @return {Object} `{ head, rows }` of `{ value, modifier }` cells.
  */
-function displayFromDiff( diff ) {
+function displayFromDiff( diff, head ) {
 	return {
-		head: diff.columns.map( ( column ) => {
+		head: head.map( ( value, columnIndex ) => {
 			let modifier;
-			if ( column.added ) {
+			if ( diff.columns[ columnIndex ]?.added ) {
 				modifier = 'added';
 			}
 
-			return { value: column.key, modifier };
+			return { value, modifier };
 		} ),
 		rows: diff.rows.map( ( row ) =>
 			row.cells.map( ( cell ) => {
@@ -60,13 +62,13 @@ function displayFromDiff( diff ) {
  */
 function displayFromModel( model ) {
 	return {
-		head: model.columns.map( ( column ) => {
+		head: model.head.map( ( value, columnIndex ) => {
 			let modifier;
-			if ( 'base' !== column.source ) {
+			if ( 'base' !== model.columns[ columnIndex ].source ) {
 				modifier = 'added';
 			}
 
-			return { value: column.key, modifier };
+			return { value, modifier };
 		} ),
 		rows: model.rows.map( ( row ) =>
 			row.cells.map( ( cell, columnIndex ) => {
@@ -100,8 +102,9 @@ function displayFromModel( model ) {
  * One table grid rendered as a plain table with per-cell diff
  * highlighting. Two modes: `grid` plus `baseGrid` render one version
  * diffed against the base (the dialog panes), `model` renders a merged
- * model's union view (the in-card preview). The wrapper scrolls
- * horizontally when a wide table overflows.
+ * model's union view (the in-card preview). A table with no header row
+ * renders none. The wrapper scrolls horizontally when a wide table
+ * overflows.
  *
  * The revisions diff system is deliberately NOT used here: table cells
  * live in query-sourced attributes, so the block differ has no cell grain
@@ -129,7 +132,10 @@ export default function TableDiffGrid( {
 			return displayFromModel( model );
 		}
 
-		return displayFromDiff( diffGridAgainstBase( baseGrid, grid ) );
+		return displayFromDiff(
+			diffGridAgainstBase( baseGrid, grid ),
+			grid.head
+		);
 	}, [ grid, baseGrid, model ] );
 
 	let tableClassName = 'gse-review-table-diff';
@@ -140,18 +146,20 @@ export default function TableDiffGrid( {
 	return (
 		<div className="gse-review-table-diff__wrapper">
 			<table className={ tableClassName } aria-label={ label }>
-				<thead>
-					<tr>
-						{ display.head.map( ( cell, columnIndex ) => (
-							<th
-								key={ columnIndex }
-								className={ cellClassName( cell.modifier ) }
-							>
-								{ cell.value }
-							</th>
-						) ) }
-					</tr>
-				</thead>
+				{ display.head.length > 0 && (
+					<thead>
+						<tr>
+							{ display.head.map( ( cell, columnIndex ) => (
+								<th
+									key={ columnIndex }
+									className={ cellClassName( cell.modifier ) }
+								>
+									{ cell.value }
+								</th>
+							) ) }
+						</tr>
+					</thead>
+				) }
 				<tbody>
 					{ display.rows.map( ( cells, rowIndex ) => (
 						<tr key={ rowIndex }>

@@ -17,6 +17,43 @@ const tinyBase = {
 	rows: [ [ 'One', '1' ] ],
 };
 
+// A table that uses what a grid's labels and contents do not cover: a
+// second header row, a footer, and cell attributes.
+const STYLED_TABLE = {
+	head: [
+		{
+			cells: [
+				{ content: 'Plan', tag: 'th', scope: 'col' },
+				{ content: 'Price', tag: 'th', scope: 'col', align: 'right' },
+			],
+		},
+		{
+			cells: [ { content: 'Per month', tag: 'th', colspan: '2' } ],
+		},
+	],
+	body: [
+		{
+			cells: [
+				{ content: 'Free', tag: 'th', scope: 'row' },
+				{ content: '$0', tag: 'td', align: 'right' },
+			],
+		},
+		{
+			cells: [
+				{ content: 'Pro', tag: 'th', scope: 'row' },
+				{ content: '$12', tag: 'td', align: 'right' },
+			],
+		},
+	],
+	foot: [
+		{
+			cells: [
+				{ content: 'Taxes not included', tag: 'td', colspan: '2' },
+			],
+		},
+	],
+};
+
 describe( 'mergeTableGrids', () => {
 	it( 'merges the pricing scenario end to end', () => {
 		const model = mergeTableGrids( base, yours, current );
@@ -163,7 +200,154 @@ describe( 'mergeTableGrids', () => {
 	} );
 } );
 
+describe( 'mergeTableGrids without labels to line up by', () => {
+	// A table as the editor inserts it: no header row.
+	const headerless = ( rows ) => ( { head: [], rows } );
+
+	it( 'merges a table with no header row by position and keeps every cell', () => {
+		const baseGrid = headerless( [
+			[ 'a', 'b', 'c' ],
+			[ 'd', 'e', 'f' ],
+		] );
+		const changed = headerless( [
+			[ 'a', 'b', 'c' ],
+			[ 'd', 'E', 'f' ],
+		] );
+
+		const model = mergeTableGrids( baseGrid, changed, baseGrid );
+		expect( model.columns ).toHaveLength( 3 );
+		expect( model.rows ).toHaveLength( 2 );
+		expect( model.head ).toEqual( [] );
+		expect( model.rows[ 1 ].cells[ 1 ] ).toEqual( {
+			status: 'yours',
+			value: 'E',
+		} );
+		expect( model.contested ).toEqual( [] );
+		expect( mergedGridFromModel( model ) ).toMatchObject( changed );
+	} );
+
+	it( 'merges both sides of a blank table, whose cells all look alike', () => {
+		const blank = headerless( [
+			[ '', '' ],
+			[ '', '' ],
+		] );
+		const yourChange = headerless( [
+			[ 'x', '' ],
+			[ '', '' ],
+		] );
+		const currentChange = headerless( [
+			[ '', '' ],
+			[ '', 'y' ],
+		] );
+
+		const model = mergeTableGrids( blank, yourChange, currentChange );
+		expect( mergedGridFromModel( model ) ).toMatchObject(
+			headerless( [
+				[ 'x', '' ],
+				[ '', 'y' ],
+			] )
+		);
+	} );
+
+	it( 'marks a cell both sides changed as contested', () => {
+		const baseGrid = headerless( [ [ 'a', 'b' ] ] );
+
+		const model = mergeTableGrids(
+			baseGrid,
+			headerless( [ [ 'a', 'yours' ] ] ),
+			headerless( [ [ 'a', 'theirs' ] ] )
+		);
+		expect( model.contested ).toHaveLength( 1 );
+		expect( model.rows[ 0 ].cells[ 1 ] ).toMatchObject( {
+			status: 'contested',
+			value: 'theirs',
+			yourValue: 'yours',
+		} );
+	} );
+
+	it( 'carries a column one side added to a table with no header row', () => {
+		const baseGrid = headerless( [ [ 'a', 'b' ] ] );
+
+		const model = mergeTableGrids(
+			baseGrid,
+			headerless( [ [ 'a', 'b', 'c' ] ] ),
+			baseGrid
+		);
+		expect( model.columns[ 2 ].source ).toBe( 'yours' );
+		expect( mergedGridFromModel( model ).rows ).toEqual( [
+			[ 'a', 'b', 'c' ],
+		] );
+	} );
+
+	it( 'keeps a header row only your version added', () => {
+		const baseGrid = headerless( [ [ 'a', 'b' ] ] );
+		const withHeader = { head: [ 'X', 'Y' ], rows: [ [ 'a', 'b' ] ] };
+
+		expect(
+			mergedGridFromModel(
+				mergeTableGrids( baseGrid, withHeader, baseGrid )
+			)
+		).toMatchObject( withHeader );
+		// A header row the current version removed stays removed.
+		expect(
+			mergeTableGrids( withHeader, withHeader, baseGrid ).head
+		).toEqual( [] );
+	} );
+
+	it( 'keeps both rows when a first cell repeats', () => {
+		const baseGrid = {
+			head: [ 'Day', 'Task' ],
+			rows: [
+				[ 'Mon', 'write' ],
+				[ 'Mon', 'review' ],
+			],
+		};
+		const changed = {
+			head: [ 'Day', 'Task' ],
+			rows: [
+				[ 'Mon', 'write' ],
+				[ 'Mon', 'ship' ],
+			],
+		};
+
+		const model = mergeTableGrids( baseGrid, changed, baseGrid );
+		expect( mergedGridFromModel( model ) ).toMatchObject( changed );
+		// The columns still line up by their labels.
+		expect( model.columns.map( ( column ) => column.key ) ).toEqual( [
+			'Day',
+			'Task',
+		] );
+	} );
+
+	it( 'keeps both columns when a header label repeats', () => {
+		const baseGrid = { head: [ '', '' ], rows: [ [ 'One', '1' ] ] };
+		const changed = { head: [ '', '' ], rows: [ [ 'One', '2' ] ] };
+
+		const model = mergeTableGrids( baseGrid, baseGrid, changed );
+		expect( model.columns ).toHaveLength( 2 );
+		expect( mergedGridFromModel( model ) ).toMatchObject( changed );
+	} );
+
+	it( 'treats a version with no table as unchanged', () => {
+		const model = mergeTableGrids( tinyBase, headerless( [] ), tinyBase );
+
+		expect( mergedGridFromModel( model ) ).toMatchObject( tinyBase );
+	} );
+} );
+
 describe( 'diffGridAgainstBase', () => {
+	it( 'marks only the changed cell of a table with no header row', () => {
+		const diff = diffGridAgainstBase(
+			{ head: [], rows: [ [ 'a', 'b' ] ] },
+			{ head: [], rows: [ [ 'a', 'B' ] ] }
+		);
+
+		expect( diff.rows[ 0 ].cells ).toEqual( [
+			{ status: 'unchanged', value: 'a' },
+			{ status: 'changed', value: 'B' },
+		] );
+	} );
+
 	it( 'marks added columns and changed cells for your version', () => {
 		const diff = diffGridAgainstBase( base, yours );
 
@@ -199,7 +383,7 @@ describe( 'mergedGridFromModel', () => {
 	it( 'extracts the suggested merge as a plain grid', () => {
 		const model = mergeTableGrids( base, yours, current );
 
-		expect( mergedGridFromModel( model ) ).toEqual( {
+		expect( mergedGridFromModel( model ) ).toMatchObject( {
 			head: [ 'Plan', 'Free', 'Basic', 'Pro', 'Team' ],
 			rows: [
 				[ 'Price', '$0', '$7', '$12', '$9' ],
@@ -235,6 +419,23 @@ describe( 'gridToTableAttributes', () => {
 					],
 				},
 			],
+			foot: [],
+		} );
+	} );
+
+	it( 'writes no header row for a grid without one', () => {
+		expect(
+			gridToTableAttributes( { head: [], rows: [ [ 'a', 'b' ] ] } )
+		).toMatchObject( {
+			head: [],
+			body: [
+				{
+					cells: [
+						{ content: 'a', tag: 'td' },
+						{ content: 'b', tag: 'td' },
+					],
+				},
+			],
 		} );
 	} );
 } );
@@ -250,17 +451,107 @@ describe( 'gridFromTableAttributes', () => {
 		};
 		expect(
 			gridFromTableAttributes( gridToTableAttributes( grid ) )
-		).toEqual( grid );
+		).toMatchObject( grid );
 	} );
 
 	it( 'reads a table without a header or a body as an empty grid', () => {
-		expect( gridFromTableAttributes( {} ) ).toEqual( {
+		expect( gridFromTableAttributes( {} ) ).toMatchObject( {
 			head: [],
 			rows: [],
 		} );
-		expect( gridFromTableAttributes( undefined ) ).toEqual( {
+		expect( gridFromTableAttributes( undefined ) ).toMatchObject( {
 			head: [],
 			rows: [],
 		} );
+	} );
+
+	it( 'keeps the footer, further header rows, and cell attributes through a round trip', () => {
+		expect(
+			gridToTableAttributes( gridFromTableAttributes( STYLED_TABLE ) )
+		).toEqual( STYLED_TABLE );
+	} );
+
+	it( 'reads a table with no header row as a grid with an empty head', () => {
+		const { head, ...headerless } = STYLED_TABLE;
+		const grid = gridFromTableAttributes( headerless );
+
+		expect( grid.head ).toEqual( [] );
+		expect( grid.rows ).toEqual( [
+			[ 'Free', '$0' ],
+			[ 'Pro', '$12' ],
+		] );
+		expect( gridToTableAttributes( grid ) ).toEqual( {
+			...headerless,
+			head: [],
+		} );
+	} );
+} );
+
+describe( 'the parts of a table the dialog does not show', () => {
+	// The merged table, as attributes, from three versions as attributes.
+	const mergedAttributes = ( baseTable, yourTable, currentTable ) =>
+		gridToTableAttributes(
+			mergedGridFromModel(
+				mergeTableGrids(
+					gridFromTableAttributes( baseTable ),
+					gridFromTableAttributes( yourTable ),
+					gridFromTableAttributes( currentTable )
+				)
+			)
+		);
+
+	// A copy of the styled table with one body cell replaced.
+	const withBodyCell = ( rowIndex, columnIndex, cell ) => ( {
+		...STYLED_TABLE,
+		body: STYLED_TABLE.body.map( ( row, index ) => {
+			if ( index !== rowIndex ) {
+				return row;
+			}
+
+			const cells = [ ...row.cells ];
+			cells[ columnIndex ] = { ...cells[ columnIndex ], ...cell };
+
+			return { cells };
+		} ),
+	} );
+
+	it( 'survive a merge that changes one cell', () => {
+		const yourTable = withBodyCell( 0, 1, { content: '$1' } );
+
+		expect(
+			mergedAttributes( STYLED_TABLE, yourTable, STYLED_TABLE )
+		).toEqual( yourTable );
+	} );
+
+	it( "merge each side's change: your text, their alignment, their footer", () => {
+		const yourTable = withBodyCell( 1, 1, { content: '$15' } );
+		const currentTable = {
+			...withBodyCell( 1, 1, { align: 'center' } ),
+			foot: [ { cells: [ { content: 'Prices in USD', tag: 'td' } ] } ],
+		};
+
+		const merged = mergedAttributes(
+			STYLED_TABLE,
+			yourTable,
+			currentTable
+		);
+		expect( merged.body[ 1 ].cells[ 1 ] ).toEqual( {
+			content: '$15',
+			tag: 'td',
+			align: 'center',
+		} );
+		expect( merged.foot ).toEqual( currentTable.foot );
+		expect( merged.head ).toEqual( STYLED_TABLE.head );
+	} );
+
+	it( 'keep a footer only your version changed', () => {
+		const yourTable = {
+			...STYLED_TABLE,
+			foot: [ { cells: [ { content: 'Yours', tag: 'td' } ] } ],
+		};
+
+		expect(
+			mergedAttributes( STYLED_TABLE, yourTable, STYLED_TABLE ).foot
+		).toEqual( yourTable.foot );
 	} );
 } );

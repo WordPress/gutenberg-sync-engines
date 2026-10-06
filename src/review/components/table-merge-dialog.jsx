@@ -68,8 +68,8 @@ function GridPane( { label, grid, baseGrid, onRestore } ) {
  * both sides changed differently holds the current version's value) and
  * hand-editable. Genuinely contested cells are resolved by editing the
  * merged table directly; the panes show what each side wanted. Accept
- * hands the merged table's head and body attributes back; Cancel closes
- * without changing anything.
+ * hands the merged table's head, body, and foot attributes back; Cancel
+ * closes without changing anything.
  *
  * Position-independent so it can be unit-tested without the modal.
  *
@@ -80,7 +80,7 @@ function GridPane( { label, grid, baseGrid, onRestore } ) {
  * @param {Object}   props.yours         The author's version of the grid.
  * @param {string}   props.proposedLabel The author's pane heading.
  * @param {Object}   props.current       The document's current version.
- * @param {Function} props.onAccept      ( { head, body } ) => void.
+ * @param {Function} props.onAccept      ( { head, body, foot } ) => void.
  * @param {Function} props.onCancel      Close without resolving.
  */
 export function TableMergeDialogBody( {
@@ -152,8 +152,8 @@ export function TableMergeDialogBody( {
 					__next40pxDefaultSize
 					variant="primary"
 					onClick={ () => {
-						const { head, body } = merged[ 0 ].attributes;
-						onAccept( { head, body } );
+						const { head, body, foot } = merged[ 0 ].attributes;
+						onAccept( { head, body, foot } );
 					} }
 				>
 					{ __( 'Accept' ) }
@@ -225,7 +225,7 @@ export function TableConflictPreview( { conflict } ) {
  * sides as grids, the merged result as a table, and the decision handed
  * back as the serialized table. The merged table keeps the current
  * block's other attributes (the caption, the layout) and its identity;
- * only the head and the body come from the merge.
+ * only the head, the body, and the foot come from the merge.
  *
  * @param {Object}   props
  * @param {Object}   props.conflict The conflict record.
@@ -253,7 +253,7 @@ export function TableConflictView( { conflict, onDecide, onClose } ) {
 				yours={ grids.yours }
 				current={ grids.current }
 				proposedLabel={ proposedLabel }
-				onAccept={ ( { head, body } ) => {
+				onAccept={ ( { head, body, foot } ) => {
 					const live =
 						tableBlockOf( conflict.current ) ??
 						tableBlockOf( conflict.proposed );
@@ -264,6 +264,7 @@ export function TableConflictView( { conflict, onDecide, onClose } ) {
 								...( live?.attributes ?? {} ),
 								head,
 								body,
+								foot,
 							} ),
 						] ),
 					} );
