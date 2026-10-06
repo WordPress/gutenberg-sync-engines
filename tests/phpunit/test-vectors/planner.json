@@ -35408,14 +35408,16 @@
             "status": "applied"
           },
           "actor-0#26": {
-            "status": "applied"
+            "status": "escalated",
+            "reason": "frame-conflict"
           },
           "actor-0#27": {
             "status": "escalated",
             "reason": "content-replaced"
           },
           "actor-0#28": {
-            "status": "applied"
+            "status": "escalated",
+            "reason": "dependent-on-escalated"
           },
           "actor-0#29": {
             "status": "applied"
@@ -35447,7 +35449,8 @@
             "reason": "property-conflict"
           },
           "actor-0#37": {
-            "status": "applied"
+            "status": "escalated",
+            "reason": "dependent-on-escalated"
           },
           "actor-0#38": {
             "status": "applied"
@@ -35668,9 +35671,19 @@
             "reason": "dependent-on-escalated"
           },
           {
+            "intentId": "actor-0#26",
+            "actorId": "actor-0",
+            "reason": "frame-conflict"
+          },
+          {
             "intentId": "actor-0#27",
             "actorId": "actor-0",
             "reason": "content-replaced"
+          },
+          {
+            "intentId": "actor-0#28",
+            "actorId": "actor-0",
+            "reason": "dependent-on-escalated"
           },
           {
             "intentId": "actor-0#30",
@@ -35696,6 +35709,11 @@
             "intentId": "actor-0#36",
             "actorId": "actor-0",
             "reason": "property-conflict"
+          },
+          {
+            "intentId": "actor-0#37",
+            "actorId": "actor-0",
+            "reason": "dependent-on-escalated"
           },
           {
             "intentId": "actor-0#40",
@@ -36223,32 +36241,6 @@
             }
           },
           {
-            "intentId": "actor-0#26",
-            "actorId": "actor-0",
-            "baseSeq": 11,
-            "txnId": null,
-            "type": "insert_text",
-            "payload": {
-              "syncId": "8shFLQPZBdC4kzSPTv3pNw",
-              "field": "content",
-              "offset": 11,
-              "text": " lorem"
-            }
-          },
-          {
-            "intentId": "actor-0#28",
-            "actorId": "actor-0",
-            "baseSeq": 11,
-            "txnId": null,
-            "type": "split_block",
-            "payload": {
-              "syncId": "8shFLQPZBdC4kzSPTv3pNw",
-              "field": "content",
-              "offset": 61,
-              "newSyncId": "82eb5739e589d6dd1826af422aecf83b"
-            }
-          },
-          {
             "intentId": "actor-0#29",
             "actorId": "actor-0",
             "baseSeq": 11,
@@ -36286,19 +36278,6 @@
               },
               "parentId": null,
               "afterSiblingId": null
-            }
-          },
-          {
-            "intentId": "actor-0#37",
-            "actorId": "actor-0",
-            "baseSeq": 11,
-            "txnId": null,
-            "type": "merge_blocks",
-            "payload": {
-              "survivorId": "8shFLQPZBdC4kzSPTv3pNw",
-              "absorbedId": "82eb5739e589d6dd1826af422aecf83b",
-              "field": "content",
-              "joinOffset": 46
             }
           },
           {
@@ -36499,7 +36478,7 @@
               },
               "fields": {
                 "content": {
-                  "text": "Rewriloremt loremen bydoloragent (23). blöckloremri ipsumtten by café agent  café(14).",
+                  "text": "Rewriloremten bydoloragent (23). blöckloremri ipsumtten by café agent  café(14).",
                   "formats": []
                 }
               },
@@ -37212,6 +37191,425 @@
               "fields": {
                 "content": {
                   "text": "ScéHZI 插入ni 结束",
+                  "formats": []
+                }
+              },
+              "syncParent": null,
+              "children": []
+            },
+            {
+              "syncId": "JPas3f_xc483ZCAQJN8rpA",
+              "blockType": "core/quote",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "citation": {
+                  "text": "Bulwer-Lytton",
+                  "formats": []
+                },
+                "content": {
+                  "text": "The rain fell in torrents.",
+                  "formats": []
+                }
+              },
+              "syncParent": null,
+              "children": []
+            },
+            {
+              "syncId": "8shFLQPZBdC4kzSPTv3pNw",
+              "blockType": "core/group",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "content": {
+                  "text": "",
+                  "formats": []
+                }
+              },
+              "syncParent": null,
+              "children": [
+                {
+                  "syncId": "jQUFjqWOKNSb9m3j5yGFbw",
+                  "blockType": "core/paragraph",
+                  "attrs": {},
+                  "attrVersions": {},
+                  "fields": {
+                    "content": {
+                      "text": "Except at occasional intervals.",
+                      "formats": []
+                    }
+                  },
+                  "syncParent": null,
+                  "children": []
+                },
+                {
+                  "syncId": "06cQ7T4HOD6bI2cZ8vR9Hg",
+                  "blockType": "core/paragraph",
+                  "attrs": {},
+                  "attrVersions": {},
+                  "fields": {
+                    "content": {
+                      "text": "When it was checked by a violent gust.",
+                      "formats": []
+                    }
+                  },
+                  "syncParent": null,
+                  "children": []
+                }
+              ]
+            },
+            {
+              "syncId": "OBBLT4bXZXuQulrYjzjx-g",
+              "blockType": "core/paragraph",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "content": {
+                  "text": "Which swept up the streets.",
+                  "formats": []
+                }
+              },
+              "syncParent": null,
+              "children": []
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "set-aside letter remembered across requests (rule 6 seeded)",
+      "genesis": {
+        "postId": 10,
+        "revisionId": 100
+      },
+      "batches": [
+        [
+          {
+            "intentId": "typist#0",
+            "actorId": "typist",
+            "baseSeq": 0,
+            "txnId": null,
+            "type": "insert_text",
+            "payload": {
+              "syncId": "YXZHFp_JXACfQTPmR6Y6MQ",
+              "field": "content",
+              "offset": 0,
+              "text": "k"
+            }
+          }
+        ],
+        [
+          {
+            "intentId": "typist#1",
+            "actorId": "typist",
+            "baseSeq": 1,
+            "txnId": null,
+            "type": "insert_text",
+            "payload": {
+              "syncId": "YXZHFp_JXACfQTPmR6Y6MQ",
+              "field": "content",
+              "offset": 1,
+              "text": "i"
+            }
+          }
+        ],
+        [
+          {
+            "intentId": "typist#2",
+            "actorId": "typist",
+            "baseSeq": 2,
+            "txnId": null,
+            "type": "insert_text",
+            "payload": {
+              "syncId": "YXZHFp_JXACfQTPmR6Y6MQ",
+              "field": "content",
+              "offset": 2,
+              "text": "l"
+            }
+          }
+        ],
+        [
+          {
+            "intentId": "typist#3",
+            "actorId": "typist",
+            "baseSeq": 3,
+            "txnId": null,
+            "type": "insert_text",
+            "payload": {
+              "syncId": "YXZHFp_JXACfQTPmR6Y6MQ",
+              "field": "content",
+              "offset": 3,
+              "text": "o"
+            }
+          }
+        ],
+        [
+          {
+            "intentId": "peer#4",
+            "actorId": "peer",
+            "baseSeq": 0,
+            "txnId": null,
+            "type": "insert_text",
+            "payload": {
+              "syncId": "YXZHFp_JXACfQTPmR6Y6MQ",
+              "field": "content",
+              "offset": 31,
+              "text": " "
+            }
+          }
+        ],
+        [
+          {
+            "intentId": "typist#5",
+            "actorId": "typist",
+            "baseSeq": 4,
+            "txnId": null,
+            "type": "insert_text",
+            "payload": {
+              "syncId": "YXZHFp_JXACfQTPmR6Y6MQ",
+              "field": "content",
+              "offset": 4,
+              "text": " "
+            }
+          },
+          {
+            "intentId": "typist#6",
+            "actorId": "typist",
+            "baseSeq": 4,
+            "txnId": null,
+            "type": "insert_text",
+            "payload": {
+              "syncId": "YXZHFp_JXACfQTPmR6Y6MQ",
+              "field": "content",
+              "offset": 5,
+              "text": "l"
+            }
+          }
+        ],
+        [
+          {
+            "intentId": "typist#7",
+            "actorId": "typist",
+            "baseSeq": 4,
+            "txnId": null,
+            "type": "insert_text",
+            "payload": {
+              "syncId": "YXZHFp_JXACfQTPmR6Y6MQ",
+              "field": "content",
+              "offset": 6,
+              "text": "i"
+            }
+          }
+        ],
+        [
+          {
+            "intentId": "typist#8",
+            "actorId": "typist",
+            "baseSeq": 4,
+            "txnId": null,
+            "type": "insert_text",
+            "payload": {
+              "syncId": "YXZHFp_JXACfQTPmR6Y6MQ",
+              "field": "content",
+              "offset": 7,
+              "text": "m"
+            }
+          },
+          {
+            "intentId": "typist#9",
+            "actorId": "typist",
+            "baseSeq": 4,
+            "txnId": null,
+            "type": "insert_text",
+            "payload": {
+              "syncId": "YXZHFp_JXACfQTPmR6Y6MQ",
+              "field": "content",
+              "offset": 8,
+              "text": "a"
+            }
+          }
+        ],
+        [
+          {
+            "intentId": "typist#10",
+            "actorId": "typist",
+            "baseSeq": 6,
+            "txnId": null,
+            "type": "insert_text",
+            "payload": {
+              "syncId": "YXZHFp_JXACfQTPmR6Y6MQ",
+              "field": "content",
+              "offset": 5,
+              "text": "x"
+            }
+          }
+        ]
+      ],
+      "expected": {
+        "dispositions": {
+          "typist#0": {
+            "status": "applied"
+          },
+          "typist#1": {
+            "status": "applied"
+          },
+          "typist#2": {
+            "status": "applied"
+          },
+          "typist#3": {
+            "status": "applied"
+          },
+          "peer#4": {
+            "status": "applied"
+          },
+          "typist#5": {
+            "status": "applied"
+          },
+          "typist#6": {
+            "status": "escalated",
+            "reason": "frame-conflict"
+          },
+          "typist#7": {
+            "status": "escalated",
+            "reason": "dependent-on-escalated"
+          },
+          "typist#8": {
+            "status": "escalated",
+            "reason": "dependent-on-escalated"
+          },
+          "typist#9": {
+            "status": "escalated",
+            "reason": "dependent-on-escalated"
+          },
+          "typist#10": {
+            "status": "applied"
+          }
+        },
+        "proposals": [
+          {
+            "intentId": "typist#6",
+            "actorId": "typist",
+            "reason": "frame-conflict"
+          },
+          {
+            "intentId": "typist#7",
+            "actorId": "typist",
+            "reason": "dependent-on-escalated"
+          },
+          {
+            "intentId": "typist#8",
+            "actorId": "typist",
+            "reason": "dependent-on-escalated"
+          },
+          {
+            "intentId": "typist#9",
+            "actorId": "typist",
+            "reason": "dependent-on-escalated"
+          }
+        ],
+        "log": [
+          {
+            "intentId": "typist#0",
+            "actorId": "typist",
+            "baseSeq": 0,
+            "txnId": null,
+            "type": "insert_text",
+            "payload": {
+              "syncId": "YXZHFp_JXACfQTPmR6Y6MQ",
+              "field": "content",
+              "offset": 0,
+              "text": "k"
+            }
+          },
+          {
+            "intentId": "typist#1",
+            "actorId": "typist",
+            "baseSeq": 1,
+            "txnId": null,
+            "type": "insert_text",
+            "payload": {
+              "syncId": "YXZHFp_JXACfQTPmR6Y6MQ",
+              "field": "content",
+              "offset": 1,
+              "text": "i"
+            }
+          },
+          {
+            "intentId": "typist#2",
+            "actorId": "typist",
+            "baseSeq": 2,
+            "txnId": null,
+            "type": "insert_text",
+            "payload": {
+              "syncId": "YXZHFp_JXACfQTPmR6Y6MQ",
+              "field": "content",
+              "offset": 2,
+              "text": "l"
+            }
+          },
+          {
+            "intentId": "typist#3",
+            "actorId": "typist",
+            "baseSeq": 3,
+            "txnId": null,
+            "type": "insert_text",
+            "payload": {
+              "syncId": "YXZHFp_JXACfQTPmR6Y6MQ",
+              "field": "content",
+              "offset": 3,
+              "text": "o"
+            }
+          },
+          {
+            "intentId": "peer#4",
+            "actorId": "peer",
+            "baseSeq": 0,
+            "txnId": null,
+            "type": "insert_text",
+            "payload": {
+              "syncId": "YXZHFp_JXACfQTPmR6Y6MQ",
+              "field": "content",
+              "offset": 35,
+              "text": " "
+            }
+          },
+          {
+            "intentId": "typist#5",
+            "actorId": "typist",
+            "baseSeq": 4,
+            "txnId": null,
+            "type": "insert_text",
+            "payload": {
+              "syncId": "YXZHFp_JXACfQTPmR6Y6MQ",
+              "field": "content",
+              "offset": 4,
+              "text": " "
+            }
+          },
+          {
+            "intentId": "typist#10",
+            "actorId": "typist",
+            "baseSeq": 6,
+            "txnId": null,
+            "type": "insert_text",
+            "payload": {
+              "syncId": "YXZHFp_JXACfQTPmR6Y6MQ",
+              "field": "content",
+              "offset": 5,
+              "text": "x"
+            }
+          }
+        ],
+        "finalDoc": {
+          "root": [
+            {
+              "syncId": "YXZHFp_JXACfQTPmR6Y6MQ",
+              "blockType": "core/paragraph",
+              "attrs": {},
+              "attrVersions": {},
+              "fields": {
+                "content": {
+                  "text": "kilo xIt was a dark and stormy night. ",
                   "formats": []
                 }
               },

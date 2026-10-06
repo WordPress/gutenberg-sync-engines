@@ -352,6 +352,67 @@ for ( const [ seed, steps, clientCount, agentChance, propertyOps ] of [
 	} );
 }
 
+/*
+ * Hand-authored cross-request case: a typist whose editor keeps showing a
+ * set-aside letter. The browser cannot drop the letter mid-burst, so every
+ * later keystroke in the paragraph still counts it in its offset and keeps
+ * the old baseSeq. The server seeds each batch's frame state from the
+ * actor's earlier proposals (seedFrameState), so those keystrokes park as
+ * dependents (rule 6 across requests) instead of landing misplaced; a
+ * keystroke authored after the typist observed the clash is clean.
+ */
+{
+	const revision = { postId: 10, revisionId: 100 };
+	const recorder = [];
+	const server = createServer( makeGenesisDoc( revision ) );
+	server.recorder = recorder;
+	const p1 = genesisSyncId( revision, [ 0 ] );
+	let counters = 0;
+	const key = ( actorId, text, offset, baseSeq ) =>
+		createIntent(
+			IntentTypes.INSERT_TEXT,
+			{ syncId: p1, field: 'content', offset, text },
+			{ actorId, baseSeq, intentId: `${ actorId }#${ counters++ }` }
+		);
+	// "kilo" at the start, one batch per key: log 0..3, all accepted.
+	for ( const [ i, ch ] of [ ...'kilo' ].entries() ) {
+		serverIngestBatch( server, [ key( 'typist', ch, i, i ) ] );
+	}
+	// A peer appends a space at the end of the 31-character genesis
+	// paragraph: log 4.
+	serverIngestBatch( server, [ key( 'peer', ' ', 31, 0 ) ] );
+	// The typist has not seen it: " " applies, "l" clashes (rule 5).
+	serverIngestBatch( server, [
+		key( 'typist', ' ', 4, 4 ),
+		key( 'typist', 'l', 5, 4 ),
+	] );
+	// Later keystrokes, separate batches, same frame: dependents.
+	serverIngestBatch( server, [ key( 'typist', 'i', 6, 4 ) ] );
+	serverIngestBatch( server, [
+		key( 'typist', 'm', 7, 4 ),
+		key( 'typist', 'a', 8, 4 ),
+	] );
+	// Authored after observing the clash: clean.
+	serverIngestBatch( server, [ key( 'typist', 'x', 5, server.log.length ) ] );
+	CASES.push( {
+		name: 'set-aside letter remembered across requests (rule 6 seeded)',
+		genesis: revision,
+		batches: recorder,
+		expected: {
+			dispositions: Object.fromEntries( server.dispositions ),
+			proposals: server.proposals.map( ( proposal ) => ( {
+				intentId: proposal.intent.intentId,
+				actorId: proposal.actorId,
+				reason: proposal.reason,
+			} ) ),
+			log: server.log,
+			finalDoc: JSON.parse(
+				canonicalJson( serverDocAt( server, server.log.length ) )
+			),
+		},
+	} );
+}
+
 process.stdout.write(
 	JSON.stringify(
 		{

@@ -388,6 +388,69 @@ describe( 'intent-log session codec', () => {
 		expect( wire.doc().root[ 0 ].attrs.align ).toBe( 'wide' );
 	} );
 
+	it( 'seeds replans from its own parked rows: a keystroke that still counts a set-aside letter is a dependent, on the client and the server alike', () => {
+		const wire = makeWireServer();
+		const alice = makeSession( 1, 11 );
+		const bob = makeSession( 2, 22 );
+		const aliceLink = connect( wire, alice );
+		const bobLink = connect( wire, bob );
+		aliceLink.poll();
+		bobLink.poll();
+
+		// Alice appends a space; Bob has not seen it when he types "ab".
+		alice.author( 'insert_text', { syncId: 'p1', offset: 11, text: ' ' } );
+		aliceLink.poll();
+		bob.author( 'insert_text', { syncId: 'p1', offset: 0, text: 'a' } );
+		bob.author( 'insert_text', { syncId: 'p1', offset: 1, text: 'b' } );
+		const first = bobLink.poll()!;
+		expect( first.map( ( d ) => d.status ) ).toEqual( [
+			'applied',
+			'escalated',
+		] );
+		// The parked row carries the settling seq: Alice's entry at 0.
+		expect( bob.getProposals()[ 0 ] ).toMatchObject( {
+			reason: 'frame-conflict',
+			atSeq: 0,
+		} );
+
+		// Bob's editor still shows the "b", so "c" is typed at offset 2
+		// (counting it) and at the frame Bob last displayed (seq 0).
+		const [ c ] = bob.authorBatch(
+			[
+				{
+					type: 'insert_text',
+					payload: { syncId: 'p1', offset: 2, text: 'c' },
+				},
+			],
+			{ baseSeq: 0, observe: false }
+		);
+		expect( c.baseSeq ).toBe( 0 );
+		// Predicted as the dependent it will be: absent from Bob's canvas.
+		expect( bob.getDocument()!.root[ 0 ].fields.content.text ).toBe(
+			'aHello world '
+		);
+		const second = bobLink.poll()!;
+		expect( second[ 0 ] ).toMatchObject( {
+			status: 'escalated',
+			reason: 'dependent-on-escalated',
+		} );
+		aliceLink.poll();
+		const serverJson = canonicalJson( wire.doc() );
+		expect( canonicalJson( bob.getDocument()! ) ).toBe( serverJson );
+		expect( canonicalJson( alice.getDocument()! ) ).toBe( serverJson );
+		expect( wire.doc().root[ 0 ].fields.content.text ).toBe(
+			'aHello world '
+		);
+
+		// Authored after Bob observed the clash (at his cursor): clean.
+		bob.author( 'insert_text', { syncId: 'p1', offset: 1, text: 'x' } );
+		const third = bobLink.poll()!;
+		expect( third[ 0 ] ).toMatchObject( { status: 'applied' } );
+		expect( wire.doc().root[ 0 ].fields.content.text ).toBe(
+			'axHello world '
+		);
+	} );
+
 	it( 'settles a voided intent through its marker row', () => {
 		const wire = makeWireServer();
 		const alice = makeSession( 1, 11 );

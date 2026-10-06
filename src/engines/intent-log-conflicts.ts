@@ -443,6 +443,17 @@ export function buildConflictRecords(
 				base,
 				proposed,
 				current: currentSide,
+				/*
+				 * The server remembers an author's set-aside edits to a
+				 * block across requests and sets their later typing there
+				 * aside as dependents (rule 6 seeded from the parked rows),
+				 * and those fold into this record; a property write has no
+				 * text frame for that. The card then waits for a typing
+				 * pause so the record carries the whole sentence.
+				 */
+				...( 'merge' === draft.kind && undefined === draft.property
+					? { followsTyping: true }
+					: {} ),
 			},
 			members: draft.members,
 			blockIds: draft.blockIds,

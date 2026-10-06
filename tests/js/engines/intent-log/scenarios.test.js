@@ -533,3 +533,83 @@ test( 'attribution: a transformed, escalated proposal still carries its original
 	assert.equal( proposal.intent.actorId, 'bob' );
 	assert.equal( proposal.intent.intentId, 'bob#0' );
 } );
+
+/*
+ * A typist whose editor keeps showing a set-aside letter. The browser
+ * cannot drop the letter mid-burst (pushing into the editor would eat the
+ * next keystrokes), so every later keystroke in that paragraph is authored
+ * with the letter still counted in its offset and at a baseSeq that
+ * predates the clash. The server must remember the set-aside letter
+ * across requests: each later keystroke is a dependent of it (rule 6),
+ * never an accepted edit at an offset the server's text does not have.
+ */
+test( 'REGRESSION: later keystrokes after a set-aside letter are dependents across requests', () => {
+	const server = createServer(
+		createDocument( [
+			{
+				syncId: 'p1',
+				blockType: 'core/paragraph',
+				text: 'Contested paragraph',
+			},
+		] )
+	);
+	let n = 0;
+	const key = ( actorId, text, offset, baseSeq ) =>
+		createIntent(
+			IntentTypes.INSERT_TEXT,
+			{ syncId: 'p1', offset, text },
+			{ actorId, baseSeq, intentId: `${ actorId }#${ n++ }` }
+		);
+	// "kilo" at the start, one request per key: log 0..3, all accepted.
+	for ( const [ i, ch ] of [ ...'kilo' ].entries() ) {
+		serverIngestBatch( server, [ key( 'typist', ch, i, i ) ] );
+	}
+	// A peer appends a space at the end: log 4.
+	serverIngestBatch( server, [ key( 'peer', ' ', 19, 0 ) ] );
+	// The typist has not seen the peer's space: every keystroke still
+	// carries baseSeq 4. " " is accepted; "l" clashes (rule 5).
+	const first = serverIngestBatch( server, [
+		key( 'typist', ' ', 4, 4 ),
+		key( 'typist', 'l', 5, 4 ),
+	] );
+	assert.deepEqual(
+		first.map( ( d ) => d.status ),
+		[ 'applied', 'escalated' ]
+	);
+	assert.equal( server.proposals[ 0 ].reason, 'frame-conflict' );
+	// The settling entry was the peer's space at log 4.
+	assert.equal( server.proposals[ 0 ].atSeq, 4 );
+
+	// The typist's editor still shows the "l", so "i" is typed at offset
+	// 6 (counting it) and "ma" follow. Separate requests, same frame.
+	const second = serverIngestBatch( server, [ key( 'typist', 'i', 6, 4 ) ] );
+	const third = serverIngestBatch( server, [
+		key( 'typist', 'm', 7, 4 ),
+		key( 'typist', 'a', 8, 4 ),
+	] );
+	for ( const disposition of [ ...second, ...third ] ) {
+		assert.deepEqual( disposition, {
+			status: 'escalated',
+			reason: 'dependent-on-escalated',
+		} );
+	}
+	// The dependents settle at the same clash as the letter they follow.
+	for ( const proposal of server.proposals.slice( 1 ) ) {
+		assert.equal( proposal.atSeq, 4 );
+	}
+	assert.equal(
+		getBlock( headDoc( server ), 'p1' ).fields.content.text,
+		'kilo Contested paragraph '
+	);
+
+	// A keystroke authored AFTER the typist observed the clash (its
+	// editor dropped the "l") is clean, exactly as within one request.
+	const later = serverIngestBatch( server, [
+		key( 'typist', 'x', 5, server.log.length ),
+	] );
+	assert.equal( later[ 0 ].status, 'applied' );
+	assert.equal(
+		getBlock( headDoc( server ), 'p1' ).fields.content.text,
+		'kilo xContested paragraph '
+	);
+} );

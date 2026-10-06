@@ -208,6 +208,71 @@ test( 'pipelined offline edits with NO remote interference apply as authored', (
 	);
 } );
 
+test( 'a park recorded at flush seeds later replans: a pending intent at the old base is predicted the dependent the server makes of it', () => {
+	const server = createServer( baseDoc() );
+	const alice = createClient( 'alice', baseDoc() );
+	const bob = createClient( 'bob', baseDoc() );
+	authorIntent(
+		alice,
+		createIntent(
+			IntentTypes.INSERT_TEXT,
+			{ syncId: 'p1', offset: 11, text: '!' },
+			{ actorId: 'alice', baseSeq: 0, intentId: 'alice#0' }
+		)
+	);
+	flushClient( server, alice );
+	// Bob, behind, types "ab": "a" applies, "b" clashes (rule 5).
+	for ( const [ offset, text ] of [
+		[ 0, 'a' ],
+		[ 1, 'b' ],
+	] ) {
+		authorIntent(
+			bob,
+			createIntent(
+				IntentTypes.INSERT_TEXT,
+				{ syncId: 'p1', offset, text },
+				{ actorId: 'bob', baseSeq: 0, intentId: `bob#${ text }` }
+			)
+		);
+	}
+	// The entity bridge keeps the log sliceable from the frame the editor
+	// displays (retainFrom); the park survives the post-flush trim with it.
+	bob.retainFrom = 0;
+	const report = flushClient( server, bob );
+	assert.equal( report[ 1 ].actual.reason, 'frame-conflict' );
+	assert.deepEqual( bob.parked, [
+		{ intent: server.proposals[ 0 ].intent, atSeq: 0 },
+	] );
+
+	// A live editor keeps showing the "b": "c" is authored with it counted
+	// and at the old base, as the entity bridge does mid-burst.
+	const c = createIntent(
+		IntentTypes.INSERT_TEXT,
+		{ syncId: 'p1', offset: 2, text: 'c' },
+		{ actorId: 'bob', baseSeq: 0, intentId: 'bob#c' }
+	);
+	authorIntent( bob, c );
+	replanClient( bob );
+	assert.deepEqual( predictedDisposition( bob, 'bob#c' ), {
+		status: 'escalated',
+		reason: 'dependent-on-escalated',
+	} );
+	assert.equal(
+		getBlock( bob.doc, 'p1' ).fields.content.text,
+		'aHello world!'
+	);
+	const [ row ] = flushClient( server, bob );
+	assert.deepEqual( row.actual, row.predicted );
+	assert.equal(
+		getBlock( headDoc( server ), 'p1' ).fields.content.text,
+		'aHello world!'
+	);
+	assert.equal(
+		canonicalJson( bob.doc ),
+		canonicalJson( headDoc( server ) )
+	);
+} );
+
 test( 'an intent authored AFTER observing the conflicting entry is clean (baseSeq scoping)', () => {
 	const server = createServer( baseDoc() );
 	const alice = makeActorClient( 'alice' );

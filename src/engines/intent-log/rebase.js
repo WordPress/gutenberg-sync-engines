@@ -336,6 +336,53 @@ export function createFrameState() {
 }
 
 /**
+ * A copy of a frame state, so a plan can extend it without changing the
+ * caller's copy.
+ *
+ * @param {FrameState} frame Frame state.
+ * @return {FrameState} The copy.
+ */
+export function cloneFrameState( frame ) {
+	return {
+		ownWrites: new Map( frame.ownWrites ),
+		broken: new Map( frame.broken ),
+	};
+}
+
+/**
+ * The frame state one actor's EARLIER set-aside intents leave behind, for
+ * planBatch to start from (its `seed`): each one is a phantom write (and a
+ * broken created block) settled at its clash, exactly as recordFrameOutcome
+ * records an escalation within a batch.
+ *
+ * Why a batch should start from it: the frame rules assume an author drops
+ * a set-aside effect from their local state once they observe the entry
+ * that settled it, and re-authors on a clean frame. A live editor cannot
+ * always do that mid-burst, so its later edits keep counting the set-aside
+ * text and keep their old baseSeq. Rule 6 already treats such an intent as
+ * a dependent (baseSeq at or before the settlement) — but only while the
+ * batch frame state remembers the phantom. Seeding the state from the
+ * actor's stored proposals makes rule 6 hold across requests, so a
+ * typist's later keystrokes park beside the first one instead of landing
+ * at offsets the server's text does not have. Scoping is unchanged: an
+ * intent authored after its author observed the clash is clean.
+ *
+ * @param {Array<{ intent: Intent, atSeq: number }>} parked The actor's
+ *                                                          set-aside intents
+ *                                                          (ORIGINAL payloads)
+ *                                                          with the log index
+ *                                                          that settled each.
+ * @return {FrameState} Frame state.
+ */
+export function seedFrameState( parked ) {
+	const frame = createFrameState();
+	for ( const { intent, atSeq } of parked ) {
+		recordFrameOutcome( frame, intent, false, atSeq );
+	}
+	return frame;
+}
+
+/**
  * Intra-unit frame conflict: unit member `index` reads a text frame that an
  * EARLIER member of the same unit writes. Its coordinates assume that write;
  * if another actor also wrote the block concurrently, the one-sided
@@ -496,7 +543,13 @@ export function recordFrameOutcome( frame, intent, applied, atSeq = null ) {
 		if ( ! applied ) {
 			const seq = Math.max( atSeq ?? 0, current?.atSeq ?? -1 );
 			frame.ownWrites.set( id, { state: 'phantom', atSeq: seq } );
-		} else if ( current?.state !== 'phantom' ) {
+		} else if (
+			current?.state !== 'phantom' ||
+			current.atSeq < intent.baseSeq
+		) {
+			// An applied write authored AFTER the author observed the
+			// phantom's settlement was authored on a frame without it
+			// (rule 6's scoping), so the key's frame is clean again.
 			frame.ownWrites.set( id, { state: 'applied' } );
 		}
 	}
@@ -1053,15 +1106,24 @@ export function groupUnits( intents ) {
  *                                                       guarantee every
  *                                                       intent's baseSeq >=
  *                                                       firstSeq.
+ * @param {FrameState|null}                   [seed]     Frame state to
+ *                                                       start from: the
+ *                                                       actor's earlier
+ *                                                       set-aside intents
+ *                                                       (seedFrameState),
+ *                                                       left unchanged.
+ *                                                       Null starts clean.
  * @return {{ rows: PlanRow[], headDoc: EngineDocument }} { rows, headDoc }.
  *                  Each row: { intent, disposition, accepted, proposal } —
  *                  `accepted` is the transformed intent to append (null if
  *                  not accepted), `proposal` the proposal-lane record (null
- *                  if not escalated).
+ *                  if not escalated) carrying `atSeq`, the log index of the
+ *                  entry that settled it.
  */
-export function planBatch( units, log, docAt, firstSeq = 0 ) {
-	// Frame state spans the whole batch: one client's sequential authoring.
-	const frame = createFrameState();
+export function planBatch( units, log, docAt, firstSeq = 0, seed = null ) {
+	// Frame state spans the whole batch: one client's sequential authoring,
+	// continued from the actor's earlier set-aside work when seeded.
+	const frame = seed ? cloneFrameState( seed ) : createFrameState();
 	/** @type {PlanRow[]} */
 	const rows = [];
 	let headDoc = docAt( firstSeq + log.length );
@@ -1133,6 +1195,7 @@ export function planBatch( units, log, docAt, firstSeq = 0 ) {
 					intent: result.intent,
 					actorId: intent.actorId,
 					reason: escalation.reason,
+					atSeq: escalation.atSeq,
 				};
 			} else if ( result.outcome === 'void' ) {
 				disposition = { status: 'voided', reason: result.reason };
@@ -1211,11 +1274,20 @@ export function serverIngestBatch( server, intents ) {
 			} )
 		)
 		.filter( ( unit ) => unit.length > 0 );
+	// A batch is one actor's authoring (production stamps actorId from the
+	// authenticated request), so its frame continues from that actor's
+	// earlier set-aside intents (see seedFrameState).
+	const actorId = units[ 0 ]?.[ 0 ]?.actorId;
 	const { rows, headDoc } = planBatch(
 		units,
 		server.log,
 		( seq ) => serverDocAt( server, seq ),
-		server.firstSeq ?? 0
+		server.firstSeq ?? 0,
+		seedFrameState(
+			server.proposals.filter(
+				( proposal ) => proposal.actorId === actorId
+			)
+		)
 	);
 	for ( const row of rows ) {
 		server.dispositions.set( row.intent.intentId, row.disposition );

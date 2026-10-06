@@ -62,6 +62,11 @@ export interface ClientReplica extends LogReplica {
 	 * needs; null imposes nothing (see trimClientLog).
 	 */
 	retainFrom: number | null;
+	/**
+	 * This actor's set-aside intents with the log index that settled each,
+	 * the seed every replan starts from (see seedFrameState).
+	 */
+	parked: Array< { intent: IntentEnvelope; atSeq: number } >;
 	baseDoc: EngineDocument;
 	doc: EngineDocument;
 	predictions: Map< string, IntentDisposition >;
@@ -72,6 +77,8 @@ export interface IntentProposal {
 	intent: IntentEnvelope;
 	actorId: string;
 	reason: string;
+	/** Log index of the entry that settled it (see frameEscalation). */
+	atSeq: number;
 }
 
 /** The planner's verdict on one intent of a batch. */

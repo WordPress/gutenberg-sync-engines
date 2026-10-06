@@ -899,9 +899,15 @@ applies.
   typing pause while the client has an open record of its own (the
   rest of the sentence would otherwise wait out the 10 s), and closes the rows a
   newer row of the same author and blocks replaces (`superseded`).
-  intent-log must NOT opt in yet: after a park it accepts the author's
-  next keystrokes at offsets that count the parked text, which
-  scrambles the paragraph. The early card is what limits that today.
+  intent-log opts in for block records too: the planner starts every
+  batch from the actor's earlier set-aside intents (`seedFrameState`,
+  the optional last argument of `planBatch` / `plan_batch`, seeded by
+  the PHP engine from the room's parked rows and by the session from
+  its own), so the keystrokes that follow a set-aside one park beside
+  it as `dependent-on-escalated` until the author's editor observes
+  the clash. Before that, a later request planned from a clean frame
+  accepted them at offsets that counted the set-aside text and
+  scrambled the paragraph; the early card was the only limit.
   intent-log builds records in `src/engines/intent-log-conflicts.ts`
   and authors an accepted result as a new change; de-rtc parks
   escalations as durable `parked` rows and resolves them over its REST

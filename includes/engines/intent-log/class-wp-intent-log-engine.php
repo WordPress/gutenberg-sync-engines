@@ -634,7 +634,17 @@ if ( ! class_exists( 'WP_Intent_Log_Engine' ) ) {
 				}
 			}
 
-			$plan = WP_Intent_Log_Planner::plan_batch( $units, $state['log'], $doc_at, $base_seq );
+			// The batch's frame continues from this actor's earlier set-aside
+			// intents, so a typist whose editor still shows a set-aside
+			// letter parks the keystrokes that follow it beside it (rule 6
+			// across requests) instead of landing them misplaced.
+			$plan = WP_Intent_Log_Planner::plan_batch(
+				$units,
+				$state['log'],
+				$doc_at,
+				$base_seq,
+				WP_Intent_Log_Planner::seed_frame_state( $state['parked'][ $actor_id ] ?? array() )
+			);
 
 			// Commit the plan to storage.
 			foreach ( $plan['rows'] as $row ) {
@@ -1347,6 +1357,7 @@ if ( ! class_exists( 'WP_Intent_Log_Engine' ) ) {
 			$settled        = array();
 			$proposals_open = array();
 			$resolved       = array();
+			$parked         = array();
 			$base_seq       = 0;
 
 			foreach ( $rows as $row ) {
@@ -1382,6 +1393,23 @@ if ( ! class_exists( 'WP_Intent_Log_Engine' ) ) {
 							'reason' => $decoded['reason'],
 						);
 						$proposals_open[ $decoded['intent']['intentId'] ] = true;
+
+						/*
+						 * A planner escalation stays part of its author's
+						 * frame until the author observes the clash
+						 * (resolved or not): later batches from that actor
+						 * plan from it (see seed_frame_state). The settling
+						 * seq rides the row; a row written before it was
+						 * recorded falls back to the head at parking, the
+						 * conservative choice. Security holds are not frame
+						 * phantoms and are left out.
+						 */
+						if ( self::ESCALATION_REQUIRES_APPROVAL !== $decoded['reason'] ) {
+							$parked[ $decoded['actorId'] ][] = array(
+								'intent' => $decoded['intent'],
+								'atSeq'  => isset( $decoded['atSeq'] ) ? (int) $decoded['atSeq'] : (int) ( $decoded['at'] ?? 0 ) - 1,
+							);
+						}
 						break;
 					case self::UPDATE_TYPE_RESOLVED:
 						unset( $proposals_open[ $decoded['proposalId'] ] );
@@ -1405,6 +1433,19 @@ if ( ! class_exists( 'WP_Intent_Log_Engine' ) ) {
 				}
 			}
 
+			// Phantoms settled below the retained window can poison no
+			// plannable intent (stale bases void before planning).
+			foreach ( $parked as $actor => $parks ) {
+				$parked[ $actor ] = array_values(
+					array_filter(
+						$parks,
+						static function ( $park ) use ( $base_seq ) {
+							return $park['atSeq'] >= $base_seq;
+						}
+					)
+				);
+			}
+
 			$state                     = array(
 				'genesis'        => $genesis,
 				'log'            => $log,
@@ -1413,6 +1454,9 @@ if ( ! class_exists( 'WP_Intent_Log_Engine' ) ) {
 				// resolutions) and resolved ids, for resolution validation.
 				'proposals_open' => $proposals_open,
 				'resolved'       => $resolved,
+				// Each actor's planner escalations with their settling seq:
+				// the frame state the actor's next batch plans from.
+				'parked'         => $parked,
 				// Engine seq of the reconstructed genesis (0, or the
 				// checkpoint's seq): log[i] is engine seq base_seq + i.
 				'base_seq'       => $base_seq,

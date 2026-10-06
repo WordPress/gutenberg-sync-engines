@@ -8,7 +8,7 @@ import {
 	predictedDisposition,
 	replanClient,
 } from './intent-log/client.js';
-import { serverDocAt } from './intent-log/rebase.js';
+import { ESCALATION_REASONS, serverDocAt } from './intent-log/rebase.js';
 import { createIntent } from './intent-log/intents.js';
 import type {
 	EngineDocument,
@@ -86,6 +86,8 @@ export interface IntentLogProposal {
 	intent: IntentEnvelope;
 	actorId: string;
 	reason: string;
+	/** Log index of the entry that settled it (planner escalations). */
+	atSeq?: number;
 	at?: number;
 	time?: number;
 	context?: { excerpt?: string };
@@ -442,6 +444,40 @@ export function createIntentLogSession(
 	};
 
 	/**
+	 * The settling seq of one of this actor's own planner escalations, or
+	 * null when the proposal is not one (a security hold is not a frame
+	 * phantom) or carries no seq. Rows written before the seq was recorded
+	 * fall back to the head at parking, the conservative choice.
+	 *
+	 * @param proposal A parked proposal.
+	 * @return The settling seq, or null.
+	 */
+	const ownParkedAtSeq = ( proposal: IntentLogProposal ): number | null => {
+		if (
+			proposal.actorId !== actorId ||
+			! ESCALATION_REASONS.has( proposal.reason )
+		) {
+			return null;
+		}
+		if ( 'number' === typeof proposal.atSeq ) {
+			return proposal.atSeq;
+		}
+		return 'number' === typeof proposal.at ? proposal.at - 1 : null;
+	};
+
+	/**
+	 * This actor's set-aside intents with their settling seqs, the frame
+	 * seed a fresh replica's replans start from (see client.js `parked`).
+	 *
+	 * @return The parks.
+	 */
+	const ownParked = (): Array< { intent: IntentEnvelope; atSeq: number } > =>
+		proposals.flatMap( ( proposal ) => {
+			const atSeq = ownParkedAtSeq( proposal );
+			return null === atSeq ? [] : [ { intent: proposal.intent, atSeq } ];
+		} );
+
+	/**
 	 * Recomputes the replica's retention floor: the log must stay sliceable
 	 * from the observed frame (the next capture authors at it), the undo
 	 * pin (inverse derivation reads documents at retained seqs), AND the
@@ -582,6 +618,7 @@ export function createIntentLogSession(
 							decoded.doc as EngineDocument,
 							snapshotSeq
 						);
+						replica.parked = ownParked();
 						observedSeq = snapshotSeq;
 						notifyChange();
 						return;
@@ -611,6 +648,7 @@ export function createIntentLogSession(
 							decoded.doc as EngineDocument,
 							snapshotSeq
 						);
+						replica.parked = ownParked();
 						observedSeq = snapshotSeq;
 						// New epoch: rows after the checkpoint are new to
 						// this replica even if their ids were seen before.
@@ -674,8 +712,23 @@ export function createIntentLogSession(
 					 * concurrent same-paragraph typing left the loser's
 					 * first escalated keystroke on their canvas forever.)
 					 */
+					/*
+					 * One of our own planner escalations also seeds every
+					 * later replan: a pending intent that still counts the
+					 * set-aside text (same old baseSeq) is predicted as the
+					 * dependent the server will make of it, so the
+					 * optimistic document never shows it misplaced.
+					 */
+					const atSeq = ownParkedAtSeq( proposal );
+					if ( replica && null !== atSeq ) {
+						replica.parked.push( {
+							intent: proposal.intent,
+							atSeq,
+						} );
+					}
 					if (
-						settlePending( proposal.intent.intentId ) &&
+						( settlePending( proposal.intent.intentId ) ||
+							null !== atSeq ) &&
 						replica
 					) {
 						replanClient( replica );

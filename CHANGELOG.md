@@ -29,6 +29,11 @@ release, which the release script generates from the commit history.
     typing in. The typing that follows a set-aside edit joins the same
     review record, so the reviewer sees the whole sentence.
 
+-   intent-log: the same card wait. The server now remembers a person's
+    set-aside edits between requests, so the typing that follows one
+    is set aside into the same record instead of landing in the
+    paragraph at the wrong place.
+
 -   A "Changes to review" panel in the document sidebar. It lists the
     set-aside changes that have no block to show a card on, such as a
     post title or a proposed new block.

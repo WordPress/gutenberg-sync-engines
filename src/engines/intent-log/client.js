@@ -28,6 +28,7 @@ import { applyIntent } from './reducer.js';
 import {
 	groupUnits,
 	planBatch,
+	seedFrameState,
 	serverDocAt,
 	serverIngestBatch,
 } from './rebase.js';
@@ -75,6 +76,14 @@ export function createClient( actorId, initialDoc, firstSeq = 0 ) {
 		// editor tree against the document that tree last reflected — set it
 		// to that state's seq.
 		retainFrom: null,
+		// This actor's set-aside intents with the log index that settled
+		// each: the seed every replan starts from, so a pending intent that
+		// still counts set-aside text is predicted as the dependent the
+		// server will make of it (see seedFrameState). The owner records a
+		// park here when its proposal row arrives (flushClient does it from
+		// the server directly); nothing below firstSeq can matter (see
+		// trimClientLog).
+		parked: [],
 		log: [],
 		docCache: new Map( [ [ firstSeq, cloneDocument( initialDoc ) ] ] ),
 		baseDoc: cloneDocument( initialDoc ),
@@ -97,7 +106,8 @@ function replan( client ) {
 		groupUnits( client.outbox ),
 		client.log,
 		( seq ) => serverDocAt( client, seq ),
-		client.firstSeq
+		client.firstSeq,
+		seedFrameState( client.parked )
 	);
 	client.predictions = new Map(
 		rows.map( ( row ) => [ row.intent.intentId, row.disposition ] )
@@ -129,6 +139,9 @@ export function trimClientLog( client ) {
 	const floorDoc = serverDocAt( client, floor );
 	client.log = client.log.slice( floor - client.firstSeq );
 	client.firstSeq = floor;
+	// A park settled below the floor can poison no intent authored at or
+	// above it (rule 6 compares baseSeq to the settlement).
+	client.parked = client.parked.filter( ( park ) => park.atSeq >= floor );
 	client.docCache = new Map( [
 		[ floor, floorDoc ],
 		[ client.cursor, client.baseDoc ],
@@ -236,6 +249,16 @@ export function flushClient( server, client ) {
 	const dispositions = serverIngestBatch( server, batch );
 	for ( let i = 0; i < report.length; i++ ) {
 		report[ i ].actual = dispositions[ i ];
+	}
+	// The parks this flush filed, as the proposal rows would deliver them.
+	const batchIds = new Set( batch.map( ( intent ) => intent.intentId ) );
+	for ( const proposal of server.proposals ) {
+		if ( batchIds.has( proposal.intent.intentId ) ) {
+			client.parked.push( {
+				intent: proposal.intent,
+				atSeq: proposal.atSeq,
+			} );
+		}
 	}
 	client.outbox = [];
 	client.predictions = new Map();

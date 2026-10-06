@@ -275,6 +275,65 @@ class Tests_Collaboration_WpIntentLogEngine extends WP_Test_REST_TestCase {
 		$this->assertSame( 'u' . self::$editor_id . 'c202', $proposal['actorId'] );
 	}
 
+	/**
+	 * A typist whose editor keeps showing a set-aside letter: the later
+	 * keystrokes still count it and keep the old baseSeq. The engine seeds
+	 * each request's frame state from the actor's parked rows, so they park
+	 * as dependents across requests instead of landing misplaced.
+	 */
+	public function test_later_keystrokes_after_a_set_aside_letter_park_as_dependents_across_requests() {
+		$target = self::paragraph_id();
+		$typed  = function ( string $id, int $offset, string $text, int $base_seq ) use ( $target ): array {
+			return self::intent_update(
+				array(
+					'intentId' => $id,
+					'baseSeq'  => $base_seq,
+					'type'     => 'insert_text',
+					'payload'  => array(
+						'syncId' => $target,
+						'field'  => 'content',
+						'offset' => $offset,
+						'text'   => $text,
+					),
+				)
+			);
+		};
+
+		// The typist writes "ki" at the start: log 0 and 1.
+		$this->poll( array( $typed( 't-k', 0, 'k', 0 ) ) );
+		$this->poll( array( $typed( 't-i', 1, 'i', 1 ) ) );
+		// A peer inserts at the start too, unaware: log 2.
+		$this->poll( array( $typed( 'p-z', 0, 'Z', 0 ) ), array( 'client_id' => 202 ) );
+
+		// The typist has not seen the peer: "l" applies, "o" clashes.
+		$first = $this->poll( array( $typed( 't-l', 2, 'l', 2 ), $typed( 't-o', 3, 'o', 2 ) ) );
+		$this->assertSame( 'applied', $first['dispositions'][0]['status'] );
+		$this->assertSame( 'escalated', $first['dispositions'][1]['status'] );
+		$this->assertSame( 'frame-conflict', $first['dispositions'][1]['reason'] );
+
+		// The next request, same frame: a dependent of the set-aside "o".
+		$second = $this->poll( array( $typed( 't-space', 4, ' ', 2 ) ) );
+		$this->assertSame( 'escalated', $second['dispositions'][0]['status'] );
+		$this->assertSame( 'dependent-on-escalated', $second['dispositions'][0]['reason'] );
+
+		// The parked rows carry the settling seq (the peer's entry at 2).
+		$catchup   = $this->poll( array(), array( 'client_id' => 303 ) );
+		$proposals = array();
+		foreach ( $catchup['updates'] as $update ) {
+			if ( WP_Intent_Log_Engine::UPDATE_TYPE_PARKED === $update['type'] ) {
+				$proposals[] = json_decode( $update['data'], true );
+			}
+		}
+		$this->assertCount( 2, $proposals );
+		$this->assertSame( array( 't-o', 't-space' ), array_column( array_column( $proposals, 'intent' ), 'intentId' ) );
+		$this->assertSame( array( 2, 2 ), array_column( $proposals, 'atSeq' ) );
+
+		// A keystroke authored after the typist observed the clash is clean.
+		$head  = 4; // k, i, Z, l.
+		$third = $this->poll( array( $typed( 't-x', 0, 'x', $head ) ) );
+		$this->assertSame( 'applied', $third['dispositions'][0]['status'] );
+	}
+
 	public function test_redelivered_intent_settles_identically_without_growing_the_log() {
 		$delete = self::intent_update(
 			array(

@@ -472,7 +472,10 @@ if ( ! class_exists( 'WP_Intent_Log_Planner' ) ) {
 						'state' => 'phantom',
 						'atSeq' => $seq,
 					);
-				} elseif ( ( $current['state'] ?? null ) !== 'phantom' ) {
+				} elseif ( ( $current['state'] ?? null ) !== 'phantom' || $current['atSeq'] < $intent['baseSeq'] ) {
+					// An applied write authored AFTER the author observed the
+					// phantom's settlement was authored on a frame without it
+					// (rule 6's scoping), so the key's frame is clean again.
 					$frame['ownWrites'][ $key ] = array( 'state' => 'applied' );
 				}
 			}
@@ -481,6 +484,34 @@ if ( ! class_exists( 'WP_Intent_Log_Planner' ) ) {
 					$frame['broken'][ $id ] = max( $at_seq ?? 0, $frame['broken'][ $id ] ?? -1 );
 				}
 			}
+		}
+
+		/**
+		 * The frame state one actor's EARLIER set-aside intents leave behind,
+		 * for plan_batch() to start from (mirrors seedFrameState() in the JS
+		 * twin): each one is a phantom write (and a broken created block)
+		 * settled at its clash, exactly as record_frame_outcome() records an
+		 * escalation within a batch. Seeding makes rule 6 hold across
+		 * requests: a typist whose editor still shows a set-aside letter
+		 * keeps authoring with it counted and at the old baseSeq, and every
+		 * such keystroke parks beside the first one instead of landing at an
+		 * offset the server's text does not have.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param array $parked The actor's set-aside intents: array( array(
+		 *                      'intent' => intent, 'atSeq' => int ), ... ).
+		 * @return array Frame state.
+		 */
+		public static function seed_frame_state( array $parked ): array {
+			$frame = array(
+				'ownWrites' => array(),
+				'broken'    => array(),
+			);
+			foreach ( $parked as $park ) {
+				self::record_frame_outcome( $frame, $park['intent'], false, (int) $park['atSeq'] );
+			}
+			return $frame;
 		}
 
 		/**
@@ -929,13 +960,20 @@ if ( ! class_exists( 'WP_Intent_Log_Planner' ) ) {
 		 * @param array    $log       Accepted log (batch's intents NOT included).
 		 * @param callable $doc_at    fn( int $seq ): array document at that log position.
 		 * @param int      $first_seq Sequence number of the first entry in $log (0 for a full log).
+		 * @param array    $seed      Frame state to start from: the actor's earlier
+		 *                            set-aside intents (seed_frame_state()). Empty
+		 *                            starts clean.
 		 * @return array array( 'rows' => row[], 'headDoc' => array ). Each row:
-		 *               array( 'intent', 'disposition', 'accepted' => ?array, 'proposal' => ?array ).
+		 *               array( 'intent', 'disposition', 'accepted' => ?array, 'proposal' => ?array );
+		 *               a proposal carries 'atSeq', the log index of the entry that settled it.
 		 */
-		public static function plan_batch( array $units, array $log, callable $doc_at, int $first_seq = 0 ): array {
+		public static function plan_batch( array $units, array $log, callable $doc_at, int $first_seq = 0, array $seed = array() ): array {
+			// Frame state spans the whole batch: one client's sequential
+			// authoring, continued from the actor's earlier set-aside work
+			// when seeded (arrays copy by value, so the seed stays unchanged).
 			$frame    = array(
-				'ownWrites' => array(),
-				'broken'    => array(),
+				'ownWrites' => $seed['ownWrites'] ?? array(),
+				'broken'    => $seed['broken'] ?? array(),
 			);
 			$rows     = array();
 			$head_doc = $doc_at( $first_seq + count( $log ) );
@@ -1013,6 +1051,7 @@ if ( ! class_exists( 'WP_Intent_Log_Planner' ) ) {
 							'intent'  => $result['intent'],
 							'actorId' => $intent['actorId'],
 							'reason'  => $escalation['reason'],
+							'atSeq'   => $escalation['atSeq'],
 						);
 					} elseif ( 'void' === $result['outcome'] ) {
 						$disposition = array(
@@ -1140,7 +1179,16 @@ if ( ! class_exists( 'WP_Intent_Log_Planner' ) ) {
 			$doc_at = function ( int $seq ) use ( &$server ): array {
 				return self::server_doc_at( $server, $seq );
 			};
-			$plan   = self::plan_batch( $units, $server['log'], $doc_at );
+			// A batch is one actor's authoring, so its frame continues from
+			// that actor's earlier set-aside intents (see seed_frame_state).
+			$actor_id = $units[0][0]['actorId'] ?? null;
+			$parked   = array();
+			foreach ( $server['proposals'] as $proposal ) {
+				if ( $proposal['actorId'] === $actor_id ) {
+					$parked[] = $proposal;
+				}
+			}
+			$plan = self::plan_batch( $units, $server['log'], $doc_at, 0, self::seed_frame_state( $parked ) );
 
 			foreach ( $plan['rows'] as $row ) {
 				$server['dispositions'][ $row['intent']['intentId'] ] = $row['disposition'];

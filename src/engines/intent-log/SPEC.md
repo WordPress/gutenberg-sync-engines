@@ -199,12 +199,29 @@ optimistic document but stay in the outbox so the server records their
 dispositions and files proposals.
 
 Settlement positions (`atSeq`): every non-clean outcome carries the log
-index of the entry that settled it. A well-behaved client observes that
-entry, drops the effect locally, and re-authors on a clean frame — so
-phantom state only poisons intents whose `baseSeq` predates the settlement
-(rule 6), and a rule-4 unit settles at the EARLIEST trigger among its
-members (any other choice would depend on how entries were batched during
-delivery).
+index of the entry that settled it (a proposal carries it as `atSeq`). A
+well-behaved client observes that entry, drops the effect locally, and
+re-authors on a clean frame — so phantom state only poisons intents whose
+`baseSeq` predates the settlement (rule 6), and a rule-4 unit settles at
+the EARLIEST trigger among its members (any other choice would depend on
+how entries were batched during delivery).
+
+Phantoms persist ACROSS batches (`seedFrameState`): `planBatch` takes an
+optional starting frame state, and both servers (`serverIngestBatch`, the
+PHP engine) seed it from the actor's earlier proposals, as does the client
+replica from its own parked rows (`client.parked`). A live editor cannot
+always drop a set-aside effect mid-burst (pushing into the editor would eat
+the next keystrokes), so its later edits keep counting the set-aside text
+and keep their old `baseSeq`; seeding makes rule 6 settle them as
+dependents in every later request instead of accepting them at offsets the
+server's text does not have. The scoping is unchanged, so an intent
+authored after its author observed the clash is clean, and an applied own
+write authored after a phantom's settlement clears that phantom from the
+key (`recordFrameOutcome`): the author re-authored on a clean frame, so a
+later reader of the key is checked for rule 5 against it. A phantom
+settled below a replica's retained window can poison nothing it may still
+author and is dropped (`trimClientLog`). Security holds (the server-side
+`requires-approval` policy) are not frame phantoms and never seed.
 
 ## Escalation rules (complete list)
 
@@ -233,7 +250,10 @@ An intent escalates to the proposal lane iff:
 6. `dependent-on-escalated` — it depends on an earlier own intent that did
    not apply: it reads a frame containing a phantom write, or addresses a
    block only a phantom intent created. Scoped by `baseSeq`: intents
-   authored after the author observed the settling entry are clean.
+   authored after the author observed the settling entry are clean. Holds
+   across batches: the planner starts from the actor's earlier proposals
+   (`seedFrameState`), so a typist's later keystrokes park beside a
+   set-aside one until their editor observes the clash.
 
 Everything else auto-merges. Formats avoid POSITIONAL escalation (a format
 range crossing a concurrent split clips to the first half; format frames may

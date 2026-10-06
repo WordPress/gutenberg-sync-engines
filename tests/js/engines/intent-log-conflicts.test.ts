@@ -139,6 +139,9 @@ describe( 'intent-log conflict records', () => {
 			base: 'p1:Hello',
 			proposed: 'p1:Hello friend',
 			current: 'p1:Hello there',
+			// The server sets the author's later typing in the block
+			// aside into this record, so the card waits for a pause.
+			followsTyping: true,
 		} );
 	} );
 
@@ -415,6 +418,8 @@ describe( 'intent-log conflict records', () => {
 			current: 'Theirs',
 		} );
 		expect( record.property ).toBe( 'title' );
+		// A property write has no text frame for later typing to follow.
+		expect( record.conflict.followsTyping ).toBeUndefined();
 	} );
 
 	it( 'serializes only the top-most of nested targets, in document order', () => {
