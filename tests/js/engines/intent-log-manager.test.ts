@@ -75,10 +75,7 @@ jest.mock( '@wordpress/api-fetch', () => ( {
  * Internal dependencies
  */
 import { Awareness } from 'y-protocols/awareness';
-import {
-	createIntentLogManager,
-	intentLogConflictSource,
-} from '../../../src/engines/intent-log-manager';
+import { createIntentLogManager } from '../../../src/engines/intent-log-manager';
 import { createIntentLogEngineAdapter } from '../../../src/engines/intent-log-adapter';
 import {
 	INTENT_LOG_UPDATE_TYPES,
@@ -2207,9 +2204,9 @@ describe( 'intent-log manager', () => {
 	} );
 
 	it( 'publishes parked proposals as conflict records with kind and author', async () => {
-		const { transport } = await loadManagedEntity();
+		const { manager, transport } = await loadManagedEntity();
 		const changed = jest.fn();
-		const unsubscribe = intentLogConflictSource.subscribe(
+		const unsubscribe = manager.conflicts.subscribe(
 			'postType/post',
 			'1',
 			changed
@@ -2239,7 +2236,7 @@ describe( 'intent-log manager', () => {
 		await Promise.resolve();
 		expect( changed ).toHaveBeenCalledTimes( 1 );
 		expect(
-			intentLogConflictSource.getOpenConflicts( 'postType/post', '1' )
+			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
 		).toEqual( [
 			expect.objectContaining( {
 				id: 'i-frame-conflict',
@@ -2255,7 +2252,7 @@ describe( 'intent-log manager', () => {
 		await Promise.resolve();
 		expect( changed ).toHaveBeenCalledTimes( 2 );
 		expect(
-			intentLogConflictSource.getOpenConflicts( 'postType/post', '1' )
+			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
 		).toEqual( [
 			expect.objectContaining( { id: 'i-frame-conflict' } ),
 			expect.objectContaining( {
@@ -2268,7 +2265,7 @@ describe( 'intent-log manager', () => {
 	} );
 
 	it( 'conflict records carry the target block identity and position when the intent addresses one', async () => {
-		const { transport } = await loadManagedEntity();
+		const { manager, transport } = await loadManagedEntity();
 
 		transport.captured.session!.receiveUpdate(
 			snapshotRow( [
@@ -2291,7 +2288,7 @@ describe( 'intent-log manager', () => {
 		} );
 		await Promise.resolve();
 		expect(
-			intentLogConflictSource.getOpenConflicts( 'postType/post', '1' )
+			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
 		).toEqual( [
 			expect.objectContaining( {
 				id: 'p-anchored',
@@ -2321,7 +2318,7 @@ describe( 'intent-log manager', () => {
 		} );
 		await Promise.resolve();
 		expect(
-			intentLogConflictSource.getOpenConflicts( 'postType/post', '1' )
+			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
 		).toEqual( [
 			expect.objectContaining( { id: 'p-anchored' } ),
 			expect.objectContaining( {
@@ -2332,7 +2329,7 @@ describe( 'intent-log manager', () => {
 	} );
 
 	it( 'a parked insert_block proposal targets the position after its anchor sibling', async () => {
-		const { transport } = await loadManagedEntity();
+		const { manager, transport } = await loadManagedEntity();
 
 		transport.captured.session!.receiveUpdate(
 			snapshotRow( [
@@ -2381,7 +2378,7 @@ describe( 'intent-log manager', () => {
 		// block exists yet), and its summary carries the DECODED markup
 		// (not the object-replacement char).
 		expect(
-			intentLogConflictSource.getOpenConflicts( 'postType/post', '1' )
+			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
 		).toEqual( [
 			expect.objectContaining( {
 				id: 'ins-1',
@@ -2398,9 +2395,9 @@ describe( 'intent-log manager', () => {
 	} );
 
 	it( 'a proposal resolved within the same delivery batch never opens, and a decision round-trips', async () => {
-		const { transport } = await loadManagedEntity();
+		const { manager, transport } = await loadManagedEntity();
 		const changed = jest.fn();
-		intentLogConflictSource.subscribe( 'postType/post', '1', changed );
+		manager.conflicts.subscribe( 'postType/post', '1', changed );
 
 		transport.captured.session!.receiveUpdate( snapshotRow( [] ) );
 
@@ -2428,7 +2425,7 @@ describe( 'intent-log manager', () => {
 		} );
 		await Promise.resolve();
 		expect(
-			intentLogConflictSource.getOpenConflicts( 'postType/post', '1' )
+			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
 		).toEqual( [] );
 
 		// A live open proposal opens a record. Dismissing it emits the
@@ -2448,15 +2445,12 @@ describe( 'intent-log manager', () => {
 		} );
 		await Promise.resolve();
 		expect(
-			intentLogConflictSource.getOpenConflicts( 'postType/post', '1' )
+			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
 		).toHaveLength( 1 );
 
-		intentLogConflictSource.resolveConflict(
-			'postType/post',
-			'1',
-			'live-1',
-			{ action: 'dismiss' }
-		);
+		manager.conflicts.resolveConflict( 'postType/post', '1', 'live-1', {
+			action: 'dismiss',
+		} );
 		const resolvedRows = transport.captured.sent.filter(
 			( update ) => INTENT_LOG_UPDATE_TYPES.RESOLVED === update.type
 		);
@@ -2467,12 +2461,12 @@ describe( 'intent-log manager', () => {
 		} );
 		await Promise.resolve();
 		expect(
-			intentLogConflictSource.getOpenConflicts( 'postType/post', '1' )
+			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
 		).toEqual( [] );
 	} );
 
 	it( 'a parked text edit carries its base, proposed, and current sides', async () => {
-		const { transport } = await loadManagedEntity();
+		const { manager, transport } = await loadManagedEntity();
 
 		transport.captured.session!.receiveUpdate(
 			snapshotRow( [
@@ -2519,7 +2513,7 @@ describe( 'intent-log manager', () => {
 		} );
 		await Promise.resolve();
 
-		const [ conflict ] = intentLogConflictSource.getOpenConflicts(
+		const [ conflict ] = manager.conflicts.getOpenConflicts(
 			'postType/post',
 			'1'
 		);
@@ -2540,7 +2534,7 @@ describe( 'intent-log manager', () => {
 	} );
 
 	it( "publishes a record again when a collaborator's edit changes its current side, and refuses a decision made against the older one", async () => {
-		const { transport } = await loadManagedEntity();
+		const { manager, transport } = await loadManagedEntity();
 
 		transport.captured.session!.receiveUpdate(
 			snapshotRow( [
@@ -2570,14 +2564,14 @@ describe( 'intent-log manager', () => {
 		await Promise.resolve();
 
 		const changed = jest.fn();
-		intentLogConflictSource.subscribe( 'postType/post', '1', changed );
+		manager.conflicts.subscribe( 'postType/post', '1', changed );
 		const textOf = ( side: string | null ) =>
 			JSON.parse( side ?? '[]' ).map(
 				( block: { attributes: { content: string } } ) =>
 					block.attributes.content
 			);
 		// The reviewer opens the dialog on this record.
-		const [ seen ] = intentLogConflictSource.getOpenConflicts(
+		const [ seen ] = manager.conflicts.getOpenConflicts(
 			'postType/post',
 			'1'
 		);
@@ -2605,7 +2599,7 @@ describe( 'intent-log manager', () => {
 
 		// The listeners hear about it, and the record shows the edit.
 		expect( changed ).toHaveBeenCalledTimes( 1 );
-		const [ fresh ] = intentLogConflictSource.getOpenConflicts(
+		const [ fresh ] = manager.conflicts.getOpenConflicts(
 			'postType/post',
 			'1'
 		);
@@ -2625,35 +2619,25 @@ describe( 'intent-log manager', () => {
 			},
 		] );
 		expect(
-			intentLogConflictSource.resolveConflict(
-				'postType/post',
-				'1',
-				seen.id,
-				{
-					action: 'accept',
-					content: replacement,
-					current: seen.current,
-				}
-			)
+			manager.conflicts.resolveConflict( 'postType/post', '1', seen.id, {
+				action: 'accept',
+				content: replacement,
+				current: seen.current,
+			} )
 		).toBe( 'stale' );
 		expect( transport.captured.sent ).toEqual( [] );
 		expect(
-			intentLogConflictSource.getOpenConflicts( 'postType/post', '1' )
+			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
 		).toHaveLength( 1 );
 
 		// The same decision against the current side as it is now goes
 		// through.
 		expect(
-			intentLogConflictSource.resolveConflict(
-				'postType/post',
-				'1',
-				fresh.id,
-				{
-					action: 'accept',
-					content: replacement,
-					current: fresh.current,
-				}
-			)
+			manager.conflicts.resolveConflict( 'postType/post', '1', fresh.id, {
+				action: 'accept',
+				content: replacement,
+				current: fresh.current,
+			} )
 		).toBe( 'resolved' );
 		expect(
 			transport.captured.sent.some(
@@ -2663,7 +2647,7 @@ describe( 'intent-log manager', () => {
 	} );
 
 	it( 'says nothing when a document change leaves every record as it was', async () => {
-		const { transport } = await loadManagedEntity();
+		const { manager, transport } = await loadManagedEntity();
 
 		transport.captured.session!.receiveUpdate(
 			snapshotRow( [
@@ -2693,8 +2677,8 @@ describe( 'intent-log manager', () => {
 		} );
 		await Promise.resolve();
 		const changed = jest.fn();
-		intentLogConflictSource.subscribe( 'postType/post', '1', changed );
-		intentLogConflictSource.getOpenConflicts( 'postType/post', '1' );
+		manager.conflicts.subscribe( 'postType/post', '1', changed );
+		manager.conflicts.getOpenConflicts( 'postType/post', '1' );
 
 		// An edit to ANOTHER block: the record reads the same.
 		transport.captured.session!.receiveUpdate( {
@@ -2719,7 +2703,7 @@ describe( 'intent-log manager', () => {
 	} );
 
 	it( 'accept authors the replacement as ordinary intents, then closes every member, in that order', async () => {
-		const { transport } = await loadManagedEntity();
+		const { manager, transport } = await loadManagedEntity();
 
 		transport.captured.session!.receiveUpdate(
 			snapshotRow( [
@@ -2753,10 +2737,7 @@ describe( 'intent-log manager', () => {
 			} );
 		}
 		await Promise.resolve();
-		const open = intentLogConflictSource.getOpenConflicts(
-			'postType/post',
-			'1'
-		);
+		const open = manager.conflicts.getOpenConflicts( 'postType/post', '1' );
 		expect( open ).toHaveLength( 1 );
 		transport.captured.sent.length = 0;
 
@@ -2771,12 +2752,10 @@ describe( 'intent-log manager', () => {
 				innerBlocks: [],
 			},
 		] );
-		intentLogConflictSource.resolveConflict(
-			'postType/post',
-			'1',
-			open[ 0 ].id,
-			{ action: 'accept', content: replacement }
-		);
+		manager.conflicts.resolveConflict( 'postType/post', '1', open[ 0 ].id, {
+			action: 'accept',
+			content: replacement,
+		} );
 
 		const sent = transport.captured.sent.map( ( update ) => ( {
 			type: update.type,
@@ -2812,12 +2791,12 @@ describe( 'intent-log manager', () => {
 		 ).getDocument()!;
 		expect( doc.root[ 0 ].fields.content.text ).toBe( 'Hello, merged' );
 		expect(
-			intentLogConflictSource.getOpenConflicts( 'postType/post', '1' )
+			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
 		).toEqual( [] );
 	} );
 
 	it( 'a record over two blocks that are not neighbours shows the block between them, and accept keeps the order', async () => {
-		const { transport } = await loadManagedEntity();
+		const { manager, transport } = await loadManagedEntity();
 		transport.captured.session!.receiveUpdate(
 			snapshotRow( [
 				{ syncId: 'p1', blockType: 'core/paragraph', text: 'One' },
@@ -2854,7 +2833,7 @@ describe( 'intent-log manager', () => {
 		}
 		await Promise.resolve();
 
-		const [ conflict ] = intentLogConflictSource.getOpenConflicts(
+		const [ conflict ] = manager.conflicts.getOpenConflicts(
 			'postType/post',
 			'1'
 		);
@@ -2888,7 +2867,7 @@ describe( 'intent-log manager', () => {
 			attributes: { content, metadata: { syncId } },
 			innerBlocks: [],
 		} );
-		const outcome = intentLogConflictSource.resolveConflict(
+		const outcome = manager.conflicts.resolveConflict(
 			'postType/post',
 			'1',
 			conflict.id,
@@ -2913,12 +2892,12 @@ describe( 'intent-log manager', () => {
 			)
 		).toEqual( [ 'p1:One, merged', 'p2:Two', 'p3:Three, merged' ] );
 		expect(
-			intentLogConflictSource.getOpenConflicts( 'postType/post', '1' )
+			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
 		).toEqual( [] );
 	} );
 
 	it( 'a record over a block and a block inside a group covers the group, and accept keeps the inner block in it', async () => {
-		const { transport } = await loadManagedEntity();
+		const { manager, transport } = await loadManagedEntity();
 		transport.captured.session!.receiveUpdate(
 			snapshotRow( [
 				{ syncId: 'p1', blockType: 'core/paragraph', text: 'One' },
@@ -2961,7 +2940,7 @@ describe( 'intent-log manager', () => {
 			} );
 		}
 		await Promise.resolve();
-		const [ conflict ] = intentLogConflictSource.getOpenConflicts(
+		const [ conflict ] = manager.conflicts.getOpenConflicts(
 			'postType/post',
 			'1'
 		);
@@ -2978,12 +2957,10 @@ describe( 'intent-log manager', () => {
 				.split( '\n\n' )
 				.flatMap( ( block ) => JSON.parse( block ) )
 		);
-		intentLogConflictSource.resolveConflict(
-			'postType/post',
-			'1',
-			conflict.id,
-			{ action: 'accept', content: proposed }
-		);
+		manager.conflicts.resolveConflict( 'postType/post', '1', conflict.id, {
+			action: 'accept',
+			content: proposed,
+		} );
 
 		const doc = (
 			transport.captured.session as IntentLogSession
@@ -3001,7 +2978,7 @@ describe( 'intent-log manager', () => {
 	} );
 
 	it( 'an accepted result may leave out a block from between the two blocks, because the reviewer saw it', async () => {
-		const { transport } = await loadManagedEntity();
+		const { manager, transport } = await loadManagedEntity();
 		transport.captured.session!.receiveUpdate(
 			snapshotRow( [
 				{ syncId: 'p1', blockType: 'core/paragraph', text: 'One' },
@@ -3036,29 +3013,24 @@ describe( 'intent-log manager', () => {
 			} );
 		}
 		await Promise.resolve();
-		const [ conflict ] = intentLogConflictSource.getOpenConflicts(
+		const [ conflict ] = manager.conflicts.getOpenConflicts(
 			'postType/post',
 			'1'
 		);
 
-		intentLogConflictSource.resolveConflict(
-			'postType/post',
-			'1',
-			conflict.id,
-			{
-				action: 'accept',
-				content: JSON.stringify( [
-					{
-						name: 'core/paragraph',
-						attributes: {
-							content: 'One and three',
-							metadata: { syncId: 'p1' },
-						},
-						innerBlocks: [],
+		manager.conflicts.resolveConflict( 'postType/post', '1', conflict.id, {
+			action: 'accept',
+			content: JSON.stringify( [
+				{
+					name: 'core/paragraph',
+					attributes: {
+						content: 'One and three',
+						metadata: { syncId: 'p1' },
 					},
-				] ),
-			}
-		);
+					innerBlocks: [],
+				},
+			] ),
+		} );
 
 		// The run is replaced as one piece. The block after it stays.
 		const doc = (
@@ -3072,7 +3044,7 @@ describe( 'intent-log manager', () => {
 	} );
 
 	it( "accept with empty content removes the record's block", async () => {
-		const { transport } = await loadManagedEntity();
+		const { manager, transport } = await loadManagedEntity();
 		transport.captured.session!.receiveUpdate(
 			snapshotRow( [
 				{ syncId: 'p1', blockType: 'core/paragraph', text: 'Keep' },
@@ -3101,12 +3073,10 @@ describe( 'intent-log manager', () => {
 		} );
 		await Promise.resolve();
 
-		intentLogConflictSource.resolveConflict(
-			'postType/post',
-			'1',
-			'parked-1',
-			{ action: 'accept', content: '' }
-		);
+		manager.conflicts.resolveConflict( 'postType/post', '1', 'parked-1', {
+			action: 'accept',
+			content: '',
+		} );
 		const doc = (
 			transport.captured.session as IntentLogSession
 		 ).getDocument()!;
@@ -3114,7 +3084,7 @@ describe( 'intent-log manager', () => {
 	} );
 
 	it( 'accept of a post-field record authors one set_property at the observed version, then closes the record', async () => {
-		const { handlers, transport } = await loadManagedEntity( {
+		const { manager, handlers, transport } = await loadManagedEntity( {
 			title: { raw: 'Original' },
 		} );
 		const session = transport.captured.session as IntentLogSession;
@@ -3157,7 +3127,7 @@ describe( 'intent-log manager', () => {
 		} );
 		await Promise.resolve();
 		expect(
-			intentLogConflictSource.getOpenConflicts( 'postType/post', '1' )
+			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
 		).toEqual( [
 			expect.objectContaining( {
 				id: 'p-title',
@@ -3168,12 +3138,10 @@ describe( 'intent-log manager', () => {
 		expect( observedVersion ).toBeGreaterThan( 0 );
 		transport.captured.sent.length = 0;
 
-		intentLogConflictSource.resolveConflict(
-			'postType/post',
-			'1',
-			'p-title',
-			{ action: 'accept', content: 'Merged title' }
-		);
+		manager.conflicts.resolveConflict( 'postType/post', '1', 'p-title', {
+			action: 'accept',
+			content: 'Merged title',
+		} );
 
 		// One property write that has seen the current title, then the
 		// closure behind it.
@@ -3205,7 +3173,7 @@ describe( 'intent-log manager', () => {
 		expect( handlers.edits.at( -1 ) ).toEqual( { title: 'Merged title' } );
 		await Promise.resolve();
 		expect(
-			intentLogConflictSource.getOpenConflicts( 'postType/post', '1' )
+			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
 		).toEqual( [] );
 	} );
 
@@ -3841,10 +3809,10 @@ describe( 'intent-log manager', () => {
 		await Promise.resolve();
 		await Promise.resolve();
 
-		// The losing burst escalated (the scenario's premise): a parked
-		// proposal is open for review.
+		// The losing burst (B's) escalated, the scenario's premise: a
+		// parked proposal is open for review on B's side.
 		expect(
-			intentLogConflictSource.getOpenConflicts( 'postType/post', '1' )
+			clientB.manager.conflicts.getOpenConflicts( 'postType/post', '1' )
 		).not.toHaveLength( 0 );
 
 		// Both canvases must show the server's canonical text — the

@@ -25,6 +25,10 @@ import {
 import { createDeRtcAuthorship, type DeRtcBlockAuthorship } from './authorship';
 import type { SyncConflict, SyncConflictSource } from '../../review/types';
 import {
+	createEntityConflictSource,
+	type EntityConflicts,
+} from '../../review/entity-source';
+import {
 	createDeRtcRevertUndoManager,
 	createDeRtcUndoFeed,
 	type DeRtcRevertUndoManager,
@@ -208,8 +212,6 @@ export function createDeRtcEngine(): SyncEngine & {
 	interface EntityReviewHandle {
 		review: DeRtcReviewState;
 		getItems: () => ReturnType< SyncReviewSource[ 'getOpenItems' ] >;
-		/** The same open tasks as SyncConflict records. */
-		getConflicts: () => SyncConflict[];
 		/**
 		 * The version a record's `current` side is read from, which is
 		 * the version a reviewer of that record sees.
@@ -253,31 +255,14 @@ export function createDeRtcEngine(): SyncEngine & {
 	const reviewKey = ( objectType: string, objectId: unknown ) =>
 		`${ objectType }:${ String( objectId ) }`;
 
-	/*
-	 * Review-source subscriptions are keyed at the ENGINE level, not the
-	 * entity: the framework manager subscribes while the entity is still
-	 * being created (createSyncManager wires the review source BEFORE it
-	 * asks the engine for the entity), so a subscription must be valid
-	 * before — and survive across — the entity's lifetime. Each entity's
-	 * ledger notifies its key's listeners.
-	 */
-	const keyListeners = new Map< string, Set< () => void > >();
-	const notifyKey = ( key: string ) =>
-		keyListeners.get( key )?.forEach( ( listener ) => listener() );
+	const conflicts = createEntityConflictSource();
 
 	const reviewSource: SyncReviewSource = {
 		getOpenItems: ( objectType, objectId ) =>
 			entityReviews
 				.get( reviewKey( objectType, objectId ) )
 				?.getItems() ?? [],
-		subscribe: ( objectType, objectId, listener ) => {
-			const key = reviewKey( objectType, objectId );
-			if ( ! keyListeners.has( key ) ) {
-				keyListeners.set( key, new Set() );
-			}
-			keyListeners.get( key )!.add( listener );
-			return () => keyListeners.get( key )?.delete( listener );
-		},
+		subscribe: conflicts.source.subscribe,
 		resolveProposal: ( objectType, objectId, proposalId, resolution ) => {
 			const handle = entityReviews.get(
 				reviewKey( objectType, objectId )
@@ -305,86 +290,6 @@ export function createDeRtcEngine(): SyncEngine & {
 		},
 	};
 
-	/*
-	 * The conflict review lane: the same open tasks as SyncConflict
-	 * records with their three sides (see getConflicts), and the
-	 * reviewer's decision mapped onto the review verbs: `accept` sends
-	 * the `accepted` resolution with the content, `dismiss` the
-	 * `dismissed` one. A contested block adopts or rejects.
-	 */
-	const conflictSource: SyncConflictSource = {
-		getOpenConflicts: ( objectType, objectId ) =>
-			entityReviews
-				.get( reviewKey( objectType, objectId ) )
-				?.getConflicts() ?? [],
-		subscribe: reviewSource.subscribe,
-		resolveConflict: ( objectType, objectId, conflictId, decision ) => {
-			const handle = entityReviews.get(
-				reviewKey( objectType, objectId )
-			);
-			if ( ! handle ) {
-				return 'resolved';
-			}
-			/*
-			 * The reviewer decided against a `current` this client's
-			 * document no longer has (a collaborator's version landed in
-			 * between): nothing is sent, and the record stays open with
-			 * its new `current`. The server makes the matching check for
-			 * a version this client has not received yet (see the
-			 * `seenVersion` the resolver sends).
-			 */
-			if (
-				'accept' === decision.action &&
-				undefined !== decision.current
-			) {
-				const open = handle
-					.getConflicts()
-					.find( ( conflict ) => conflict.id === conflictId );
-				if ( open && open.current !== decision.current ) {
-					return 'stale';
-				}
-			}
-			const contestKey = contestedKeyOf( conflictId );
-			if ( null !== contestKey ) {
-				/*
-				 * A contested block. Accepting the canonical form as it
-				 * is adopts it. Accepting anything else (this client's
-				 * own block, or a hand-merged result) keeps the block
-				 * local and writes the content as an ordinary local
-				 * edit, which the next proposal carries. Dismiss keeps
-				 * the local block as it is.
-				 */
-				if ( 'accept' !== decision.action ) {
-					handle.rejectContested( contestKey );
-					return 'resolved';
-				}
-				const canonical = handle
-					.getConflicts()
-					.find( ( conflict ) => conflict.id === conflictId )
-					?.proposed;
-				if ( decision.content.trim() === ( canonical ?? '' ).trim() ) {
-					handle.adoptContested( contestKey );
-					return 'resolved';
-				}
-				handle.writeContested( contestKey, decision.content );
-				handle.rejectContested( contestKey );
-				return 'resolved';
-			}
-			if ( 'accept' === decision.action ) {
-				// The server lands the replacement as an ordinary proposal
-				// under the reviewer (kses and the merge run as for any
-				// edit) and closes the record in the same request.
-				return handle.review.resolve(
-					conflictId,
-					'accepted',
-					decision.content,
-					handle.seenVersion( conflictId ) ?? undefined
-				);
-			}
-			return handle.review.resolve( conflictId, 'dismissed' );
-		},
-	};
-
 	return {
 		slug: DE_RTC_ENGINE_SLUG,
 		protocolVersion: DE_RTC_ENGINE_PROTOCOL,
@@ -393,7 +298,7 @@ export function createDeRtcEngine(): SyncEngine & {
 		// rows, proposed like any other change.
 		createUndoManager: createDeRtcRevertUndoManager,
 		review: reviewSource,
-		conflicts: conflictSource,
+		conflicts: conflicts.source,
 		authorship: {
 			getBlockAuthorship: ( objectType, objectId ) =>
 				entityAuthorship
@@ -602,7 +507,8 @@ export function createDeRtcEngine(): SyncEngine & {
 			};
 
 			const key = reviewKey( objectType, objectId );
-			review.onChange( () => notifyKey( key ) );
+			const notify = () => conflicts.notify( objectType, objectId );
+			review.onChange( notify );
 
 			/*
 			 * Contested-block pending items: one item per block,
@@ -623,11 +529,11 @@ export function createDeRtcEngine(): SyncEngine & {
 					edits: ( existing?.edits ?? 0 ) + 1,
 					index: event.index,
 				} );
-				notifyKey( key );
+				notify();
 			} );
 			bridge.onContestResolved( ( contestKey ) => {
 				if ( contested.delete( contestKey ) ) {
-					notifyKey( key );
+					notify();
 				}
 			} );
 			const contestedExcerpt = ( item: {
@@ -760,15 +666,6 @@ export function createDeRtcEngine(): SyncEngine & {
 				),
 			];
 
-			/*
-			 * The records as the listeners last read them. A record's
-			 * `current` is read again on every read, so a version landing
-			 * in a block under review changes the record without any row
-			 * opening or closing. The listeners hear about that too (see
-			 * onDocumentChange), or a review dialog would go on showing
-			 * the block as it was.
-			 */
-			let publishedConflicts = '';
 			const reviewHandle: EntityReviewHandle = {
 				review,
 				adoptContested: ( contestKey ) =>
@@ -816,11 +713,6 @@ export function createDeRtcEngine(): SyncEngine & {
 						} )
 					),
 				],
-				getConflicts: () => {
-					const conflicts = readConflicts();
-					publishedConflicts = JSON.stringify( conflicts );
-					return conflicts;
-				},
 				seenVersion: ( proposalId ) => {
 					const parked = review
 						.getOpen()
@@ -869,16 +761,94 @@ export function createDeRtcEngine(): SyncEngine & {
 			};
 			entityReviews.set( key, reviewHandle );
 
+			/*
+			 * The conflict review lane: the same open tasks as SyncConflict
+			 * records with their three sides, and the reviewer's decision
+			 * mapped onto the review verbs: `accept` sends the `accepted`
+			 * resolution with the content, `dismiss` the `dismissed` one.
+			 * A contested block adopts or rejects.
+			 */
+			const entity: EntityConflicts = {
+				list: readConflicts,
+				resolve: ( conflictId, decision ) => {
+					/*
+					 * The reviewer decided against a `current` this
+					 * client's document no longer has (a collaborator's
+					 * version landed in between): nothing is sent, and the
+					 * record stays open with its new `current`. The server
+					 * makes the matching check for a version this client
+					 * has not received yet (see the `seenVersion` the
+					 * resolver sends).
+					 */
+					if (
+						'accept' === decision.action &&
+						undefined !== decision.current
+					) {
+						const open = readConflicts().find(
+							( conflict ) => conflict.id === conflictId
+						);
+						if ( open && open.current !== decision.current ) {
+							return 'stale';
+						}
+					}
+					const contestKey = contestedKeyOf( conflictId );
+					if ( null !== contestKey ) {
+						/*
+						 * A contested block. Accepting the canonical form as
+						 * it is adopts it. Accepting anything else (this
+						 * client's own block, or a hand-merged result) keeps
+						 * the block local and writes the content as an
+						 * ordinary local edit, which the next proposal
+						 * carries. Dismiss keeps the local block as it is.
+						 */
+						if ( 'accept' !== decision.action ) {
+							reviewHandle.rejectContested( contestKey );
+							return 'resolved';
+						}
+						const canonical = readConflicts().find(
+							( conflict ) => conflict.id === conflictId
+						)?.proposed;
+						if (
+							decision.content.trim() ===
+							( canonical ?? '' ).trim()
+						) {
+							reviewHandle.adoptContested( contestKey );
+							return 'resolved';
+						}
+						reviewHandle.writeContested(
+							contestKey,
+							decision.content
+						);
+						reviewHandle.rejectContested( contestKey );
+						return 'resolved';
+					}
+					if ( 'accept' === decision.action ) {
+						// The server lands the replacement as an ordinary
+						// proposal under the reviewer (kses and the merge
+						// run as for any edit) and closes the record in
+						// the same request.
+						return review.resolve(
+							conflictId,
+							'accepted',
+							decision.content,
+							reviewHandle.seenVersion( conflictId ) ?? undefined
+						);
+					}
+					return review.resolve( conflictId, 'dismissed' );
+				},
+			};
+			conflicts.set( objectType, objectId, entity );
+
+			// A record's `current` is read again on every read, so a
+			// version landing in a block under review changes the record
+			// without any row opening or closing. The listeners hear about
+			// that too, or a review dialog would go on showing the block
+			// as it was.
 			const onDocumentChange = () => {
 				if ( 0 === review.getOpen().length && 0 === contested.size ) {
 					return;
 				}
-
-				if (
-					JSON.stringify( readConflicts() ) !== publishedConflicts
-				) {
-					notifyKey( key );
-				}
+				conflicts.notifyIfChanged( objectType, objectId );
 			};
 			const unsubscribeDocument = record.subscribe( onDocumentChange );
 			// A version can be held before the document takes it (it waits
@@ -984,6 +954,7 @@ export function createDeRtcEngine(): SyncEngine & {
 					if ( entityReviews.get( key )?.review === review ) {
 						entityReviews.delete( key );
 					}
+					conflicts.delete( objectType, objectId, entity );
 					review.setRestResolver( null );
 					unregisterSaveBaseVersion();
 				},

@@ -51,12 +51,11 @@ import {
 	type ConflictRecord,
 } from './intent-log-conflicts';
 import type { EngineDocument } from './intent-log/engine-types';
-import type {
-	SyncConflict,
-	SyncConflictDecision,
-	SyncConflictOutcome,
-	SyncConflictSource,
-} from '../review/types';
+import type { SyncConflictSource } from '../review/types';
+import {
+	createEntityConflictSource,
+	type EntityConflicts,
+} from '../review/entity-source';
 import type {
 	CollectionHandlers,
 	ObjectData,
@@ -164,6 +163,8 @@ const MAX_PENDING_PUSHES = 8;
 
 interface EntityState {
 	session: IntentLogSession;
+	/** The entity's entry in the conflict review lane, once loaded. */
+	conflictEntity?: EntityConflicts;
 	handlers: RecordHandlers;
 	providers: ProviderCreatorResult[];
 	unloaded: boolean;
@@ -976,51 +977,6 @@ function chooseObservedBaseline(
  * @param debug Whether to log debug output.
  * @return Sync manager.
  */
-/**
- * The conflict review lane (src/review/): one ledger entry per loaded
- * entity, keyed like the manager's entity states, and the source the
- * plugin registers with the conflict registry at module load. The ledger
- * is module-level because the source must exist before any manager does
- * (the registry takes it at load, and managers are created per session).
- */
-interface ConflictEntity {
-	list: () => SyncConflict[];
-	resolve: (
-		conflictId: string,
-		decision: SyncConflictDecision
-	) => SyncConflictOutcome;
-}
-
-const conflictEntities = new Map< string, ConflictEntity >();
-const conflictListeners = new Map< string, Set< () => void > >();
-const conflictKey = ( objectType: ObjectType, objectId: ObjectID | null ) =>
-	`${ objectType }_${ objectId }`;
-const notifyConflictListeners = ( key: string ) =>
-	conflictListeners.get( key )?.forEach( ( listener ) => listener() );
-
-/**
- * The intent-log engine's conflict source: every parked proposal of a
- * loaded entity as a SyncConflict record. Registered from src/index.ts.
- */
-export const intentLogConflictSource: SyncConflictSource = {
-	getOpenConflicts: ( objectType, objectId ) =>
-		conflictEntities.get( conflictKey( objectType, objectId ) )?.list() ??
-		[],
-	subscribe: ( objectType, objectId, listener ) => {
-		const key = conflictKey( objectType, objectId );
-		if ( ! conflictListeners.has( key ) ) {
-			conflictListeners.set( key, new Set() );
-		}
-		conflictListeners.get( key )?.add( listener );
-		return () => {
-			conflictListeners.get( key )?.delete( listener );
-		};
-	},
-	resolveConflict: ( objectType, objectId, conflictId, decision ) =>
-		conflictEntities
-			.get( conflictKey( objectType, objectId ) )
-			?.resolve( conflictId, decision ),
-};
 
 /**
  * A bridge block as `serialize()` takes it: registered attribute defaults
@@ -1164,8 +1120,12 @@ function replaceBlocksInTree(
 	return intoParent( rewritten );
 }
 
-export function createIntentLogManager( debug = false ): SyncManager {
+export function createIntentLogManager( debug = false ): SyncManager & {
+	/** The plugin's conflict review lane (src/review/): every parked proposal of a loaded entity as a SyncConflict record. */
+	conflicts: SyncConflictSource;
+} {
 	const entityStates = new Map< string, EntityState >();
+	const conflicts = createEntityConflictSource();
 	const collectionStates = new Map< ObjectType, CollectionState >();
 	/*
 	 * The collaborative undo manager (inverse intents; see
@@ -1909,24 +1869,8 @@ export function createIntentLogManager( debug = false ): SyncManager {
 				state.capturing = false;
 			}
 		};
-		/*
-		 * The records as the listeners last read them. A record's sides
-		 * are rebuilt from the document on every read, so a change to the
-		 * document (a collaborator's edit landing in a block under
-		 * review) changes them without any proposal opening or closing.
-		 * The listeners hear about that too, or a review dialog would go
-		 * on showing the block as it was.
-		 */
-		let publishedRecords = '';
-		const listConflicts = (): SyncConflict[] => {
-			const conflicts = conflictRecords().map(
-				( parked ) => parked.conflict
-			);
-			publishedRecords = JSON.stringify( conflicts );
-			return conflicts;
-		};
-		conflictEntities.set( key, {
-			list: listConflicts,
+		const entity: EntityConflicts = {
+			list: () => conflictRecords().map( ( parked ) => parked.conflict ),
 			resolve: ( conflictId, decision ) => {
 				const parked = conflictRecords().find(
 					( candidate ) => candidate.conflict.id === conflictId
@@ -2002,11 +1946,16 @@ export function createIntentLogManager( debug = false ): SyncManager {
 				}
 				return 'resolved';
 			},
-		} );
+		};
+		conflicts.set( objectType, objectId, entity );
+		state.conflictEntity = entity;
 		/*
 		 * One notification per delivery batch. A change to the open list
 		 * always notifies. A change to the document notifies only when it
-		 * changed what a record shows.
+		 * changed what a record shows (a record's sides are rebuilt from
+		 * the document on every read, so a collaborator's edit landing in
+		 * a block under review changes them without any proposal opening
+		 * or closing).
 		 */
 		let proposalsChanged = false;
 		const scheduleConflictNotify = ( isProposalsChange: boolean ) => {
@@ -2022,14 +1971,11 @@ export function createIntentLogManager( debug = false ): SyncManager {
 				if ( state.unloaded ) {
 					return;
 				}
-				if ( ! mustNotify ) {
-					const published = publishedRecords;
-					listConflicts();
-					if ( published === publishedRecords ) {
-						return;
-					}
+				if ( mustNotify ) {
+					conflicts.notify( objectType, objectId );
+				} else {
+					conflicts.notifyIfChanged( objectType, objectId );
 				}
-				notifyConflictListeners( key );
 			} );
 		};
 		session.onProposalsChange( () => scheduleConflictNotify( true ) );
@@ -2194,7 +2140,8 @@ export function createIntentLogManager( debug = false ): SyncManager {
 		} );
 	}
 
-	const manager: SyncManager = {
+	const manager: SyncManager & { conflicts: SyncConflictSource } = {
+		conflicts: conflicts.source,
 		load: loadEntity,
 
 		loadCollection,
@@ -2745,16 +2692,14 @@ export function createIntentLogManager( debug = false ): SyncManager {
 			state.awareness?.destroy();
 			state.session.destroy();
 			entityStates.delete( key );
-			conflictEntities.delete( key );
-			notifyConflictListeners( key );
+			if ( state.conflictEntity ) {
+				conflicts.delete( objectType, objectId, state.conflictEntity );
+			}
 		},
 
 		unloadAll() {
 			pendingLoads.clear();
-			for ( const key of entityStates.keys() ) {
-				conflictEntities.delete( key );
-				notifyConflictListeners( key );
-			}
+			conflicts.clear();
 			for ( const [ , state ] of entityStates ) {
 				state.unloaded = true;
 				if ( state.syncTimer ) {

@@ -37,8 +37,12 @@ import {
 	YJS_SERVER_ENGINE_PROTOCOL,
 	YJS_SERVER_ENGINE_SLUG,
 } from './session';
-import { createYjsServerHolds, type YjsServerHolds } from './holds';
+import { createYjsServerHolds } from './holds';
 import type { SyncConflict, SyncConflictSource } from '../../review/types';
+import {
+	createEntityConflictSource,
+	type EntityConflicts,
+} from '../../review/entity-source';
 
 /**
  * The server-authoritative Yjs engine, client half.
@@ -76,99 +80,79 @@ export function createYjsServerEngine(): SyncEngine & {
 	 * Security holds, per entity. A CRDT merge detects no conflicts to
 	 * set aside, so this engine has no MERGE records. What it has is
 	 * markup the server's kses lane stripped from a filtered author's
-	 * block and kept for approval. Subscriptions are keyed at the engine
-	 * level so they are valid before, and across, an entity's lifetime.
+	 * block and kept for approval.
 	 */
-	const entityHolds = new Map< string, YjsServerHolds >();
-	const keyListeners = new Map< string, Set< () => void > >();
-	const holdsKey = ( objectType: string, objectId: unknown ) =>
-		`${ objectType }:${ String( objectId ) }`;
-	const notifyKey = ( key: string ) =>
-		keyListeners.get( key )?.forEach( ( listener ) => listener() );
-
-	const conflictSource: SyncConflictSource = {
-		getOpenConflicts: ( objectType, objectId ) =>
-			(
-				entityHolds
-					.get( holdsKey( objectType, objectId ) )
-					?.getOpen() ?? []
-			).map(
-				( hold ): SyncConflict => ( {
-					id: hold.holdId,
-					kind: 'sequestration',
-					authorId: hold.author,
-					target: {
-						type: 'blocks',
-						// The block's id in the document, which is its
-						// client id in the editor. A hold that
-						// left no block behind is a proposed insertion.
-						...( hold.blockId ? { ids: [ hold.blockId ] } : {} ),
-						index: hold.index,
-						count: hold.blockId ? 1 : 0,
-					},
-					base: hold.base,
-					proposed: hold.held,
-					// The canonical document holds the sanitized block,
-					// and every client converges on it.
-					current: hold.sanitized,
-				} )
-			),
-		subscribe: ( objectType, objectId, listener ) => {
-			const key = holdsKey( objectType, objectId );
-			if ( ! keyListeners.has( key ) ) {
-				keyListeners.set( key, new Set() );
-			}
-			keyListeners.get( key )?.add( listener );
-			return () => {
-				keyListeners.get( key )?.delete( listener );
-			};
-		},
-		resolveConflict: ( objectType, objectId, conflictId, decision ) => {
-			const holds = entityHolds.get( holdsKey( objectType, objectId ) );
-			if ( ! holds ) {
-				return 'resolved';
-			}
-			if ( 'accept' === decision.action ) {
-				const hold = holds
-					.getOpen()
-					.find( ( candidate ) => candidate.holdId === conflictId );
-				// The reviewer decided against a sanitized block this
-				// hold no longer shows: nothing is sent.
-				if (
-					hold &&
-					undefined !== decision.current &&
-					decision.current !== hold.sanitized
-				) {
-					return 'stale';
-				}
-				// The server lands the content in place of the sanitized
-				// block, under the reviewer's capability, and closes the
-				// hold in the same request. It refuses when the block no
-				// longer reads the way the reviewer saw it.
-				return holds.resolve(
-					conflictId,
-					'accepted',
-					decision.content,
-					decision.current ?? hold?.sanitized
-				);
-			}
-			return holds.resolve( conflictId, 'dismissed' );
-		},
-	};
+	const conflicts = createEntityConflictSource();
 
 	return {
 		slug: YJS_SERVER_ENGINE_SLUG,
 		protocolVersion: YJS_SERVER_ENGINE_PROTOCOL,
-		conflicts: conflictSource,
+		conflicts: conflicts.source,
 		// Same per-peer Yjs undo as the relay: undo is client-local
 		// machinery, orthogonal to where the canonical merge happens.
 		createUndoManager,
 		createEntity( { syncConfig, objectType, objectId } ): EngineEntity {
 			const ydoc = createYjsDoc( { objectType } );
 			const holds = createYjsServerHolds();
-			const entityKey = holdsKey( objectType, objectId );
-			entityHolds.set( entityKey, holds );
-			holds.onChange( () => notifyKey( entityKey ) );
+			const entity: EntityConflicts = {
+				list: () =>
+					holds.getOpen().map(
+						( hold ): SyncConflict => ( {
+							id: hold.holdId,
+							kind: 'sequestration',
+							authorId: hold.author,
+							target: {
+								type: 'blocks',
+								// The block's id in the document, which is
+								// its client id in the editor. A hold that
+								// left no block behind is a proposed
+								// insertion.
+								...( hold.blockId
+									? { ids: [ hold.blockId ] }
+									: {} ),
+								index: hold.index,
+								count: hold.blockId ? 1 : 0,
+							},
+							base: hold.base,
+							proposed: hold.held,
+							// The canonical document holds the sanitized
+							// block, and every client converges on it.
+							current: hold.sanitized,
+						} )
+					),
+				resolve: ( conflictId, decision ) => {
+					if ( 'accept' === decision.action ) {
+						const hold = holds
+							.getOpen()
+							.find(
+								( candidate ) => candidate.holdId === conflictId
+							);
+						// The reviewer decided against a sanitized block
+						// this hold no longer shows: nothing is sent.
+						if (
+							hold &&
+							undefined !== decision.current &&
+							decision.current !== hold.sanitized
+						) {
+							return 'stale';
+						}
+						// The server lands the content in place of the
+						// sanitized block, under the reviewer's capability,
+						// and closes the hold in the same request. It
+						// refuses when the block no longer reads the way
+						// the reviewer saw it.
+						return holds.resolve(
+							conflictId,
+							'accepted',
+							decision.content,
+							decision.current ?? hold?.sanitized
+						);
+					}
+					return holds.resolve( conflictId, 'dismissed' );
+				},
+			};
+			conflicts.set( objectType, objectId, entity );
+			holds.onChange( () => conflicts.notify( objectType, objectId ) );
 			holds.setRestResolver( ( holdId, resolution, content, seen ) =>
 				apiFetch( {
 					data: {
@@ -385,10 +369,7 @@ export function createYjsServerEngine(): SyncEngine & {
 					// any more, and a decision would have no session to
 					// travel with. A newer entity for the same post has
 					// its own ledger, which stays.
-					if ( entityHolds.get( entityKey ) === holds ) {
-						entityHolds.delete( entityKey );
-						notifyKey( entityKey );
-					}
+					conflicts.delete( objectType, objectId, entity );
 					holds.setRestResolver( null );
 					ydoc.destroy();
 				},

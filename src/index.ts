@@ -8,8 +8,8 @@
  *     `registerSyncEngine`
  *   - transport providers (http-polling, sse, websocket) via
  *     `registerSyncTransport`
- *   - the conflict review UI (src/review/), fed by the engines' conflict
- *     sources through the plugin-local registry
+ *   - the conflict review UI (src/review/), fed by the conflict source
+ *     each engine adapter registers when it creates an engine
  *
  * With this plugin inactive the framework registers nothing, so a session
  * finds no engine/transport to negotiate and the editor falls back to the
@@ -33,8 +33,7 @@ import { unlock } from './lock-unlock';
 import { createIntentLogEngineAdapter } from './engines/intent-log-adapter';
 import { createYjsServerEngineAdapter } from './engines/yjs-server-adapter';
 import { createDeRtcEngineAdapter } from './engines/de-rtc-adapter';
-import { intentLogConflictSource } from './engines/intent-log-manager';
-import { registerConflictSource } from './review';
+import './review';
 import { createHttpPollingProvider } from './providers/http-polling/http-polling-provider';
 import { createWebSocketProvider } from './providers/websocket/websocket-provider';
 import { createSseProvider } from './providers/sse/sse-provider';
@@ -48,12 +47,6 @@ const { registerSyncEngine, registerSyncTransport } = unlock( privateApis );
 registerSyncEngine( createIntentLogEngineAdapter() );
 registerSyncEngine( createYjsServerEngineAdapter() );
 registerSyncEngine( createDeRtcEngineAdapter() );
-
-// Conflict review: the in-canvas cards and dialogs (src/review/) render
-// from the engines' conflict sources. de-rtc and yjs-server register one
-// per engine instance from their adapters; intent-log keeps one module-level
-// source.
-registerConflictSource( intentLogConflictSource );
 
 // Transports: how updates move. Each carries the slug + protocol the server
 // announces and negotiates against.
