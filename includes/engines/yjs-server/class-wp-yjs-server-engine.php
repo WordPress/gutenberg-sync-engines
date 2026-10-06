@@ -544,8 +544,11 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 		 * content survives untouched); a touched block whose serialization
 		 * `wp_kses_post` would rewrite is REPLACED in the canonical
 		 * document with its sanitized form (rebuilt through the genesis
-		 * block builder, wrappers recorded). Returns the compensating
-		 * deltas to broadcast; empty when nothing was sanitized.
+		 * block builder, wrappers recorded). The sanitized form keeps the
+		 * block's id: to every editor it is the same block with other
+		 * content, and an open hold over it still names it. Returns the
+		 * compensating deltas to broadcast; empty when nothing was
+		 * sanitized.
 		 *
 		 * The stripped markup is not thrown away: each sanitized block is
 		 * HELD for review (see hold_markup()), so someone allowed to
@@ -615,23 +618,27 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 						}
 					)
 				);
-				$id_base   = 'kses-' . substr( md5( $room . '|' . $index . '|' . $serialized ), 0, 8 );
-				$specs     = self::blocks_to_yblocks( $parsed, $id_base, $wrappers );
 				// The id of the block the author wrote into. The sanitized
-				// form gets a new id below, so this is the id an open
-				// hold over the same block still carries.
+				// form keeps it, so every open hold over this block, by
+				// this author or another, still names the block (see
+				// blocks_to_yblocks()).
 				$replaced    = $yblocks->get( $index );
 				$replaced_id = null;
-				if ( $replaced instanceof \Yjs\Types\YMap && is_string( $replaced->get( 'clientId' ) ) ) {
+				if ( $replaced instanceof \Yjs\Types\YMap && is_string( $replaced->get( 'clientId' ) ) && '' !== $replaced->get( 'clientId' ) ) {
 					$replaced_id = $replaced->get( 'clientId' );
+					// The wrapper recorded under the id is for the form
+					// that goes away.
+					unset( $wrappers[ $replaced_id ] );
 				}
+				$id_base = 'kses-' . substr( md5( $room . '|' . $index . '|' . $serialized ), 0, 8 );
+				$specs   = self::blocks_to_yblocks( $parsed, $id_base, $wrappers, $replaced_id );
 				$yblocks->delete( $index, 1 );
 				$block_id = null;
 				if ( array() !== $specs ) {
 					$yblocks->insert( $index, $specs );
-					// The sanitized block's id, which every editor adopts:
-					// the review card's anchor.
-					$block_id = $id_base . '-0';
+					// The block's id in every editor: the review card's
+					// anchor. A block that had no id gets a new one.
+					$block_id = $replaced_id ?? $id_base . '-0';
 					// The hold records the block as the document now has
 					// it, written out the way an approval reads it back
 					// (see apply_held_content()): the two then match byte
@@ -697,8 +704,9 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 		 * not one per typing burst. The block is followed by its id, not
 		 * by its position (see is_hold_over_same_block()).
 		 *
-		 * The row: holdId, blockId (the sanitized block's id in the
-		 * canonical document, null when nothing of the block survived),
+		 * The row: holdId, blockId (the block's id in the canonical
+		 * document, which the sanitized form keeps; null when nothing of
+		 * the block survived),
 		 * index, held (the block as the author wrote it), sanitized (the
 		 * block as the canonical document has it), base (the block before
 		 * the author's first held batch, '' for a new block), author,
@@ -769,9 +777,10 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 		/**
 		 * Whether a new hold is over the block of an open hold.
 		 *
-		 * The open hold names its sanitized block by id, and the author's
-		 * next attempt is written into that block, so the two match when
-		 * the ids do. Positions are not compared: a block inserted or
+		 * The open hold names its block by id, a sanitized block keeps
+		 * its id, and the author's next attempt is written into that
+		 * block, so the two match when the ids do. Positions are not
+		 * compared: a block inserted or
 		 * removed above moves every block below it. Example: a hold is
 		 * open on the first block, then the author inserts a new block
 		 * with a script above it. The new hold is also on the first
@@ -901,7 +910,9 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 		 * carrying the hold's id is replaced in the canonical document
 		 * (when the hold left no block behind, the content is inserted at
 		 * its recorded slot), and the delta broadcasts as a server-authored
-		 * row, the way the kses lane's own compensation does.
+		 * row, the way the kses lane's own compensation does. The first
+		 * block of the content keeps the held block's id, as a sanitized
+		 * block does.
 		 *
 		 * The block is replaced wholly, so an edit made to it after the
 		 * reviewer last saw it would be lost. That case is refused before
@@ -965,8 +976,16 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 					)
 				);
 			}
+			// The first block of the content takes the place of the held
+			// block and keeps its id, so another author's open hold over
+			// the same block still names it.
+			$kept_id = null;
+			if ( null !== $found ) {
+				$kept_id = $hold['blockId'];
+				unset( $wrappers[ $kept_id ] );
+			}
 			$id_base = 'held-' . substr( md5( $room . '|' . ( $hold['holdId'] ?? '' ) . '|' . $content ), 0, 8 );
-			$specs   = self::blocks_to_yblocks( $parsed, $id_base, $wrappers );
+			$specs   = self::blocks_to_yblocks( $parsed, $id_base, $wrappers, $kept_id );
 			if ( null === $found && array() === $specs ) {
 				return false;
 			}
@@ -1834,16 +1853,27 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 		 *
 		 * @since 0.2.0
 		 *
-		 * @param array  $blocks   Parsed blocks (parse_blocks shape).
-		 * @param string $id_base  Deterministic client-id prefix.
-		 * @param array  $wrappers Wrapper markup collector (by reference).
+		 * @param array       $blocks   Parsed blocks (parse_blocks shape).
+		 * @param string      $id_base  Deterministic client-id prefix.
+		 * @param array       $wrappers Wrapper markup collector (by reference).
+		 * @param string|null $first_id The id for the first block built, in
+		 *                              place of the one made from the prefix.
+		 *                              A block rebuilt in place keeps its id
+		 *                              this way, so whatever names the block
+		 *                              by id (an open security hold) still
+		 *                              finds it. Its children get new ids.
 		 * @return array Y.Block records.
 		 */
-		private static function blocks_to_yblocks( array $blocks, string $id_base, array &$wrappers ): array {
+		private static function blocks_to_yblocks( array $blocks, string $id_base, array &$wrappers, ?string $first_id = null ): array {
 			$yblocks = array();
 			$index   = 0;
 			foreach ( $blocks as $block ) {
-				$client_id = $id_base . '-' . $index;
+				// The children's ids are made from the prefix either way.
+				$child_base = $id_base . '-' . $index;
+				$client_id  = $child_base;
+				if ( 0 === $index && null !== $first_id ) {
+					$client_id = $first_id;
+				}
 
 				if ( empty( $block['blockName'] ) ) {
 					// Classic content: preserved as core/freeform, full inner
@@ -1866,7 +1896,7 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 					$text                   = $decomposed['text'];
 				}
 
-				$children  = self::blocks_to_yblocks( $block['innerBlocks'], $client_id, $wrappers );
+				$children  = self::blocks_to_yblocks( $block['innerBlocks'], $child_base, $wrappers );
 				$yblocks[] = self::make_yblock( $client_id, $block['blockName'], $attrs, $text, $children );
 				++$index;
 			}

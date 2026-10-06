@@ -99,8 +99,8 @@ export function createYjsServerEngine(): SyncEngine & {
 					authorId: hold.author,
 					target: {
 						type: 'blocks',
-						// The sanitized block's id, which the editor
-						// adopts as the block's client id. A hold that
+						// The block's id in the document, which is its
+						// client id in the editor. A hold that
 						// left no block behind is a proposed insertion.
 						...( hold.blockId ? { ids: [ hold.blockId ] } : {} ),
 						index: hold.index,

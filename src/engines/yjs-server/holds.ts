@@ -19,8 +19,9 @@ import { restErrorParts } from '../rest-error';
 export interface YjsServerHold {
 	holdId: string;
 	/**
-	 * The sanitized block's id in the document, which every editor adopts
-	 * as the block's client id. Null when nothing of the block survived.
+	 * The block's id in the document, which is its client id in every
+	 * editor. The sanitized form keeps the id the block had. Null when
+	 * nothing of the block survived.
 	 */
 	blockId: string | null;
 	/** The block's top-level index when the hold was raised. */

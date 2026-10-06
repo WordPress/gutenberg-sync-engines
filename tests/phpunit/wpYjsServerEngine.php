@@ -1773,6 +1773,137 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 	}
 
 	/**
+	 * The id of a top-level block, as a fresh client reads it.
+	 *
+	 * @param int $index The block's position.
+	 * @return string|null The id, or null when no block is there.
+	 */
+	private function block_id_at( int $index ): ?string {
+		$doc    = $this->client_doc_from_response( $this->engine()->get_updates_since( $this->room(), 808, 0, array() ) );
+		$blocks = $doc->getMap( 'document' )->get( 'blocks' );
+		if ( $index >= $blocks->length ) {
+			return null;
+		}
+
+		return $blocks->get( $index )->get( 'clientId' );
+	}
+
+	/**
+	 * A second filtered user writes a script into the first block.
+	 *
+	 * @param string $markup The markup they put at the start of the block.
+	 * @return void
+	 */
+	private function second_filtered_author_edits_the_first_block( string $markup ): void {
+		wp_set_current_user( self::$contributor_id );
+		$response = $this->engine()->get_updates_since( $this->room(), 303, 0, array() );
+		$doc      = $this->client_doc_from_response( $response );
+		$update   = $this->encode_edit(
+			$doc,
+			function ( $doc ) use ( $markup ) {
+				$this->first_block_content( $doc )->insert( 0, $markup );
+			}
+		);
+		$result   = $this->engine()->handle_updates(
+			$this->room(),
+			303,
+			(int) $response['end_cursor'],
+			array(
+				array(
+					'type' => 'update',
+					'data' => $update,
+				),
+			),
+			array()
+		);
+		$this->assertSame( array( array( 'status' => 'applied' ) ), $result['dispositions'] );
+	}
+
+	/**
+	 * An editor approves a hold with the given content, the way the
+	 * review dialog does after a peer changed the block: the first try
+	 * is refused and answers with the block as it reads now, and the
+	 * second try names that block.
+	 *
+	 * @param string $hold_id The hold.
+	 * @param string $content The approved content.
+	 * @return array The disposition of the second try.
+	 */
+	private function approve_after_a_refusal( string $hold_id, string $content ): array {
+		wp_set_current_user( self::$editor_id );
+		$holds   = $this->engine()->get_open_holds( $this->room() );
+		$refused = $this->engine()->resolve_hold( $this->room(), $hold_id, 'accepted', $content, $holds[ $hold_id ]['sanitized'] );
+		$this->assertWPError( $refused );
+		$this->assertSame( 'review_stale', $refused->get_error_code() );
+
+		$seen        = $refused->get_error_data()['hold']['sanitized'];
+		$disposition = $this->engine()->resolve_hold( $this->room(), $hold_id, 'accepted', $content, $seen );
+		$this->assertIsArray( $disposition );
+
+		return $disposition;
+	}
+
+	public function test_a_sanitized_block_keeps_its_id() {
+		$id_before = $this->block_id_at( 0 );
+		$hold      = $this->raise_hold();
+
+		$this->assertSame( $id_before, $hold['blockId'], 'the hold names the block by the id it had' );
+		$this->assertSame( $id_before, $this->block_id_at( 0 ), 'the sanitized form is the same block to every editor' );
+	}
+
+	public function test_a_second_authors_hold_on_a_block_leaves_the_first_authors_hold_on_it() {
+		$first = $this->raise_hold();
+
+		$this->second_filtered_author_edits_the_first_block( '<script>alert(2)</script>' );
+
+		$holds = $this->engine()->get_open_holds( $this->room() );
+		$this->assertCount( 2, $holds, 'one hold per author' );
+		$this->assertArrayHasKey( $first['holdId'], $holds );
+		unset( $holds[ $first['holdId'] ] );
+		$second = array_values( $holds )[0];
+		$this->assertSame( self::$contributor_id, $second['author'] );
+		$this->assertSame( $first['blockId'], $second['blockId'], 'both holds name one block' );
+		$this->assertSame( $first['blockId'], $this->block_id_at( 0 ), 'sanitizing the block again keeps its id' );
+
+		// Approving the first author's hold still changes the block.
+		$approved    = "<!-- wp:paragraph -->\n<p>Approved for the first author</p>\n<!-- /wp:paragraph -->";
+		$disposition = $this->approve_after_a_refusal( $first['holdId'], $approved );
+		$this->assertTrue( $disposition['applied'], 'the approval must find the block' );
+		$this->assertStringContainsString( 'Approved for the first author', (string) $this->engine()->materialize( $this->room() ) );
+
+		// The approved block keeps the id too, so the second author's
+		// hold is still open, still names the block, and can be approved.
+		$this->assertSame( $first['blockId'], $this->block_id_at( 0 ) );
+		$this->assertSame( array( $second['holdId'] ), array_keys( $this->engine()->get_open_holds( $this->room() ) ) );
+
+		$approved    = "<!-- wp:paragraph -->\n<p>Approved for the second author</p>\n<!-- /wp:paragraph -->";
+		$disposition = $this->approve_after_a_refusal( $second['holdId'], $approved );
+		$this->assertTrue( $disposition['applied'] );
+		$this->assertStringContainsString( 'Approved for the second author', (string) $this->engine()->materialize( $this->room() ) );
+		$this->assertSame( array(), $this->engine()->get_open_holds( $this->room() ) );
+	}
+
+	public function test_the_first_author_writing_again_replaces_their_own_hold_after_a_second_authors_hold() {
+		$first = $this->raise_hold();
+		$this->second_filtered_author_edits_the_first_block( '<script>alert(2)</script>' );
+
+		// The first author writes into the block once more.
+		$this->author_edits(
+			function ( $doc ) {
+				$this->first_block_content( $doc )->insert( 0, '<script>alert(3)</script>' );
+			}
+		);
+
+		$holds = $this->engine()->get_open_holds( $this->room() );
+		$this->assertCount( 2, $holds, 'still one hold per author' );
+		$this->assertArrayNotHasKey( $first['holdId'], $holds, "the first author's newer hold replaces their open one" );
+		$this->assertSame( array( $first['holdId'] => 'superseded' ), $this->closed_holds() );
+		foreach ( $holds as $hold ) {
+			$this->assertSame( $first['blockId'], $hold['blockId'] );
+		}
+	}
+
+	/**
 	 * The author adds a block that holds nothing but a script, so the
 	 * filter leaves nothing of it and the hold has no block to name.
 	 *
