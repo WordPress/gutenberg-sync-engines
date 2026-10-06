@@ -26,6 +26,12 @@ export interface DeRtcParkedProposal {
 		syncId?: string;
 		/** The block's path in the proposal (child indices from the root). */
 		path?: number[];
+		/**
+		 * True when the proposal's merge left the block out of the
+		 * document (a held new block, a block one side deleted): the
+		 * server inserts an accepted result instead of replacing a block.
+		 */
+		notInDocument?: boolean;
 	} >;
 	/** A conflicting entity-property register (property-conflict rows). */
 	property?: { name: string; value: unknown };

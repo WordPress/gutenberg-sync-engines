@@ -1318,7 +1318,8 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 				$by_identity = WP_De_RTC_Identity_Merge::sequester( $base_content, (string) $proposal['proposedContent'], $this->get_approved_blocks( $room ) );
 				if ( is_array( $by_identity ) ) {
 					if ( array() !== $by_identity['risky'] ) {
-						$this->park_changed_blocks( $room, $client_id, (string) $proposal['proposalId'], 'requires-unfiltered-html', (string) $proposal['baseVersion'], $by_identity['risky'], $review, true, $base_content );
+						$risky = self::mark_blocks_not_in_document( $by_identity['risky'], $by_identity['laundered'] );
+						$this->park_changed_blocks( $room, $client_id, (string) $proposal['proposalId'], 'requires-unfiltered-html', (string) $proposal['baseVersion'], $risky, $review, true, $base_content );
 						// phpcs:ignore WordPress.NamingConventions.ValidHookName.UseUnderscores, WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- Query Monitor's debug hook.
 						do_action( 'qm/debug', 'wp-sync: de-rtc sequestered ' . count( $by_identity['risky'] ) . " risky block(s) by identity from a filtered author in {$room}" );
 					}
@@ -1509,7 +1510,8 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 				}
 				$parked_id = (string) $proposal['proposalId'];
 				$was_open  = isset( $review['open'][ $parked_id ] ) || isset( $review['resolved'][ $parked_id ] );
-				$this->park_changed_blocks( $room, $client_id, $parked_id, 'manual-conflict-required', (string) $proposal['baseVersion'], $identity['conflicts'], $review, false, $base_content );
+				$conflicts = self::mark_blocks_not_in_document( $identity['conflicts'], $identity['merged_content'] );
+				$this->park_changed_blocks( $room, $client_id, $parked_id, 'manual-conflict-required', (string) $proposal['baseVersion'], $conflicts, $review, false, $base_content );
 				if ( ! $was_open ) {
 					$parked_count += count( $identity['conflicts'] );
 				}
@@ -1870,6 +1872,38 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 		}
 
 		/**
+		 * Marks the identified blocks that the given content does not hold
+		 * with `notInDocument`: the proposal's merge left them out (a held
+		 * new block dropped, a block one side deleted), so no block in the
+		 * document stands for them. An accepted resolution inserts such a
+		 * block; one without the mark replaces the block in the document,
+		 * and is refused once that block is gone (see replace_parked_span()).
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param array  $changed_blocks Blocks about to park ({index, html, syncId?}).
+		 * @param string $content        The content the proposal's merge produced.
+		 * @return array The blocks, marked.
+		 */
+		private static function mark_blocks_not_in_document( array $changed_blocks, string $content ): array {
+			$by_id = array();
+			self::index_serialized_blocks_by_id( parse_blocks( $content ), $by_id );
+			foreach ( $changed_blocks as &$block ) {
+				if (
+					is_array( $block ) &&
+					is_string( $block['syncId'] ?? null ) &&
+					'' !== $block['syncId'] &&
+					! isset( $by_id[ $block['syncId'] ] )
+				) {
+					$block['notInDocument'] = true;
+				}
+			}
+			unset( $block );
+
+			return $changed_blocks;
+		}
+
+		/**
 		 * Maps every identified block of a parsed tree (any depth) to its
 		 * serialized form.
 		 *
@@ -1976,6 +2010,12 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 		 * removes the span. On freeform boundaries the park covered the
 		 * whole document, so the replacement is the whole content.
 		 *
+		 * Identified blocks never fall back to the index run: once none of
+		 * them is in the document, that run holds other blocks. Blocks
+		 * marked `notInDocument` (see mark_blocks_not_in_document()) are
+		 * inserted at their recorded top-level index instead, and blocks
+		 * that were deleted after they parked cannot be located.
+		 *
 		 * @since n.e.x.t
 		 *
 		 * @param string $current        Current canonical content.
@@ -1999,14 +2039,42 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 				}
 			}
 
+			$records = wp_de_rtc_get_top_level_serialized_block_records( $current );
+
 			if ( array() !== $ids && count( $ids ) === count( $changed_blocks ) ) {
 				$by_identity = self::replace_blocks_by_id( $current, $ids, $replacement );
 				if ( null !== $by_identity ) {
 					return $by_identity;
 				}
+
+				/*
+				 * None of the parked blocks is in the document. Blocks that
+				 * were in it when they parked have been deleted since, and
+				 * their recorded position now belongs to another block: the
+				 * span cannot be located. Blocks that were never in it (a
+				 * held new block, a block one side had deleted) go in at
+				 * the recorded position, beside what is there now.
+				 */
+				foreach ( $changed_blocks as $block ) {
+					if ( true !== ( $block['notInDocument'] ?? null ) ) {
+						return null;
+					}
+				}
+				if ( '' === trim( $replacement ) ) {
+					return $current; // Nothing to put in, nothing to remove.
+				}
+				if ( is_wp_error( $records ) ) {
+					return null;
+				}
+				$position = count( $records );
+				if ( array() !== $indexes ) {
+					$position = max( 0, min( $indexes ) );
+				}
+				array_splice( $records, $position, 0, array( trim( $replacement ) ) );
+
+				return implode( "\n\n", $records );
 			}
 
-			$records = wp_de_rtc_get_top_level_serialized_block_records( $current );
 			if ( is_wp_error( $records ) ) {
 				return $replacement;
 			}

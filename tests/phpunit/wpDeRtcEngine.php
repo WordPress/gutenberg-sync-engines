@@ -622,6 +622,108 @@ class Tests_Collaboration_WpDeRtcEngine extends WP_UnitTestCase {
 		$this->assertStringContainsString( 'Beta block original text.', $content );
 	}
 
+	public function test_accepted_resolution_is_refused_when_the_parked_block_was_deleted_since() {
+		$this->escalate_conflict();
+		$read   = $this->engine()->get_updates_since( $this->room(), 3, 0, array() );
+		$latest = $this->latest_from_response( $read );
+		$parked = $this->rows_of_type( $read, WP_De_RTC_Engine::UPDATE_TYPE_PARKED );
+		// The parked block stayed in the document (canonical won its position).
+		$this->assertArrayNotHasKey( 'notInDocument', $parked[0]['changedBlocks'][0] );
+
+		// A peer deletes the parked (Alpha) block; the Beta block moves to its index.
+		$records = wp_de_rtc_get_top_level_serialized_block_records( $latest['content'] );
+		$this->engine()->handle_updates(
+			$this->room(),
+			1,
+			0,
+			array( $this->proposal( 'p-delete', $latest['version'], $latest['content'], $records[1] ) ),
+			array()
+		);
+		$before = $this->engine()->materialize( $this->room() );
+		$this->assertStringNotContainsString( 'Alpha block', $before );
+		$this->assertStringContainsString( 'Beta block original text.', $before );
+
+		$replacement = "<!-- wp:paragraph -->\n<p>Alpha block REVIEWED text.</p>\n<!-- /wp:paragraph -->";
+		$refused     = $this->engine()->resolve_proposal( $this->room(), 'p-b', 'accepted', 5, $replacement );
+		$this->assertWPError( $refused );
+		$this->assertSame( 'rest_sync_invalid_intent', $refused->get_error_code() );
+		$this->assertSame( 409, $refused->get_error_data()['status'] );
+
+		// Nothing was written over the neighbour, and the record stays open.
+		$this->assertSame( $before, $this->engine()->materialize( $this->room() ) );
+		$resolved = $this->rows_of_type(
+			$this->engine()->get_updates_since( $this->room(), 6, 0, array() ),
+			WP_De_RTC_Engine::UPDATE_TYPE_RESOLVED
+		);
+		$this->assertCount( 0, $resolved );
+	}
+
+	public function test_accepted_resolution_of_a_held_new_block_inserts_it_between_its_neighbours() {
+		$engine = $this->engine();
+		$latest = $this->latest_from_response( $engine->get_updates_since( $this->room(), 1, 0, array() ) );
+
+		// A filtered author inserts a risky block, with an identity of its
+		// own as every editor block has, BETWEEN the two paragraphs.
+		wp_set_current_user( self::$author_id );
+		$records  = wp_de_rtc_get_top_level_serialized_block_records( $latest['content'] );
+		$held     = "<!-- wp:html {\"metadata\":{\"syncId\":\"held-new-block\"}} -->\n<script>alert(1)</script>\n<!-- /wp:html -->";
+		$proposed = $records[0] . "\n\n" . $held . "\n\n" . $records[1];
+		$engine->handle_updates(
+			$this->room(),
+			3,
+			0,
+			array( $this->proposal( 'p-risky', $latest['version'], $latest['content'], $proposed, false ) ),
+			array()
+		);
+		$parked = $this->rows_of_type(
+			$this->engine()->get_updates_since( $this->room(), 4, 0, array() ),
+			WP_De_RTC_Engine::UPDATE_TYPE_PARKED
+		);
+		$this->assertCount( 1, $parked );
+		$this->assertSame( 'held-new-block', $parked[0]['changedBlocks'][0]['syncId'] );
+		// The block dropped out of the document when it was held.
+		$this->assertTrue( $parked[0]['changedBlocks'][0]['notInDocument'] );
+		$this->assertStringNotContainsString( '<script>', $this->engine()->materialize( $this->room() ) );
+
+		// Approval puts it in at its recorded place, over no other block.
+		wp_set_current_user( self::$editor_id );
+		$accepted = $this->engine()->resolve_proposal( $this->room(), 'p-risky', 'accepted', 5, $held );
+		$this->assertSame( 'resolved', $accepted['status'] );
+		$this->assertSame( 'applied', $accepted['applied']['status'] );
+
+		$content = $this->engine()->materialize( $this->room() );
+		$alpha   = strpos( $content, 'Alpha block original text.' );
+		$script  = strpos( $content, '<script>alert(1)</script>' );
+		$beta    = strpos( $content, 'Beta block original text.' );
+		$this->assertNotFalse( $alpha );
+		$this->assertNotFalse( $script );
+		$this->assertNotFalse( $beta, 'the block at the recorded index must not be overwritten' );
+		$this->assertLessThan( $script, $alpha );
+		$this->assertLessThan( $beta, $script );
+	}
+
+	public function test_accepted_resolution_with_empty_content_of_a_held_new_block_changes_nothing() {
+		$engine = $this->engine();
+		$latest = $this->latest_from_response( $engine->get_updates_since( $this->room(), 1, 0, array() ) );
+
+		wp_set_current_user( self::$author_id );
+		$held = "<!-- wp:html {\"metadata\":{\"syncId\":\"held-new-block\"}} -->\n<script>alert(1)</script>\n<!-- /wp:html -->";
+		$engine->handle_updates(
+			$this->room(),
+			3,
+			0,
+			array( $this->proposal( 'p-risky', $latest['version'], $latest['content'], $latest['content'] . "\n\n" . $held, false ) ),
+			array()
+		);
+		$before = $this->engine()->materialize( $this->room() );
+
+		// The block is not in the document, so there is nothing to remove.
+		wp_set_current_user( self::$editor_id );
+		$accepted = $this->engine()->resolve_proposal( $this->room(), 'p-risky', 'accepted', 5, '' );
+		$this->assertSame( 'resolved', $accepted['status'] );
+		$this->assertSame( $before, $this->engine()->materialize( $this->room() ) );
+	}
+
 	public function test_accepted_resolution_of_a_security_hold_needs_unfiltered_html() {
 		wp_set_current_user( self::$author_id );
 		$engine   = $this->engine();
