@@ -381,6 +381,15 @@ export function createYjsServerEngine(): SyncEngine & {
 							stateMap.unobserve( onStateMapUpdate );
 						}
 					}
+					// The holds go with the entity: nothing feeds them
+					// any more, and a decision would have no session to
+					// travel with. A newer entity for the same post has
+					// its own ledger, which stays.
+					if ( entityHolds.get( entityKey ) === holds ) {
+						entityHolds.delete( entityKey );
+						notifyKey( entityKey );
+					}
+					holds.setRestResolver( null );
 					ydoc.destroy();
 				},
 			};

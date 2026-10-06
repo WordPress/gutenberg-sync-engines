@@ -859,10 +859,14 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 				$disposition['applied'] = $applied;
 			}
 
-			// Re-read: the apply may have checkpointed and re-announced.
-			$ledger = $this->get_open_holds( $room );
-			unset( $ledger[ $hold_id ] );
-			$this->storage->set_room_meta( $room, self::META_HELD, $ledger );
+			/*
+			 * The closing row first, the ledger second. The row is what
+			 * tells every client the hold is closed. If it cannot be
+			 * stored, the caller gets an error and shows the hold again,
+			 * so the ledger must still have it: a hold the server forgot
+			 * would take the next decision as "already closed" and do
+			 * nothing with it.
+			 */
 			$stored = $this->add_row(
 				$room,
 				self::GENESIS_CLIENT_ID,
@@ -883,6 +887,11 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 					array( 'status' => 500 )
 				);
 			}
+
+			// Re-read: the apply may have checkpointed and re-announced.
+			$ledger = $this->get_open_holds( $room );
+			unset( $ledger[ $hold_id ] );
+			$this->storage->set_room_meta( $room, self::META_HELD, $ledger );
 
 			return $disposition;
 		}

@@ -1550,6 +1550,44 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 		$this->assertSame( $before, (string) $this->engine()->materialize( $this->room() ) );
 	}
 
+	/**
+	 * An engine whose storage cannot store a `held-resolved` row, and
+	 * stores everything else.
+	 *
+	 * @return WP_Yjs_Server_Engine Engine.
+	 */
+	private function engine_that_cannot_store_a_closing_row(): WP_Yjs_Server_Engine {
+		$storage = new class() extends WP_Sync_Table_Storage {
+			public function add_update( string $room, $update ): bool {
+				if ( WP_Yjs_Server_Engine::UPDATE_TYPE_HELD_RESOLVED === ( $update['type'] ?? null ) ) {
+					return false;
+				}
+				return parent::add_update( $room, $update );
+			}
+		};
+
+		return new WP_Yjs_Server_Engine( $storage );
+	}
+
+	public function test_a_decision_whose_closing_row_was_not_stored_leaves_the_hold_open() {
+		$hold = $this->raise_hold();
+
+		wp_set_current_user( self::$editor_id );
+		$result = $this->engine_that_cannot_store_a_closing_row()->resolve_hold( $this->room(), $hold['holdId'], 'dismissed' );
+		$this->assertWPError( $result );
+		$this->assertSame( 'rest_sync_storage_error', $result->get_error_code() );
+
+		// The caller shows the hold again, so the server must still know
+		// it: the next decision has to count.
+		$this->assertArrayHasKey( $hold['holdId'], $this->engine()->get_open_holds( $this->room() ) );
+		$this->assertSame( array(), $this->closed_holds() );
+
+		$disposition = $this->engine()->resolve_hold( $this->room(), $hold['holdId'], 'dismissed' );
+		$this->assertSame( 'resolved', $disposition['status'] );
+		$this->assertSame( array(), $this->engine()->get_open_holds( $this->room() ) );
+		$this->assertSame( array( $hold['holdId'] => 'dismissed' ), $this->closed_holds() );
+	}
+
 	public function test_accepting_a_hold_needs_unfiltered_html() {
 		$hold = $this->raise_hold();
 

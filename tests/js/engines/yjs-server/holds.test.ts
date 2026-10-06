@@ -321,6 +321,38 @@ describe( 'yjs-server security holds (client)', () => {
 		).toBe( 'failed' );
 	} );
 
+	it( 'forgets the holds of an entity that was destroyed, and keeps those of a newer one', () => {
+		const changed = jest.fn();
+		engine.conflicts.subscribe( 'postType/post', '1', changed );
+		const makeEntity = () =>
+			engine.createEntity( {
+				syncConfig: makeSyncConfig(),
+				objectType: 'postType/post',
+				objectId: '1',
+			} as any );
+		const openIds = () =>
+			engine.conflicts
+				.getOpenConflicts( 'postType/post', '1' )
+				.map( ( conflict ) => conflict.id );
+
+		const first = makeEntity();
+		first.createSession().receiveUpdate( heldRow() );
+		expect( openIds() ).toEqual( [ 'h-1' ] );
+
+		changed.mockClear();
+		first.destroy();
+		expect( openIds() ).toEqual( [] );
+		expect( changed ).toHaveBeenCalledTimes( 1 );
+
+		// The post is loaded again while an older entity is still being
+		// torn down: the older one must not take the newer one's holds.
+		const older = makeEntity();
+		const newer = makeEntity();
+		newer.createSession().receiveUpdate( heldRow( { holdId: 'h-2' } ) );
+		older.destroy();
+		expect( openIds() ).toEqual( [ 'h-2' ] );
+	} );
+
 	it( 'leaves the document alone: review rows carry no content', () => {
 		const entity = engine.createEntity( {
 			syncConfig: makeSyncConfig(),
