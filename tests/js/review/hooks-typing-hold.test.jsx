@@ -7,17 +7,26 @@ import { applyFilters } from '@wordpress/hooks';
 jest.mock( '../../../src/review/components/conflict-block', () => ( {
 	__esModule: true,
 	default: () => <p>conflict card</p>,
-	useBlockConflicts: ( clientId ) => [
-		{
-			...jest.requireActual( './fixtures' ).PARAGRAPH_CONFLICT,
-			followsTyping: 'follows' === clientId,
-		},
-	],
 } ) );
 jest.mock( '../../../src/review/components/sequestered-block', () => ( {
 	__esModule: true,
 	default: () => <p>held card</p>,
-	useBlockSequestrations: () => [],
+} ) );
+// Only the hook the filter reads; the real module would load the
+// editor packages and their own BlockEdit filters.
+jest.mock( '../../../src/review/components/review-data', () => ( {
+	__esModule: true,
+	useBlockConflictsOfKind: ( clientId, kind ) => {
+		if ( 'merge' !== kind ) {
+			return [];
+		}
+		return [
+			{
+				...jest.requireActual( './fixtures' ).PARAGRAPH_CONFLICT,
+				followsTyping: 'follows' === clientId,
+			},
+		];
+	},
 } ) );
 jest.mock( '../../../src/review/typing-hold', () => ( {
 	__esModule: true,
@@ -25,9 +34,7 @@ jest.mock( '../../../src/review/typing-hold', () => ( {
 } ) );
 
 // eslint-disable-next-line import/first -- After the mocks.
-import '../../../src/review/hooks/conflict-block';
-// eslint-disable-next-line import/first -- After the mocks.
-import '../../../src/review/hooks/sequestered-block';
+import '../../../src/review/hooks/review-cards';
 
 const BlockEdit = () => <p>block content</p>;
 

@@ -12,6 +12,7 @@ import { useOpenConflicts } from '../conflicts';
 import { plainText } from './conflict-block';
 import {
 	canApproveUnfilteredHtml,
+	conflictsTargetingBlock,
 	useCurrentPost,
 	useDecideConflict,
 } from './review-data';
@@ -25,7 +26,8 @@ const PANEL_NAME = 'conflicts';
 const PANEL_KEY = `${ PLUGIN_NAME }/${ PANEL_NAME }`;
 
 /**
- * Whether a record has a block in the canvas to present on. A property
+ * Whether a record has a block in the canvas to present on: whether some
+ * block's card would show it (see conflictsTargetingBlock). A property
  * has none, a proposed new block has none yet, and a block the document
  * no longer holds has none any more.
  *
@@ -34,33 +36,12 @@ const PANEL_KEY = `${ PLUGIN_NAME }/${ PANEL_NAME }`;
  * @return {boolean} Whether a card can present the record.
  */
 export function isAnchored( select, conflict ) {
-	const { target } = conflict;
-	if ( 'blocks' !== target.type || 0 === target.count ) {
-		return false;
-	}
+	const { getClientIdsWithDescendants } = select( blockEditorStore );
 
-	const { getBlockAttributes, getBlockOrder, getClientIdsWithDescendants } =
-		select( blockEditorStore );
-
-	if ( target.ids?.length ) {
-		return getClientIdsWithDescendants().some(
-			( clientId ) =>
-				clientId === target.ids[ 0 ] ||
-				getBlockAttributes( clientId )?.metadata?.syncId ===
-					target.ids[ 0 ]
-		);
-	}
-
-	if ( target.parentId ) {
-		return getClientIdsWithDescendants().some(
-			( clientId ) =>
-				getBlockAttributes( clientId )?.metadata?.syncId ===
-					target.parentId &&
-				getBlockOrder( clientId ).length > target.index
-		);
-	}
-
-	return getBlockOrder().length > target.index;
+	return getClientIdsWithDescendants().some(
+		( clientId ) =>
+			conflictsTargetingBlock( select, [ conflict ], clientId ).length > 0
+	);
 }
 
 /**

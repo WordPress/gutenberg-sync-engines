@@ -972,34 +972,6 @@ function chooseObservedBaseline(
 }
 
 /**
- * Creates an intent-log sync manager.
- *
- * @param debug Whether to log debug output.
- * @return Sync manager.
- */
-
-/**
- * A bridge block as `serialize()` takes it: registered attribute defaults
- * filled in (the editor materializes them on parse, the engine document
- * does not carry them), valid, children converted the same way.
- *
- * @param block Bridge block.
- * @return The block to serialize.
- */
-function toSerializableBlock( block: BridgeBlock ): EditorBlock {
-	return {
-		...block,
-		attributes: withBlockDefaults(
-			block.name,
-			( block.attributes ?? {} ) as Record< string, unknown >
-		),
-		clientId: '',
-		isValid: true,
-		innerBlocks: block.innerBlocks.map( toSerializableBlock ),
-	};
-}
-
-/**
  * The bridge blocks carrying the given ids, at any depth, in the order of
  * the ids.
  *
@@ -1120,6 +1092,12 @@ function replaceBlocksInTree(
 	return intoParent( rewritten );
 }
 
+/**
+ * Creates an intent-log sync manager.
+ *
+ * @param debug Whether to log debug output.
+ * @return Sync manager.
+ */
 export function createIntentLogManager( debug = false ): SyncManager & {
 	/** The plugin's conflict review lane (src/review/): every parked proposal of a loaded entity as a SyncConflict record. */
 	conflicts: SyncConflictSource;
@@ -1779,9 +1757,12 @@ export function createIntentLogManager( debug = false ): SyncManager & {
 										innerContent: [ markup ],
 									} );
 								}
-								return serialize( [
-									toSerializableBlock( block ),
-								] as Parameters< typeof serialize >[ 0 ] );
+								return serialize(
+									toEditorBlocks(
+										[ block ],
+										new Map()
+									) as Parameters< typeof serialize >[ 0 ]
+								);
 							} catch {
 								return '';
 							}

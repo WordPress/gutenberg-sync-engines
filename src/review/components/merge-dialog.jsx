@@ -49,27 +49,22 @@ export function ChangedWhileReviewingNotice( { children, onDismiss } ) {
 }
 
 /**
- * One version pane: a heading, this version's blocks rendered read-only
- * with the revisions diff highlighting against the base version, and a
- * button copying this version into the merged result.
+ * One version pane: a heading, this version shown read-only with its
+ * changes highlighted (the children), and a button copying this version
+ * into the merged result.
  *
  * @param {Object}   props
- * @param {string}   props.label       Pane heading.
- * @param {string}   props.content     This version as serialized blocks.
- * @param {string}   props.baseContent The version the diff is computed
- *                                     against, as serialized blocks.
- * @param {Function} props.onRestore   Copy this version into the merged
- *                                     result.
+ * @param {string}   props.label     Pane heading.
+ * @param {Function} props.onRestore Copy this version into the merged
+ *                                   result.
+ * @param {Element}  props.children  This version, rendered.
  */
-function Pane( { label, content, baseContent, onRestore } ) {
+export function Pane( { label, onRestore, children } ) {
 	return (
 		<div className="gse-review-merge-dialog__pane">
 			<h3 className="gse-review-merge-dialog__pane-label">{ label }</h3>
 			<div className="gse-review-merge-dialog__pane-content">
-				<BlockDiffPane
-					content={ content }
-					baseContent={ baseContent }
-				/>
+				{ children }
 			</div>
 			<Button
 				__next40pxDefaultSize
@@ -215,16 +210,22 @@ export function MergeDialogBody( {
 			<div className="gse-review-merge-dialog__panes">
 				<Pane
 					label={ proposedLabel }
-					content={ proposed }
-					baseContent={ baseContent }
 					onRestore={ () => restore( 'proposed', proposed ) }
-				/>
+				>
+					<BlockDiffPane
+						content={ proposed }
+						baseContent={ baseContent }
+					/>
+				</Pane>
 				<Pane
 					label={ __( 'Current version' ) }
-					content={ current }
-					baseContent={ baseContent }
 					onRestore={ () => restore( 'current', current ) }
-				/>
+				>
+					<BlockDiffPane
+						content={ current }
+						baseContent={ baseContent }
+					/>
+				</Pane>
 			</div>
 			<div className="gse-review-merge-dialog__merged">
 				<h3 className="gse-review-merge-dialog__pane-label">
@@ -258,17 +259,21 @@ export function MergeDialogBody( {
 }
 
 /**
- * Whether the person reviewing authored the proposed side, which decides
- * how its pane is named.
+ * The proposed pane's heading: "Your version" when the person reviewing
+ * authored the proposed side, "Proposed version" otherwise.
  *
  * @param {number} authorId The proposed side's author.
- * @return {boolean} Whether the current user is the author.
+ * @return {string} The heading.
  */
-export function useIsOwnProposal( authorId ) {
-	return useSelect(
+export function useProposedLabel( authorId ) {
+	const isOwn = useSelect(
 		( select ) => select( coreStore ).getCurrentUser()?.id === authorId,
 		[ authorId ]
 	);
+	if ( isOwn ) {
+		return __( 'Your version' );
+	}
+	return __( 'Proposed version' );
 }
 
 /**
@@ -292,7 +297,7 @@ export default function CollaborationMergeDialog( {
 	onDecide,
 	onClose,
 } ) {
-	const isOwn = useIsOwnProposal( conflict.authorId );
+	const proposedLabel = useProposedLabel( conflict.authorId );
 	let className = 'gse-review-merge-dialog';
 	if ( isSection ) {
 		className += ' gse-review-merge-dialog--section';
@@ -306,10 +311,6 @@ export default function CollaborationMergeDialog( {
 		help = __(
 			'These blocks replace the conflicted section when you accept.'
 		);
-	}
-	let proposedLabel = __( 'Proposed version' );
-	if ( isOwn ) {
-		proposedLabel = __( 'Your version' );
 	}
 
 	return (

@@ -14,7 +14,8 @@ import {
 import {
 	ChangedWhileReviewingNotice,
 	MissingBaseNotice,
-	useIsOwnProposal,
+	Pane,
+	useProposedLabel,
 } from './merge-dialog';
 
 /**
@@ -25,42 +26,6 @@ import {
  */
 function mergedBlocksFromGrid( grid ) {
 	return [ createBlock( 'core/table', gridToTableAttributes( grid ) ) ];
-}
-
-/**
- * One version pane: a heading, this version rendered as a table with its
- * OWN changes against the shared base highlighted (added rows and
- * columns, edited cells), and a button copying this version into the
- * merged result.
- *
- * @param {Object}   props
- * @param {string}   props.label     Pane heading.
- * @param {Object}   props.grid      This version's grid.
- * @param {Object}   props.baseGrid  The shared base grid.
- * @param {Function} props.onRestore Copy this version into the merged
- *                                   result.
- */
-function GridPane( { label, grid, baseGrid, onRestore } ) {
-	return (
-		<div className="gse-review-merge-dialog__pane">
-			<h3 className="gse-review-merge-dialog__pane-label">{ label }</h3>
-			<div className="gse-review-merge-dialog__pane-content">
-				<TableDiffGrid
-					grid={ grid }
-					baseGrid={ baseGrid }
-					label={ label }
-				/>
-			</div>
-			<Button
-				__next40pxDefaultSize
-				size="compact"
-				variant="secondary"
-				onClick={ onRestore }
-			>
-				{ __( 'Restore this version' ) }
-			</Button>
-		</div>
-	);
 }
 
 /**
@@ -178,18 +143,26 @@ export function TableMergeDialogBody( {
 				</ChangedWhileReviewingNotice>
 			) }
 			<div className="gse-review-merge-dialog__panes">
-				<GridPane
+				<Pane
 					label={ proposedLabel }
-					grid={ yours }
-					baseGrid={ base }
 					onRestore={ () => restoreGrid( 'yours', yours ) }
-				/>
-				<GridPane
+				>
+					<TableDiffGrid
+						grid={ yours }
+						baseGrid={ base }
+						label={ proposedLabel }
+					/>
+				</Pane>
+				<Pane
 					label={ __( 'Current version' ) }
-					grid={ current }
-					baseGrid={ base }
 					onRestore={ () => restoreGrid( 'current', current ) }
-				/>
+				>
+					<TableDiffGrid
+						grid={ current }
+						baseGrid={ base }
+						label={ __( 'Current version' ) }
+					/>
+				</Pane>
 			</div>
 			<div className="gse-review-merge-dialog__merged">
 				<h3 className="gse-review-merge-dialog__pane-label">
@@ -298,7 +271,7 @@ export function TableConflictPreview( { conflict } ) {
  * @param {Function} props.onClose  Close without resolving.
  */
 export function TableConflictView( { conflict, onDecide, onClose } ) {
-	const isOwn = useIsOwnProposal( conflict.authorId );
+	const proposedLabel = useProposedLabel( conflict.authorId );
 	// The grids are rebuilt only when a side's content changes. The
 	// record itself is a new object on every publish, and the dialog
 	// reads a new grid as a changed table.
@@ -307,11 +280,6 @@ export function TableConflictView( { conflict, onDecide, onClose } ) {
 		() => tableGridsOf( { base, proposed, current } ),
 		[ base, proposed, current ]
 	);
-	let proposedLabel = __( 'Proposed version' );
-	if ( isOwn ) {
-		proposedLabel = __( 'Your version' );
-	}
-
 	return (
 		<Modal
 			title={ __( 'Review conflicting edits' ) }

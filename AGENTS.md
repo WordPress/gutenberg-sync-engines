@@ -316,8 +316,8 @@ The framework/plugin split is complete: the framework ships **neither** engines
     (sse and sse-daemon reuse the polling manager, swapping only its
     receive half for the stream).
   - `review/` — the CONFLICT REVIEW UI: the cards that replace a
-    conflicted or held block in the canvas (two `editor.BlockEdit`
-    filters in `hooks/`), the dialogs they open (`components/`), the
+    conflicted or held block in the canvas (one `editor.BlockEdit`
+    filter in `hooks/`), the dialogs they open (`components/`), the
     sidebar panel for conflicts with no block to show them on, and the
     two registries the engines and block views plug into
     (`conflicts.ts`, `views.ts`). The components are JavaScript moved

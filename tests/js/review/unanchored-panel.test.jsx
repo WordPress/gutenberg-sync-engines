@@ -116,12 +116,9 @@ describe( 'isAnchored', () => {
 				c2: { metadata: { syncId: 's2' } },
 				c3: {},
 			} )[ clientId ],
-		getBlockOrder: ( clientId ) => {
-			if ( 'c2' === clientId ) {
-				return [ 'c3' ];
-			}
-			return [ 'c1', 'c2' ];
-		},
+		// c1 and c2 at the top level, c3 inside c2.
+		getBlockRootClientId: ( clientId ) => ( 'c3' === clientId ? 'c2' : '' ),
+		getBlockIndex: ( clientId ) => ( { c1: 0, c2: 1, c3: 0 } )[ clientId ],
 		getClientIdsWithDescendants: () => [ 'c1', 'c2', 'c3' ],
 	} );
 	const blocks = ( target ) => ( {

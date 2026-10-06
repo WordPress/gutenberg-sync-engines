@@ -1,19 +1,10 @@
 // @ts-nocheck -- Plain JavaScript. The review components are not type-checked.
 import { useState } from '@wordpress/element';
-import { useSelect } from '@wordpress/data';
 import { __ } from '@wordpress/i18n';
 import { Button } from '@wordpress/components';
 import { useBlockProps } from '@wordpress/block-editor';
-import { useOpenConflicts } from '../conflicts';
 import KsesReviewDialog from './kses-review-dialog';
-import {
-	canApproveUnfilteredHtml,
-	conflictsTargetingBlock,
-	useCurrentPost,
-	useDecideConflict,
-} from './review-data';
-
-const EMPTY_CONFLICTS = [];
+import { canApproveUnfilteredHtml, useDecideConflict } from './review-data';
 
 /*
  * The replacement renders inside the editor canvas, where the admin
@@ -36,41 +27,6 @@ const CANVAS_CSS = `
 		word-break: break-word;
 	}
 `;
-
-/**
- * The open SECURITY-HOLD conflicts targeting a block: the records of kind
- * `sequestration`, the kind every engine maps a wp_kses rejection to.
- * Empty for an ordinary block. Merge conflicts present as the conflict
- * card instead (see useBlockConflicts).
- *
- * @param {string} clientId The block's client id.
- * @return {Array} The block's open security-hold records.
- */
-export function useBlockSequestrations( clientId ) {
-	const { postType, postId } = useCurrentPost();
-	const open = useOpenConflicts( postType, postId );
-
-	return useSelect(
-		( select ) => {
-			if ( ! open.length ) {
-				return EMPTY_CONFLICTS;
-			}
-
-			const matches = conflictsTargetingBlock(
-				select,
-				open,
-				clientId
-			).filter( ( conflict ) => 'sequestration' === conflict.kind );
-
-			if ( ! matches.length ) {
-				return EMPTY_CONFLICTS;
-			}
-
-			return matches;
-		},
-		[ clientId, open ]
-	);
-}
 
 /**
  * A security hold as the review card and dialog present it: the held

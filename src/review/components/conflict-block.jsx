@@ -8,17 +8,10 @@ import {
 	store as blockEditorStore,
 	useBlockProps,
 } from '@wordpress/block-editor';
-import { useOpenConflicts } from '../conflicts';
 import { getSyncConflictView } from '../views';
 import DiffText from './diff-text';
 import CollaborationMergeDialog from './merge-dialog';
-import {
-	conflictsTargetingBlock,
-	useCurrentPost,
-	useDecideConflict,
-} from './review-data';
-
-const EMPTY_CONFLICTS = [];
+import { useDecideConflict } from './review-data';
 
 /*
  * The replacement renders inside the editor canvas, where the admin
@@ -85,44 +78,6 @@ export function plainText( content ) {
 		.replace( /<[^>]+>/g, ' ' )
 		.replace( /\s+/g, ' ' )
 		.trim();
-}
-
-/**
- * The open MERGE conflicts targeting one block. One record is one
- * conflict (the engine publishes the edits it set aside together as one
- * record, and never two records over the same block by one author), and
- * a record covering several blocks targets its first block, so a section
- * presents once. Security holds (kind `sequestration`) are excluded:
- * those present as the sequestered-block card instead (see the
- * sequestered-block editor hook).
- *
- * @param {string} clientId The block's client id.
- * @return {Array} The block's open merge conflicts.
- */
-export function useBlockConflicts( clientId ) {
-	const { postType, postId } = useCurrentPost();
-	const open = useOpenConflicts( postType, postId );
-
-	return useSelect(
-		( select ) => {
-			if ( ! open.length ) {
-				return EMPTY_CONFLICTS;
-			}
-
-			const matches = conflictsTargetingBlock(
-				select,
-				open,
-				clientId
-			).filter( ( conflict ) => 'merge' === conflict.kind );
-
-			if ( ! matches.length ) {
-				return EMPTY_CONFLICTS;
-			}
-
-			return matches;
-		},
-		[ clientId, open ]
-	);
 }
 
 /**

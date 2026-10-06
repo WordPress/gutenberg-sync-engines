@@ -5,23 +5,12 @@ import { __ } from '@wordpress/i18n';
 import { store as blockEditorStore } from '@wordpress/block-editor';
 import { store as editorStore } from '@wordpress/editor';
 import { store as noticesStore } from '@wordpress/notices';
-import { useResolveConflict } from '../conflicts';
+import { useOpenConflicts, useResolveConflict } from '../conflicts';
+
+const EMPTY_CONFLICTS = [];
 
 // One notice however many decisions are refused.
 const STALE_NOTICE_ID = 'gutenberg-sync-engines-review-stale';
-
-export const REASON_LABELS = {
-	'frame-conflict': __( 'It conflicted with a collaborator’s change.' ),
-	'attr-conflict': __(
-		'It changed block settings a collaborator also changed.'
-	),
-	'dependent-on-escalated': __(
-		'It depended on another edit that was set aside.'
-	),
-	'requires-approval': __(
-		'It contains content that needs approval from someone allowed to publish unfiltered HTML.'
-	),
-};
 
 /**
  * Whether the current user may approve content held for unfiltered-HTML
@@ -148,4 +137,42 @@ export function conflictsTargetingBlock( select, conflicts, clientId ) {
 
 		return '' === rootClientId && target.index === index;
 	} );
+}
+
+/**
+ * The open conflicts of one kind targeting one block (see
+ * conflictsTargetingBlock for how a record names its block). One record
+ * is one conflict: the engine publishes the edits it set aside together
+ * as one record, and never two records of one kind over the same block
+ * by one author. A record covering several blocks targets its first
+ * block, so a section presents once.
+ *
+ * @param {string} clientId The block's client id.
+ * @param {string} kind     `merge`, or `sequestration` for a security hold.
+ * @return {Array} The records.
+ */
+export function useBlockConflictsOfKind( clientId, kind ) {
+	const { postType, postId } = useCurrentPost();
+	const open = useOpenConflicts( postType, postId );
+
+	return useSelect(
+		( select ) => {
+			if ( ! open.length ) {
+				return EMPTY_CONFLICTS;
+			}
+
+			const matches = conflictsTargetingBlock(
+				select,
+				open,
+				clientId
+			).filter( ( conflict ) => kind === conflict.kind );
+
+			if ( ! matches.length ) {
+				return EMPTY_CONFLICTS;
+			}
+
+			return matches;
+		},
+		[ clientId, kind, open ]
+	);
 }

@@ -57,6 +57,7 @@ import type {
 	IntentEnvelope,
 } from './intent-log/engine-types';
 import type { SyncConflict, SyncConflictTarget } from '../review/types';
+import { propertyText } from '../review/property-text';
 import type { IntentLogProposal } from './intent-log-session';
 
 export interface ConflictDeps {
@@ -338,23 +339,6 @@ function blockIdsOf( intent: IntentEnvelope ): string[] {
 		return 'string' === typeof block?.syncId ? [ block.syncId ] : [];
 	}
 	return 'string' === typeof payload.syncId ? [ payload.syncId ] : [];
-}
-
-/**
- * A property value as the text the review dialog shows and the accepted
- * decision sends back: strings as they are, anything else as JSON.
- *
- * @param value The value.
- * @return The text.
- */
-export function propertyText( value: unknown ): string {
-	if ( 'string' === typeof value ) {
-		return value;
-	}
-	if ( undefined === value || null === value ) {
-		return '';
-	}
-	return JSON.stringify( value );
 }
 
 interface Draft {

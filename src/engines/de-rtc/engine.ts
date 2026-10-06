@@ -24,6 +24,7 @@ import {
 } from './record';
 import { createDeRtcAuthorship, type DeRtcBlockAuthorship } from './authorship';
 import type { SyncConflict, SyncConflictSource } from '../../review/types';
+import { propertyText } from '../../review/property-text';
 import {
 	createEntityConflictSource,
 	type EntityConflicts,
@@ -78,24 +79,6 @@ const REVIEW_REASON_MAP: Record< string, string > = {
 	'manual-conflict-required': 'frame-conflict',
 	'property-conflict': 'frame-conflict',
 };
-
-/**
- * A property register's value as the text the review dialog shows and
- * the `accepted` resolution sends back: strings as they are, anything
- * else as JSON.
- *
- * @param value The register's value.
- * @return The text.
- */
-function propertyText( value: unknown ): string {
-	if ( 'string' === typeof value ) {
-		return value;
-	}
-	if ( undefined === value || null === value ) {
-		return '';
-	}
-	return JSON.stringify( value );
-}
 
 /**
  * An awareness-only codec for de-rtc collection rooms: presence flows,
