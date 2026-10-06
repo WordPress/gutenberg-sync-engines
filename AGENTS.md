@@ -393,7 +393,11 @@ files under `gutenberg/packages/editor/`: `src/private-apis.js`,
 `src/components/post-revisions-preview/block-diff-view.jsx` (new),
 `revisions-canvas.jsx` beside it, and `CHANGELOG.md`. The plugin reads
 them through `unlockEditor` in `src/lock-unlock.ts`. The delta goes
-away once the export lands upstream.
+away once the export lands upstream. A standalone Gutenberg does not
+carry it, so the review dialogs check `hasBlockDiff` / `hasCodeDiff`
+(`src/review/revisions-diff.ts`) and show a plain text comparison
+(`components/plain-text-diff.jsx`) when the names are missing; a new
+use of any of these names needs the same check.
 
 Bump the pin with a squashed subtree pull from the framework checkout:
 

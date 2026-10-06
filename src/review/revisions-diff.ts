@@ -5,6 +5,12 @@
  * relative path. The names are the vendor delta the bundled Gutenberg
  * carries on top of its pin (see AGENTS.md, "The gutenberg/ subtree"), and
  * the upstream pull request in docs/plan/upstream-revisions-differ-pr.md.
+ *
+ * A standalone Gutenberg wins over the bundled one, and it does not carry
+ * the delta: every name below is then undefined. A component must check
+ * `hasBlockDiff` or `hasCodeDiff` before it uses a name, and show the
+ * plain text comparison (components/plain-text-diff.jsx) when the answer
+ * is no.
  */
 
 /**
@@ -31,3 +37,19 @@ export const REVISION_DIFF_STYLES = api.REVISION_DIFF_STYLES;
 export const REVISION_REMOVED_FILTER_SVG = api.REVISION_REMOVED_FILTER_SVG;
 /** The presentational line-by-line code diff. */
 export const RevisionsCodeDiff = api.RevisionsCodeDiff;
+
+/**
+ * Whether the editor exports everything the block panes need: the differ,
+ * its rich-text formats, and its visual layer. The panes use these names
+ * together, so one missing name means none can be used.
+ */
+export const hasBlockDiff: boolean =
+	undefined !== diffRevisionContent &&
+	undefined !== registerDiffFormatTypes &&
+	undefined !== unregisterDiffFormatTypes &&
+	undefined !== DiffDescriptions &&
+	undefined !== REVISION_DIFF_STYLES &&
+	undefined !== REVISION_REMOVED_FILTER_SVG;
+
+/** Whether the editor exports the line-by-line code diff. */
+export const hasCodeDiff: boolean = undefined !== RevisionsCodeDiff;

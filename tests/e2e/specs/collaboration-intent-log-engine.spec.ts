@@ -33,6 +33,11 @@ function unescapeCommentDashes( raw: string ): string {
 	return raw.replaceAll( '\\u002d', '-' );
 }
 
+// The fixture plugin that removes the editor's revision comparison, the way
+// a standalone Gutenberg lacks it (tests/e2e/plugins).
+const WITHOUT_REVISION_COMPARISON_PLUGIN =
+	'gutenberg-test-plugin-editor-without-revision-comparison';
+
 async function setSyncEngine(
 	requestUtils: RequestUtils,
 	engine: string | null
@@ -940,6 +945,112 @@ test.describe( 'Collaboration - intent-log engine @engine-intent-log', () => {
 		await cardPage.waitForTimeout( 4000 );
 		await expect( cardEditor.canvas.getByText( card ) ).toHaveCount( 0 );
 		await expect( cardPage.getByText( /set aside/ ) ).toHaveCount( 0 );
+	} );
+
+	test( 'the conflict dialog opens with a text comparison when the editor has no revision comparison', async ( {
+		collaborationUtils,
+		requestUtils,
+		editor,
+	} ) => {
+		test.setTimeout( 120_000 );
+
+		const post = await requestUtils.createPost( {
+			title: 'Intent Log Review Without Revision Comparison',
+			status: 'draft',
+			content:
+				'<!-- wp:paragraph -->\n<p>Contested paragraph</p>\n<!-- /wp:paragraph -->',
+			date_gmt: new Date().toISOString(),
+		} );
+
+		/*
+		 * A standalone Gutenberg wins over the bundled one and does not
+		 * export the revision comparison the dialog's panes render with.
+		 * The fixture removes those names from the bundled editor before
+		 * the plugin reads them, which is what the plugin sees on such a
+		 * site. Opening the card used to crash the dialog there.
+		 */
+		await requestUtils.activatePlugin( WITHOUT_REVISION_COMPARISON_PLUGIN );
+
+		try {
+			await collaborationUtils.openCollaborativeSession( post.id );
+			const { editor2, page2 } = collaborationUtils;
+			const page1 = editor.page;
+
+			const pageErrors: string[] = [];
+			for ( const page of [ page1, page2 ] ) {
+				page.on( 'pageerror', ( error ) =>
+					pageErrors.push( error.message )
+				);
+			}
+
+			// The same typing race as the test above: both users write into
+			// one paragraph, so at least one edit is set aside.
+			await editor.canvas
+				.locator( '[data-type="core/paragraph"]' )
+				.first()
+				.click();
+			await page1.keyboard.press( 'End' );
+			await editor2.canvas
+				.locator( '[data-type="core/paragraph"]' )
+				.first()
+				.click();
+			await page2.keyboard.press( 'Home' );
+
+			await Promise.all( [
+				page1.keyboard.type( ' one one one one one', { delay: 100 } ),
+				page2.keyboard.type( 'two two two two two ', { delay: 100 } ),
+			] );
+
+			const card = /has conflicting edits/;
+			let cardPage = page1;
+			let cardEditor = editor;
+			await expect( async () => {
+				const counts = await Promise.all( [
+					editor.canvas.getByText( card ).count(),
+					editor2.canvas.getByText( card ).count(),
+				] );
+				expect( counts[ 0 ] + counts[ 1 ] ).toBeGreaterThan( 0 );
+				cardPage = counts[ 0 ] > 0 ? page1 : page2;
+				cardEditor = counts[ 0 ] > 0 ? editor : editor2;
+			} ).toPass( { timeout: 20000 } );
+
+			await cardEditor.canvas
+				.getByRole( 'button', { name: 'Review conflict', exact: true } )
+				.first()
+				.click();
+			const dialog = cardPage.getByRole( 'dialog', {
+				name: 'Review conflicting edits',
+			} );
+			await expect( dialog ).toBeVisible( { timeout: 10000 } );
+
+			// Both panes show their version as text. Neither renders blocks,
+			// which is what needs the revision comparison.
+			const panes = dialog.locator( '.gse-review-block-diff' );
+			await expect( panes ).toHaveCount( 2 );
+			await expect(
+				panes.locator( '.gse-review-plain-diff' )
+			).toHaveCount( 2 );
+			await expect(
+				panes.locator( '.block-editor-block-list__layout' )
+			).toHaveCount( 0 );
+			for ( const pane of await panes.all() ) {
+				await expect( pane ).toContainText( 'Contested paragraph' );
+			}
+
+			// The rest of the dialog works: the merged result can be
+			// accepted, and that closes the dialog.
+			await expect( dialog.getByText( 'Merged result' ) ).toBeVisible();
+			await dialog
+				.getByRole( 'button', { name: 'Accept', exact: true } )
+				.click();
+			await expect( dialog ).toBeHidden( { timeout: 10000 } );
+
+			expect( pageErrors ).toEqual( [] );
+		} finally {
+			await requestUtils.deactivatePlugin(
+				WITHOUT_REVISION_COMPARISON_PLUGIN
+			);
+		}
 	} );
 
 	test( 'custom HTML blocks sync between users and persist through save', async ( {

@@ -9,7 +9,9 @@ import {
 	DiffDescriptions,
 	REVISION_DIFF_STYLES,
 	REVISION_REMOVED_FILTER_SVG,
+	hasBlockDiff,
 } from '../revisions-diff';
+import PlainTextDiff, { textByBlock } from './plain-text-diff';
 import { ReviewSurface } from './review-surface';
 
 const PANE_EDITOR_SETTINGS = {
@@ -63,9 +65,16 @@ function useDiffFormatTypes() {
  * its iframe; a dialog renders this component once instead, since the
  * admin stylesheet does not carry them.
  *
- * @return {JSX.Element} The style tag, filter, and descriptions.
+ * Renders nothing when the editor does not export its revision comparison:
+ * the panes then show a text comparison that needs none of this.
+ *
+ * @return {?JSX.Element} The style tag, filter, and descriptions.
  */
 export function BlockDiffResources() {
+	if ( ! hasBlockDiff ) {
+		return null;
+	}
+
 	return (
 		<>
 			<style>{ REVISION_DIFF_STYLES }</style>
@@ -81,21 +90,15 @@ export function BlockDiffResources() {
 }
 
 /**
- * A read-only pane rendering one version of some block content, diffed
- * against a base version with the revisions diff system: real rendered
- * blocks, block-level added/removed/modified markers, and inline ins/del
- * highlighting inside rich text. The blocks live in their own store and
- * are not editable, so nothing here can reach the document.
- *
- * The host must render {@link BlockDiffResources} once in the same
- * document for the highlighting to be visible.
+ * One version rendered as real blocks, diffed against the base version
+ * with the revisions diff system. Only rendered when the editor exports
+ * that system (see BlockDiffPane).
  *
  * @param {Object} props
  * @param {string} props.content     Serialized blocks of this version.
- * @param {string} props.baseContent Serialized blocks of the base version
- *                                   the diff is computed against.
+ * @param {string} props.baseContent Serialized blocks of the base version.
  */
-export default function BlockDiffPane( { content, baseContent } ) {
+function RenderedBlockDiff( { content, baseContent } ) {
 	const isReady = useDiffFormatTypes();
 
 	const blocks = useMemo( () => {
@@ -110,17 +113,54 @@ export default function BlockDiffPane( { content, baseContent } ) {
 	}, [ isReady, content, baseContent ] );
 
 	return (
-		<div className="gse-review-block-diff">
-			<ReviewSurface>
-				<BlockEditorProvider
-					value={ blocks }
-					settings={ PANE_EDITOR_SETTINGS }
-				>
-					<Disabled>
-						<BlockList renderAppender={ false } />
-					</Disabled>
-				</BlockEditorProvider>
-			</ReviewSurface>
-		</div>
+		<ReviewSurface>
+			<BlockEditorProvider
+				value={ blocks }
+				settings={ PANE_EDITOR_SETTINGS }
+			>
+				<Disabled>
+					<BlockList renderAppender={ false } />
+				</Disabled>
+			</BlockEditorProvider>
+		</ReviewSurface>
 	);
+}
+
+/**
+ * A read-only pane rendering one version of some block content, diffed
+ * against a base version with the revisions diff system: real rendered
+ * blocks, block-level added/removed/modified markers, and inline ins/del
+ * highlighting inside rich text. The blocks live in their own store and
+ * are not editable, so nothing here can reach the document.
+ *
+ * The host must render {@link BlockDiffResources} once in the same
+ * document for the highlighting to be visible.
+ *
+ * When the editor does not export the revisions diff system (a standalone
+ * Gutenberg without the bundled copy's addition), the pane shows the same
+ * comparison as plain text instead: this version's text, one line per
+ * block, with the words added to and removed from the base marked.
+ *
+ * @param {Object} props
+ * @param {string} props.content     Serialized blocks of this version.
+ * @param {string} props.baseContent Serialized blocks of the base version
+ *                                   the diff is computed against.
+ */
+export default function BlockDiffPane( { content, baseContent } ) {
+	let diff = (
+		<PlainTextDiff
+			from={ textByBlock( baseContent ) }
+			to={ textByBlock( content ) }
+		/>
+	);
+	if ( hasBlockDiff ) {
+		diff = (
+			<RenderedBlockDiff
+				content={ content }
+				baseContent={ baseContent }
+			/>
+		);
+	}
+
+	return <div className="gse-review-block-diff">{ diff }</div>;
 }

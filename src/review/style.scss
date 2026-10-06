@@ -177,6 +177,35 @@
 	}
 }
 
+// The text comparison the dialogs fall back to when the editor does not
+// export its revision comparison (see plain-text-diff.jsx). The marks
+// mirror the conflict card's canvas CSS.
+.gse-review-plain-diff {
+	font-family: inherit;
+	font-size: inherit;
+	margin: 0;
+	white-space: pre-wrap;
+	word-break: break-word;
+
+	.gse-review-diff__added {
+		background: rgba(74, 184, 102, 0.25);
+		text-decoration: none;
+	}
+
+	.gse-review-diff__removed {
+		background: rgba(204, 24, 24, 0.2);
+		text-decoration: line-through;
+	}
+}
+
+.gse-review-plain-diff--code {
+	font-family: monospace;
+	font-size: 13px;
+	max-height: 16em;
+	overflow: auto;
+	padding: $grid-unit-10;
+}
+
 // The sidebar panel for conflicts that have no block to present on.
 .gse-review-panel {
 	.gse-review-panel__description {

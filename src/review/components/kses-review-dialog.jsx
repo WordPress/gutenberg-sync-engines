@@ -2,7 +2,8 @@
 import { useState } from '@wordpress/element';
 import { __ } from '@wordpress/i18n';
 import { Button, Modal } from '@wordpress/components';
-import { RevisionsCodeDiff } from '../revisions-diff';
+import { RevisionsCodeDiff, hasCodeDiff } from '../revisions-diff';
+import PlainTextDiff from './plain-text-diff';
 
 /**
  * The dialog's content for reviewing a block held for security approval.
@@ -15,9 +16,13 @@ import { RevisionsCodeDiff } from '../revisions-diff';
  * for plain-text editing below; the diff recomputes live while editing,
  * and Approve hands back the (possibly edited) markup.
  *
+ * When the editor does not export that code diff (a standalone Gutenberg
+ * without the bundled copy's addition), the same comparison shows as
+ * plain text with the added and removed lines marked.
+ *
  * All held markup renders as inert text, never live DOM (the code diff
- * renders lines as text). The point of the approval gate is that this
- * markup has not been trusted.
+ * and its plain text stand-in both render lines as text). The point of
+ * the approval gate is that this markup has not been trusted.
  *
  * Position-independent so it can be unit-tested without the modal.
  *
@@ -32,6 +37,30 @@ export function KsesReviewDialogBody( { sequestration, onApprove, onRemove } ) {
 	);
 	const [ isEditing, setIsEditing ] = useState( false );
 	const isUpdate = 'update' === sequestration.kind;
+
+	let original = null;
+	if ( isUpdate ) {
+		original = sequestration.original;
+	}
+
+	let codeDiff = (
+		<PlainTextDiff isCode from={ original } to={ proposedHtml } />
+	);
+	if ( hasCodeDiff ) {
+		let previousRevision = null;
+		if ( isUpdate ) {
+			previousRevision = { content: { raw: original } };
+		}
+
+		codeDiff = (
+			<RevisionsCodeDiff
+				revision={ { content: { raw: proposedHtml } } }
+				previousRevision={ previousRevision }
+				showDiff
+				isPreviousRevisionLoading={ false }
+			/>
+		);
+	}
 
 	return (
 		<div className="gse-review-kses-dialog__body">
@@ -51,20 +80,7 @@ export function KsesReviewDialogBody( { sequestration, onApprove, onRemove } ) {
 						: __( 'Proposed block' ) }
 				</h3>
 				<div className="gse-review-kses-dialog__code-diff">
-					<RevisionsCodeDiff
-						revision={ { content: { raw: proposedHtml } } }
-						previousRevision={
-							isUpdate
-								? {
-										content: {
-											raw: sequestration.original,
-										},
-								  }
-								: null
-						}
-						showDiff
-						isPreviousRevisionLoading={ false }
-					/>
+					{ codeDiff }
 				</div>
 			</div>
 			{ isEditing && (
