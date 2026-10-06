@@ -1106,7 +1106,7 @@ function toBridgeBlocks( blocks: ReturnType< typeof parse > ): BridgeBlock[] {
  * replacement lands at the given slot.
  *
  * @param blocks        The tree.
- * @param ids           The record's block ids.
+ * @param ids           The blocks the record covers.
  * @param replacement   The replacement blocks.
  * @param slot          Where an insertion lands: the parent's id (the top
  *                      level when absent) and the index among its children.
@@ -1847,15 +1847,40 @@ export function createIntentLogManager( debug = false ): SyncManager {
 				'blocks' === target.type
 					? { parentId: target.parentId, index: target.index }
 					: { index: 0 };
+			/*
+			 * The content replaces the whole run the record covers: the
+			 * blocks the parked edits touch and the blocks between them,
+			 * which is what the reviewer saw. Replacing only the touched
+			 * blocks would leave a block from in between behind the
+			 * merged result, out of order.
+			 */
 			const tree = replaceBlocksInTree(
 				documentBlocks( state, doc ),
-				parked.blockIds,
+				parked.spanIds,
 				'' === content.trim() ? [] : toBridgeBlocks( parse( content ) ),
 				slot
 			);
+			// Only what the record showed may disappear: the run's blocks
+			// and the blocks inside them.
+			const removableIds = new Set( parked.blockIds );
+			const addRemovable = ( blocks: EngineDocument[ 'root' ] ) => {
+				for ( const block of blocks ) {
+					removableIds.add( block.syncId );
+					addRemovable( block.children );
+				}
+			};
+			const collectRun = ( blocks: EngineDocument[ 'root' ] ) => {
+				for ( const block of blocks ) {
+					if ( parked.spanIds.includes( block.syncId ) ) {
+						addRemovable( [ block ] );
+					} else {
+						collectRun( block.children );
+					}
+				}
+			};
+			collectRun( doc.root );
 			const derived = deriveIntents( doc, tree, {
-				// Only the parked's own blocks may disappear.
-				removableIds: new Set( parked.blockIds ),
+				removableIds,
 				excludeIds: state.docTombstones,
 				richTextFields: state.fieldsResolver,
 				rawContent: state.rawContent,

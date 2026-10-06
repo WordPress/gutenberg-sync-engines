@@ -11,10 +11,19 @@
  * parks keystroke by keystroke, and the reviewer must see it as one edit
  * with one decision, not a card per keystroke.
  *
+ * A RECORD COVERS ONE RUN OF SIBLING BLOCKS. The blocks the members
+ * touch need not be neighbours: one edit can change the first and the
+ * third paragraph. An accepted result replaces the record's blocks as
+ * one piece, so the record covers everything from its first block to its
+ * last, the blocks in between included (see coveringRun()). The reviewer
+ * then sees every block an accepted result replaces. A record that left
+ * the second paragraph out would put the merged result where the first
+ * one was and leave the second paragraph behind it, out of order.
+ *
  * THE THREE SIDES, all as serialized block content:
  *
- * - `base`: the target blocks in the document at the EARLIEST member's
- *   baseSeq, the state the author started from. Null when the replica no
+ * - `base`: the run in the document at the EARLIEST member's baseSeq,
+ *   the state the author started from. Null when the replica no
  *   longer holds that seq (a proposal older than the session, replayed on
  *   join); the review UI then compares proposed against current.
  * - `proposed`: that base document with the author's edits applied, then
@@ -28,8 +37,11 @@
  *   capture batch are expressed against the base plus the batch's earlier
  *   members, and a later batch at the same frame against the base plus
  *   the earlier batches, so applying them in order rebuilds what the
- *   author saw. An edit that no longer applies is skipped.
- * - `current`: the target blocks in this client's optimistic document.
+ *   author saw. An edit that no longer applies is skipped. The blocks
+ *   in between, which the author did not touch, read as the current
+ *   document has them (see proposedBlocks()): choosing this side must
+ *   not undo what a collaborator did to them.
+ * - `current`: the run in this client's optimistic document.
  *
  * Pure: the documents and the serializer come in through `deps`, so the
  * module runs without an editor.
@@ -73,6 +85,12 @@ export interface ConflictRecord {
 	members: IntentLogProposal[];
 	/** Every block id the members touch (present in a document or not). */
 	blockIds: string[];
+	/**
+	 * The blocks the record covers in the current document: the run of
+	 * siblings an accepted result replaces. Empty for a property record
+	 * and for a proposed insertion.
+	 */
+	spanIds: string[];
 	/** The property the members write, for a property record. */
 	property?: string;
 }
@@ -135,6 +153,166 @@ export function topMostIds( ids: string[], doc: EngineDocument ): string[] {
 				( placed.get( a )?.order ?? 0 ) -
 				( placed.get( b )?.order ?? 0 )
 		);
+}
+
+/** A run of sibling blocks: their ids in order, and where the run starts. */
+export interface BlockRun {
+	ids: string[];
+	/** The blocks' parent (the top level when absent). */
+	parentId?: string;
+	/** The first block's index among its siblings. */
+	index: number;
+	/**
+	 * The run's blocks that are one of the given ids or hold one. The
+	 * others are only in between.
+	 */
+	holders: Set< string >;
+}
+
+/**
+ * The smallest run of sibling blocks that covers the ids present in a
+ * document: from the first to the last of them, the blocks in between
+ * included.
+ *
+ * Ids under different parents are covered at the level they meet.
+ * Example: a top-level paragraph and a paragraph inside a group are
+ * covered by the run from the first paragraph to the group.
+ *
+ * @param ids Candidate ids.
+ * @param doc Document.
+ * @return The run (no ids when none is present).
+ */
+export function coveringRun( ids: string[], doc: EngineDocument ): BlockRun {
+	const present = topMostIds( ids, doc );
+	if ( 0 === present.length ) {
+		return { ids: [], index: 0, holders: new Set() };
+	}
+
+	const placed = placements( doc );
+	// The ancestors every present id shares: the run is among the
+	// children of the last of them.
+	const lineages = present.map( ( id ) => placed.get( id )?.ancestors ?? [] );
+	let shared = lineages[ 0 ].length;
+	for ( const lineage of lineages ) {
+		let depth = 0;
+		while (
+			depth < shared &&
+			depth < lineage.length &&
+			lineage[ depth ] === lineages[ 0 ][ depth ]
+		) {
+			depth++;
+		}
+		shared = depth;
+	}
+	const parentId = shared > 0 ? lineages[ 0 ][ shared - 1 ] : undefined;
+
+	// Each id stands in the run as itself, or as its ancestor at that
+	// level.
+	const holders = new Set(
+		present.map( ( id, position ) => lineages[ position ][ shared ] ?? id )
+	);
+	const indexes = Array.from( holders ).map(
+		( id ) => placed.get( id )?.index ?? 0
+	);
+	const first = Math.min( ...indexes );
+	const last = Math.max( ...indexes );
+
+	const run: string[] = [];
+	for ( const [ id, placement ] of placed ) {
+		if (
+			placement.parentId === parentId &&
+			placement.index >= first &&
+			placement.index <= last
+		) {
+			run[ placement.index - first ] = id;
+		}
+	}
+
+	return { ids: run, parentId, index: first, holders };
+}
+
+/**
+ * Every block of a document, at any depth, by id.
+ *
+ * @param doc Document.
+ * @return The blocks.
+ */
+function blocksById( doc: EngineDocument ): Map< string, EngineBlock > {
+	const map = new Map< string, EngineBlock >();
+	const walk = ( blocks: EngineBlock[] ) => {
+		for ( const block of blocks ) {
+			map.set( block.syncId, block );
+			walk( block.children );
+		}
+	};
+	walk( doc.root );
+	return map;
+}
+
+/**
+ * The blocks of a record's `proposed` side.
+ *
+ * The author's own blocks come from the document with the author's edits
+ * applied. The blocks in between, which the author did not touch, come
+ * from the current document: the author proposed nothing about them, so
+ * this side must agree with the current one there. Example: the author
+ * changed the first and the third paragraph from an older state, and a
+ * collaborator has since rewritten the second. This side shows the
+ * author's first and third paragraphs around the collaborator's second
+ * one. A reviewer who takes this side whole keeps the collaborator's
+ * work.
+ *
+ * A block in between that the current document no longer has in the
+ * run (removed or moved away) is left out. A block the current run
+ * gained since goes in after the block it follows there.
+ *
+ * @param ids         The ids the record's members touch.
+ * @param proposedDoc The document with the author's edits applied.
+ * @param current     The current document.
+ * @return The blocks, in order.
+ */
+function proposedBlocks(
+	ids: string[],
+	proposedDoc: EngineDocument,
+	current: EngineDocument
+): EngineBlock[] {
+	const proposedRun = coveringRun( ids, proposedDoc );
+	const currentRun = coveringRun( ids, current );
+	const fromProposed = blocksById( proposedDoc );
+	const fromCurrent = blocksById( current );
+
+	const blocks: EngineBlock[] = [];
+	const push = ( block: EngineBlock | undefined, at = blocks.length ) => {
+		if ( block ) {
+			blocks.splice( at, 0, block );
+		}
+	};
+	for ( const id of proposedRun.ids ) {
+		if ( proposedRun.holders.has( id ) ) {
+			push( fromProposed.get( id ) );
+		} else if ( currentRun.ids.includes( id ) ) {
+			push( fromCurrent.get( id ) );
+		}
+	}
+
+	// What the current run gained in between since the author's state.
+	let after = 0;
+	for ( const id of currentRun.ids ) {
+		const position = blocks.findIndex( ( block ) => block.syncId === id );
+		if ( position >= 0 ) {
+			after = position + 1;
+			continue;
+		}
+		if ( currentRun.holders.has( id ) ) {
+			// One of the author's own blocks: their side removes it or
+			// moves it away.
+			continue;
+		}
+		push( fromCurrent.get( id ), after );
+		after++;
+	}
+
+	return blocks;
 }
 
 /**
@@ -331,7 +509,7 @@ function acceptedSiblings(
 }
 
 /**
- * Where a record's blocks sit in the current document, or, for a
+ * The run of blocks a record covers in the current document, or, for a
  * proposed insertion, where the block would land.
  *
  * @param draft   Record draft.
@@ -342,19 +520,18 @@ function targetOf( draft: Draft, current: EngineDocument ): SyncConflictTarget {
 	if ( undefined !== draft.property ) {
 		return { type: 'property', name: draft.property };
 	}
-	const placed = placements( current );
-	const present = topMostIds( draft.blockIds, current );
-	if ( present.length ) {
-		const first = placed.get( present[ 0 ] );
+	const run = coveringRun( draft.blockIds, current );
+	if ( run.ids.length ) {
 		return {
 			type: 'blocks',
-			ids: present,
-			parentId: first?.parentId,
-			index: first?.index ?? 0,
-			count: present.length,
+			ids: run.ids,
+			parentId: run.parentId,
+			index: run.index,
+			count: run.ids.length,
 		};
 	}
 	// No block exists yet: the slot after the first insertion's anchor.
+	const placed = placements( current );
 	const insertion = draft.members.find(
 		( member ) => 'insert_block' === member.intent.type
 	);
@@ -421,25 +598,32 @@ export function buildConflictRecords(
 			if ( baseDoc ) {
 				base = deps.serializeBlocks(
 					baseDoc,
-					topMostIds( draft.blockIds, baseDoc )
+					coveringRun( draft.blockIds, baseDoc ).ids
 				);
 			}
-			proposed = deps.serializeBlocks(
+			const proposedSide = proposedBlocks(
+				draft.blockIds,
 				proposedDoc,
-				topMostIds( draft.blockIds, proposedDoc )
+				current
+			);
+			proposed = deps.serializeBlocks(
+				{ root: proposedSide },
+				proposedSide.map( ( block ) => block.syncId )
 			);
 			currentSide = deps.serializeBlocks(
 				current,
-				topMostIds( draft.blockIds, current )
+				coveringRun( draft.blockIds, current ).ids
 			);
 		}
+
+		const target = targetOf( draft, current );
 
 		return {
 			conflict: {
 				id: draft.members[ 0 ].intent.intentId,
 				kind: draft.kind,
 				authorId: draft.userId,
-				target: targetOf( draft, current ),
+				target,
 				base,
 				proposed,
 				current: currentSide,
@@ -457,6 +641,7 @@ export function buildConflictRecords(
 			},
 			members: draft.members,
 			blockIds: draft.blockIds,
+			spanIds: 'blocks' === target.type ? target.ids ?? [] : [],
 			property: draft.property,
 		};
 	} );

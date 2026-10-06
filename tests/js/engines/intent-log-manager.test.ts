@@ -2755,6 +2755,261 @@ describe( 'intent-log manager', () => {
 		).toEqual( [] );
 	} );
 
+	it( 'a record over two blocks that are not neighbours shows the block between them, and accept keeps the order', async () => {
+		const { transport } = await loadManagedEntity();
+		transport.captured.session!.receiveUpdate(
+			snapshotRow( [
+				{ syncId: 'p1', blockType: 'core/paragraph', text: 'One' },
+				{ syncId: 'p2', blockType: 'core/paragraph', text: 'Two' },
+				{ syncId: 'p3', blockType: 'core/paragraph', text: 'Three' },
+			] )
+		);
+		// One edit by another author changed the first and the third
+		// paragraph, and was set aside.
+		for ( const [ intentId, syncId, offset ] of [
+			[ 'm1', 'p1', 3 ],
+			[ 'm2', 'p3', 5 ],
+		] as Array< [ string, string, number ] > ) {
+			transport.captured.session!.receiveUpdate( {
+				data: JSON.stringify( {
+					intent: {
+						intentId,
+						actorId: 'u8c8',
+						baseSeq: 0,
+						txnId: 'txn-ends',
+						type: 'insert_text',
+						payload: {
+							syncId,
+							field: 'content',
+							offset,
+							text: '!',
+						},
+					},
+					actorId: 'u8c8',
+					reason: 'frame-conflict',
+				} ),
+				type: INTENT_LOG_UPDATE_TYPES.PARKED,
+			} );
+		}
+		await Promise.resolve();
+
+		const [ conflict ] = intentLogConflictSource.getOpenConflicts(
+			'postType/post',
+			'1'
+		);
+		const textOf = ( side: string | null ) =>
+			JSON.parse( `[${ ( side ?? '' ).split( '\n\n' ).join( ',' ) }]` )
+				.flat()
+				.map(
+					( block: { attributes: { content: string } } ) =>
+						block.attributes.content
+				);
+		expect( conflict.target ).toMatchObject( {
+			type: 'blocks',
+			ids: [ 'p1', 'p2', 'p3' ],
+			index: 0,
+			count: 3,
+		} );
+		expect( textOf( conflict.current ) ).toEqual( [
+			'One',
+			'Two',
+			'Three',
+		] );
+		expect( textOf( conflict.proposed ) ).toEqual( [
+			'One!',
+			'Two',
+			'Three!',
+		] );
+
+		// The reviewer accepts a merged result of all three blocks.
+		const merged = ( syncId: string, content: string ) => ( {
+			name: 'core/paragraph',
+			attributes: { content, metadata: { syncId } },
+			innerBlocks: [],
+		} );
+		const outcome = intentLogConflictSource.resolveConflict(
+			'postType/post',
+			'1',
+			conflict.id,
+			{
+				action: 'accept',
+				content: JSON.stringify( [
+					merged( 'p1', 'One, merged' ),
+					merged( 'p2', 'Two' ),
+					merged( 'p3', 'Three, merged' ),
+				] ),
+				current: conflict.current,
+			}
+		);
+		expect( outcome ).toBe( 'resolved' );
+
+		const doc = (
+			transport.captured.session as IntentLogSession
+		 ).getDocument()!;
+		expect(
+			doc.root.map(
+				( block ) => `${ block.syncId }:${ block.fields.content.text }`
+			)
+		).toEqual( [ 'p1:One, merged', 'p2:Two', 'p3:Three, merged' ] );
+		expect(
+			intentLogConflictSource.getOpenConflicts( 'postType/post', '1' )
+		).toEqual( [] );
+	} );
+
+	it( 'a record over a block and a block inside a group covers the group, and accept keeps the inner block in it', async () => {
+		const { transport } = await loadManagedEntity();
+		transport.captured.session!.receiveUpdate(
+			snapshotRow( [
+				{ syncId: 'p1', blockType: 'core/paragraph', text: 'One' },
+				{
+					syncId: 'g',
+					blockType: 'core/group',
+					children: [
+						{
+							syncId: 'p3',
+							blockType: 'core/paragraph',
+							text: 'Three',
+						},
+					],
+				},
+			] )
+		);
+		for ( const [ intentId, syncId, offset ] of [
+			[ 'm1', 'p1', 3 ],
+			[ 'm2', 'p3', 5 ],
+		] as Array< [ string, string, number ] > ) {
+			transport.captured.session!.receiveUpdate( {
+				data: JSON.stringify( {
+					intent: {
+						intentId,
+						actorId: 'u8c8',
+						baseSeq: 0,
+						txnId: 'txn-ends',
+						type: 'insert_text',
+						payload: {
+							syncId,
+							field: 'content',
+							offset,
+							text: '!',
+						},
+					},
+					actorId: 'u8c8',
+					reason: 'frame-conflict',
+				} ),
+				type: INTENT_LOG_UPDATE_TYPES.PARKED,
+			} );
+		}
+		await Promise.resolve();
+		const [ conflict ] = intentLogConflictSource.getOpenConflicts(
+			'postType/post',
+			'1'
+		);
+		expect( conflict.target ).toMatchObject( {
+			ids: [ 'p1', 'g' ],
+			index: 0,
+			count: 2,
+		} );
+
+		// The reviewer takes the proposed side as it is. (The stand-in
+		// parser reads one JSON list, the sides are one list per block.)
+		const proposed = JSON.stringify(
+			conflict.proposed
+				.split( '\n\n' )
+				.flatMap( ( block ) => JSON.parse( block ) )
+		);
+		intentLogConflictSource.resolveConflict(
+			'postType/post',
+			'1',
+			conflict.id,
+			{ action: 'accept', content: proposed }
+		);
+
+		const doc = (
+			transport.captured.session as IntentLogSession
+		 ).getDocument()!;
+		expect( doc.root.map( ( block ) => block.syncId ) ).toEqual( [
+			'p1',
+			'g',
+		] );
+		expect( doc.root[ 0 ].fields.content.text ).toBe( 'One!' );
+		expect(
+			doc.root[ 1 ].children.map(
+				( block ) => `${ block.syncId }:${ block.fields.content.text }`
+			)
+		).toEqual( [ 'p3:Three!' ] );
+	} );
+
+	it( 'an accepted result may leave out a block from between the two blocks, because the reviewer saw it', async () => {
+		const { transport } = await loadManagedEntity();
+		transport.captured.session!.receiveUpdate(
+			snapshotRow( [
+				{ syncId: 'p1', blockType: 'core/paragraph', text: 'One' },
+				{ syncId: 'p2', blockType: 'core/paragraph', text: 'Two' },
+				{ syncId: 'p3', blockType: 'core/paragraph', text: 'Three' },
+				{ syncId: 'p4', blockType: 'core/paragraph', text: 'Four' },
+			] )
+		);
+		for ( const [ intentId, syncId, offset ] of [
+			[ 'm1', 'p1', 3 ],
+			[ 'm2', 'p3', 5 ],
+		] as Array< [ string, string, number ] > ) {
+			transport.captured.session!.receiveUpdate( {
+				data: JSON.stringify( {
+					intent: {
+						intentId,
+						actorId: 'u8c8',
+						baseSeq: 0,
+						txnId: 'txn-ends',
+						type: 'insert_text',
+						payload: {
+							syncId,
+							field: 'content',
+							offset,
+							text: '!',
+						},
+					},
+					actorId: 'u8c8',
+					reason: 'frame-conflict',
+				} ),
+				type: INTENT_LOG_UPDATE_TYPES.PARKED,
+			} );
+		}
+		await Promise.resolve();
+		const [ conflict ] = intentLogConflictSource.getOpenConflicts(
+			'postType/post',
+			'1'
+		);
+
+		intentLogConflictSource.resolveConflict(
+			'postType/post',
+			'1',
+			conflict.id,
+			{
+				action: 'accept',
+				content: JSON.stringify( [
+					{
+						name: 'core/paragraph',
+						attributes: {
+							content: 'One and three',
+							metadata: { syncId: 'p1' },
+						},
+						innerBlocks: [],
+					},
+				] ),
+			}
+		);
+
+		// The run is replaced as one piece. The block after it stays.
+		const doc = (
+			transport.captured.session as IntentLogSession
+		 ).getDocument()!;
+		expect(
+			doc.root.map(
+				( block ) => `${ block.syncId }:${ block.fields.content.text }`
+			)
+		).toEqual( [ 'p1:One and three', 'p4:Four' ] );
+	} );
+
 	it( "accept with empty content removes the record's block", async () => {
 		const { transport } = await loadManagedEntity();
 		transport.captured.session!.receiveUpdate(

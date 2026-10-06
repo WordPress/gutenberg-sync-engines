@@ -17,6 +17,7 @@ import { createDocument } from '../../../src/engines/intent-log/document.js';
 import { applyIntent } from '../../../src/engines/intent-log/reducer.js';
 import {
 	buildConflictRecords,
+	coveringRun,
 	topMostIds,
 	type ConflictDeps,
 } from '../../../src/engines/intent-log-conflicts';
@@ -420,6 +421,214 @@ describe( 'intent-log conflict records', () => {
 		expect( record.property ).toBe( 'title' );
 		// A property write has no text frame for later typing to follow.
 		expect( record.conflict.followsTyping ).toBeUndefined();
+	} );
+
+	describe( 'a record over blocks that are not neighbours', () => {
+		const THREE = createDocument( [
+			{ syncId: 'p1', blockType: 'core/paragraph', text: 'One' },
+			{ syncId: 'p2', blockType: 'core/paragraph', text: 'Two' },
+			{ syncId: 'p3', blockType: 'core/paragraph', text: 'Three' },
+		] );
+		const append = (
+			syncId: string,
+			offset: number,
+			text: string,
+			options: { actorId?: string; txnId?: string } = {}
+		) =>
+			intent(
+				'insert_text',
+				{ syncId, field: 'content', offset, text },
+				options
+			);
+		// One edit by the author changes the first and the third
+		// paragraph.
+		const authorEdit = () => [
+			append( 'p1', 3, '!', { txnId: 'txn-ends' } ),
+			append( 'p3', 5, '!', { txnId: 'txn-ends' } ),
+		];
+
+		it( 'covers the block between them on every side', () => {
+			const members = authorEdit();
+			const [ record ] = buildConflictRecords(
+				members.map( ( envelope ) => parked( envelope ) ),
+				depsFor( THREE, { 0: THREE } )
+			);
+
+			expect( record.conflict.base ).toBe( 'p1:One|p2:Two|p3:Three' );
+			expect( record.conflict.current ).toBe( 'p1:One|p2:Two|p3:Three' );
+			expect( record.conflict.proposed ).toBe(
+				'p1:One!|p2:Two|p3:Three!'
+			);
+			expect( record.conflict.target ).toEqual( {
+				type: 'blocks',
+				ids: [ 'p1', 'p2', 'p3' ],
+				parentId: undefined,
+				index: 0,
+				count: 3,
+			} );
+			// The edits touch two blocks; an accepted result replaces three.
+			expect( record.blockIds ).toEqual( [ 'p1', 'p3' ] );
+			expect( record.spanIds ).toEqual( [ 'p1', 'p2', 'p3' ] );
+		} );
+
+		it( "shows a collaborator's rewrite of the block in between on the proposed side too", () => {
+			// The author started from THREE. A collaborator has since
+			// rewritten the second paragraph.
+			const current = applyIntent(
+				THREE,
+				append( 'p2', 3, ' (rewritten)', { actorId: 'u9c9' } )
+			).doc;
+			const [ record ] = buildConflictRecords(
+				authorEdit().map( ( envelope ) => parked( envelope ) ),
+				depsFor( current, { 0: THREE } )
+			);
+
+			expect( record.conflict.base ).toBe( 'p1:One|p2:Two|p3:Three' );
+			expect( record.conflict.current ).toBe(
+				'p1:One|p2:Two (rewritten)|p3:Three'
+			);
+			// The author proposed nothing about the second paragraph, so
+			// taking this side whole keeps the collaborator's text.
+			expect( record.conflict.proposed ).toBe(
+				'p1:One!|p2:Two (rewritten)|p3:Three!'
+			);
+		} );
+
+		it( 'shows a block a collaborator added in between on the current and the proposed side', () => {
+			// The author started from two paragraphs that WERE neighbours.
+			const base = createDocument( [
+				{ syncId: 'p1', blockType: 'core/paragraph', text: 'One' },
+				{ syncId: 'p3', blockType: 'core/paragraph', text: 'Three' },
+			] );
+			const current = applyIntent(
+				base,
+				intent(
+					'insert_block',
+					{
+						block: {
+							syncId: 'px',
+							blockType: 'core/paragraph',
+							text: 'New',
+						},
+						parentId: null,
+						afterSiblingId: 'p1',
+					},
+					{ actorId: 'u9c9' }
+				)
+			).doc;
+			const [ record ] = buildConflictRecords(
+				authorEdit().map( ( envelope ) => parked( envelope ) ),
+				depsFor( current, { 0: base } )
+			);
+
+			expect( record.conflict.base ).toBe( 'p1:One|p3:Three' );
+			expect( record.conflict.current ).toBe( 'p1:One|px:New|p3:Three' );
+			expect( record.conflict.proposed ).toBe(
+				'p1:One!|px:New|p3:Three!'
+			);
+			expect( record.conflict.target ).toMatchObject( {
+				ids: [ 'p1', 'px', 'p3' ],
+				index: 0,
+				count: 3,
+			} );
+		} );
+
+		it( 'leaves a block a collaborator removed from in between off the proposed side', () => {
+			const current = applyIntent(
+				THREE,
+				intent( 'remove_block', { syncId: 'p2' }, { actorId: 'u9c9' } )
+			).doc;
+			const [ record ] = buildConflictRecords(
+				authorEdit().map( ( envelope ) => parked( envelope ) ),
+				depsFor( current, { 0: THREE } )
+			);
+
+			expect( record.conflict.base ).toBe( 'p1:One|p2:Two|p3:Three' );
+			expect( record.conflict.current ).toBe( 'p1:One|p3:Three' );
+			expect( record.conflict.proposed ).toBe( 'p1:One!|p3:Three!' );
+		} );
+
+		it( 'covers a block and a block inside a group at the level they meet', () => {
+			const doc = createDocument( [
+				{ syncId: 'p0', blockType: 'core/paragraph', text: 'Zero' },
+				{ syncId: 'p1', blockType: 'core/paragraph', text: 'One' },
+				{ syncId: 'p2', blockType: 'core/paragraph', text: 'Two' },
+				{
+					syncId: 'g',
+					blockType: 'core/group',
+					children: [
+						{
+							syncId: 'p3',
+							blockType: 'core/paragraph',
+							text: 'Three',
+						},
+					],
+				},
+			] );
+			const [ record ] = buildConflictRecords(
+				authorEdit().map( ( envelope ) => parked( envelope ) ),
+				depsFor( doc, { 0: doc } )
+			);
+
+			expect( record.conflict.current ).toBe(
+				'p1:One|p2:Two|g:[p3:Three]'
+			);
+			expect( record.conflict.proposed ).toBe(
+				'p1:One!|p2:Two|g:[p3:Three!]'
+			);
+			expect( record.conflict.target ).toEqual( {
+				type: 'blocks',
+				ids: [ 'p1', 'p2', 'g' ],
+				parentId: undefined,
+				index: 1,
+				count: 3,
+			} );
+		} );
+
+		it( 'covers blocks inside one group among the children of that group', () => {
+			const doc = createDocument( [
+				{
+					syncId: 'g',
+					blockType: 'core/group',
+					children: [
+						{
+							syncId: 'p1',
+							blockType: 'core/paragraph',
+							text: 'One',
+						},
+						{
+							syncId: 'p2',
+							blockType: 'core/paragraph',
+							text: 'Two',
+						},
+						{
+							syncId: 'p3',
+							blockType: 'core/paragraph',
+							text: 'Three',
+						},
+						{
+							syncId: 'p4',
+							blockType: 'core/paragraph',
+							text: 'Four',
+						},
+					],
+				},
+			] );
+
+			expect( coveringRun( [ 'p3', 'p1', 'gone' ], doc ) ).toMatchObject(
+				{
+					ids: [ 'p1', 'p2', 'p3' ],
+					parentId: 'g',
+					index: 0,
+				}
+			);
+			expect( coveringRun( [ 'p4' ], doc ) ).toMatchObject( {
+				ids: [ 'p4' ],
+				parentId: 'g',
+				index: 3,
+			} );
+			expect( coveringRun( [ 'gone' ], doc ).ids ).toEqual( [] );
+		} );
 	} );
 
 	it( 'serializes only the top-most of nested targets, in document order', () => {
