@@ -1919,6 +1919,10 @@ export function createIntentLogManager( debug = false ): SyncManager {
 						session.author( 'set_property', {
 							name: parked.property,
 							value,
+							observedVersion:
+								session.getDocument()?.propVersions?.[
+									parked.property
+								] ?? 0,
 						} );
 					} else {
 						authorReplacement( parked, decision.content );

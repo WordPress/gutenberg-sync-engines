@@ -1524,75 +1524,90 @@ test.describe( 'Collaboration - intent-log engine @engine-intent-log', () => {
 		} ).toPass( { timeout: 15000 } );
 	} );
 
-	test( 'concurrent divergent title edits list the set-aside title for review, and editors converge', async ( {
-		collaborationUtils,
-		requestUtils,
-		editor,
-	} ) => {
-		const post = await requestUtils.createPost( {
-			title: 'Contested',
-			status: 'draft',
-			content:
-				'<!-- wp:paragraph -->\n<p>Body</p>\n<!-- /wp:paragraph -->',
-			date_gmt: new Date().toISOString(),
-		} );
+	// The two decisions on a set-aside title: keep the title that won, or
+	// use the one that was set aside.
+	for ( const decision of [ 'Keep current', 'Use proposed' ] ) {
+		test( `concurrent divergent title edits list the set-aside title for review, and "${ decision }" converges the editors`, async ( {
+			collaborationUtils,
+			requestUtils,
+			editor,
+		} ) => {
+			const post = await requestUtils.createPost( {
+				title: 'Contested',
+				status: 'draft',
+				content:
+					'<!-- wp:paragraph -->\n<p>Body</p>\n<!-- /wp:paragraph -->',
+				date_gmt: new Date().toISOString(),
+			} );
 
-		await collaborationUtils.openCollaborativeSession( post.id );
-		const { editor2, page2 } = collaborationUtils;
-		const page1 = editor.page;
+			await collaborationUtils.openCollaborativeSession( post.id );
+			const { editor2, page2 } = collaborationUtils;
+			const page1 = editor.page;
 
-		// Both users rewrite the title at the same moment: one write wins
-		// the register, the other is set aside for review.
-		await Promise.all( [
-			editor.canvas
-				.getByRole( 'textbox', { name: 'Add title' } )
-				.fill( 'Title A' ),
-			editor2.canvas
-				.getByRole( 'textbox', { name: 'Add title' } )
-				.fill( 'Title B' ),
-		] );
-
-		// A title has no block to show a card on, so the document sidebar
-		// lists it.
-		const setAside = 'A change to the title was set aside.';
-		await expect( async () => {
-			const counts = await Promise.all( [
-				page1.getByText( setAside ).count(),
-				page2.getByText( setAside ).count(),
+			// Both users rewrite the title at the same moment: one write
+			// wins the register, the other is set aside for review.
+			await Promise.all( [
+				editor.canvas
+					.getByRole( 'textbox', { name: 'Add title' } )
+					.fill( 'Title A' ),
+				editor2.canvas
+					.getByRole( 'textbox', { name: 'Add title' } )
+					.fill( 'Title B' ),
 			] );
-			expect( counts[ 0 ] + counts[ 1 ] ).toBeGreaterThan( 0 );
-		} ).toPass( { timeout: 15000 } );
 
-		// Keeping the current title settles the conflict for everyone.
-		for ( const page of [ page1, page2 ] ) {
-			const keep = page.getByRole( 'button', { name: 'Keep current' } );
-			if ( await keep.count() ) {
-				await keep.first().click();
-				break;
+			// A title has no block to show a card on, so the document
+			// sidebar lists it.
+			const setAside = 'A change to the title was set aside.';
+			await expect( async () => {
+				const counts = await Promise.all( [
+					page1.getByText( setAside ).count(),
+					page2.getByText( setAside ).count(),
+				] );
+				expect( counts[ 0 ] + counts[ 1 ] ).toBeGreaterThan( 0 );
+			} ).toPass( { timeout: 15000 } );
+
+			// One decision settles the conflict for everyone. The item
+			// shows the proposed title first and the current one second.
+			let decided = '';
+			for ( const page of [ page1, page2 ] ) {
+				const item = page.locator( '.gse-review-panel__item' ).first();
+				if ( await item.count() ) {
+					const [ proposed, current ] = await item
+						.locator( '.gse-review-panel__value' )
+						.allTextContents();
+					decided = current;
+					if ( 'Use proposed' === decision ) {
+						decided = proposed;
+					}
+					await item
+						.getByRole( 'button', { name: decision } )
+						.click();
+					break;
+				}
 			}
-		}
+			expect( [ 'Title A', 'Title B' ] ).toContain( decided );
 
-		await expect( async () => {
-			const counts = await Promise.all( [
-				page1.getByText( setAside ).count(),
-				page2.getByText( setAside ).count(),
-			] );
-			expect( counts[ 0 ] + counts[ 1 ] ).toBe( 0 );
-		} ).toPass( { timeout: 15000 } );
+			await expect( async () => {
+				const counts = await Promise.all( [
+					page1.getByText( setAside ).count(),
+					page2.getByText( setAside ).count(),
+				] );
+				expect( counts[ 0 ] + counts[ 1 ] ).toBe( 0 );
+			} ).toPass( { timeout: 15000 } );
 
-		// Both editors converge on the winning title.
-		await expect( async () => {
-			const titles = await Promise.all(
-				[ editor, editor2 ].map( ( currentEditor ) =>
-					currentEditor.canvas
-						.getByRole( 'textbox', { name: 'Add title' } )
-						.textContent()
-				)
-			);
-			expect( titles[ 0 ] ).toBe( titles[ 1 ] );
-			expect( [ 'Title A', 'Title B' ] ).toContain( titles[ 0 ] );
-		} ).toPass( { timeout: 15000 } );
-	} );
+			// Both editors converge on the decided title.
+			await expect( async () => {
+				const titles = await Promise.all(
+					[ editor, editor2 ].map( ( currentEditor ) =>
+						currentEditor.canvas
+							.getByRole( 'textbox', { name: 'Add title' } )
+							.textContent()
+					)
+				);
+				expect( titles ).toEqual( [ decided, decided ] );
+			} ).toPass( { timeout: 15000 } );
+		} );
+	}
 
 	test( 'a mid-session engine change drops open tabs into the lock modal instead of retry-hammering', async ( {
 		collaborationUtils,

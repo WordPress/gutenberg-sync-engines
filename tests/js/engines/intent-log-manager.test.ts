@@ -2618,6 +2618,102 @@ describe( 'intent-log manager', () => {
 		expect( doc.root.map( ( block ) => block.syncId ) ).toEqual( [ 'p1' ] );
 	} );
 
+	it( 'accept of a post-field record authors one set_property at the observed version, then closes the record', async () => {
+		const { handlers, transport } = await loadManagedEntity( {
+			title: { raw: 'Original' },
+		} );
+		const session = transport.captured.session as IntentLogSession;
+		session.receiveUpdate( snapshotRow( [], { title: 'Original' } ) );
+		// A collaborator's title landed first...
+		session.receiveUpdate( {
+			data: JSON.stringify( {
+				intentId: 'remote-title-1',
+				actorId: 'u9c9',
+				baseSeq: 0,
+				txnId: null,
+				type: 'set_property',
+				payload: {
+					name: 'title',
+					value: 'Winning title',
+					observedVersion: 0,
+				},
+			} ),
+			type: INTENT_LOG_UPDATE_TYPES.INTENT,
+		} );
+		// ...and another author's title against the same base parked.
+		session.receiveUpdate( {
+			data: JSON.stringify( {
+				intent: {
+					intentId: 'p-title',
+					actorId: 'u8c8',
+					baseSeq: 0,
+					txnId: null,
+					type: 'set_property',
+					payload: {
+						name: 'title',
+						value: 'Set-aside title',
+						observedVersion: 0,
+					},
+				},
+				actorId: 'u8c8',
+				reason: 'property-conflict',
+			} ),
+			type: INTENT_LOG_UPDATE_TYPES.PARKED,
+		} );
+		await Promise.resolve();
+		expect(
+			intentLogConflictSource.getOpenConflicts( 'postType/post', '1' )
+		).toEqual( [
+			expect.objectContaining( {
+				id: 'p-title',
+				target: { type: 'property', name: 'title' },
+			} ),
+		] );
+		const observedVersion = session.getDocument()!.propVersions!.title;
+		expect( observedVersion ).toBeGreaterThan( 0 );
+		transport.captured.sent.length = 0;
+
+		intentLogConflictSource.resolveConflict(
+			'postType/post',
+			'1',
+			'p-title',
+			{ action: 'accept', content: 'Merged title' }
+		);
+
+		// One property write that has seen the current title, then the
+		// closure behind it.
+		const sent = transport.captured.sent.map( ( update ) => ( {
+			type: update.type,
+			decoded: JSON.parse( update.data ),
+		} ) );
+		expect( sent ).toEqual( [
+			{
+				type: INTENT_LOG_UPDATE_TYPES.INTENT,
+				decoded: expect.objectContaining( {
+					type: 'set_property',
+					payload: {
+						name: 'title',
+						value: 'Merged title',
+						observedVersion,
+					},
+				} ),
+			},
+			{
+				type: INTENT_LOG_UPDATE_TYPES.RESOLVED,
+				decoded: { proposalId: 'p-title', resolution: 'dismissed' },
+			},
+		] );
+
+		// The document and the reviewer's editor hold the accepted title,
+		// and the record is closed.
+		expect( session.getDocument()!.props!.title ).toBe( 'Merged title' );
+		expect( handlers.edits.at( -1 ) ).toEqual( { title: 'Merged title' } );
+		await Promise.resolve();
+		expect(
+			intentLogConflictSource.getOpenConflicts( 'postType/post', '1' )
+		).toEqual( [] );
+	} );
+
 	it( 'restoreProposal re-authors lost text at the current head, then resolves', async () => {
 		const { manager, handlers, transport } = await loadManagedEntity();
 		transport.captured.session!.receiveUpdate(
