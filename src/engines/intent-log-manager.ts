@@ -1878,20 +1878,6 @@ export function createIntentLogManager( debug = false ): SyncManager & {
 				if ( ! parked ) {
 					return 'resolved';
 				}
-				/*
-				 * The reviewer decided against a `current` the document no
-				 * longer has: a collaborator's edit landed in between.
-				 * Writing the accepted content now would remove that edit
-				 * (the replacement is a diff against the document as it is
-				 * NOW). Nothing is written and the record stays open.
-				 */
-				if (
-					'accept' === decision.action &&
-					undefined !== decision.current &&
-					decision.current !== parked.conflict.current
-				) {
-					return 'stale';
-				}
 				const memberIds = parked.members.map(
 					( member ) => member.intent.intentId
 				);

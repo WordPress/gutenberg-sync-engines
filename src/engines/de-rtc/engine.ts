@@ -771,26 +771,6 @@ export function createDeRtcEngine(): SyncEngine & {
 			const entity: EntityConflicts = {
 				list: readConflicts,
 				resolve: ( conflictId, decision ) => {
-					/*
-					 * The reviewer decided against a `current` this
-					 * client's document no longer has (a collaborator's
-					 * version landed in between): nothing is sent, and the
-					 * record stays open with its new `current`. The server
-					 * makes the matching check for a version this client
-					 * has not received yet (see the `seenVersion` the
-					 * resolver sends).
-					 */
-					if (
-						'accept' === decision.action &&
-						undefined !== decision.current
-					) {
-						const open = readConflicts().find(
-							( conflict ) => conflict.id === conflictId
-						);
-						if ( open && open.current !== decision.current ) {
-							return 'stale';
-						}
-					}
 					const contestKey = contestedKeyOf( conflictId );
 					if ( null !== contestKey ) {
 						/*

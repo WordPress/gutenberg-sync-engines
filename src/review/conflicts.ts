@@ -186,6 +186,14 @@ export function subscribeConflicts(
  * Hands the reviewer's decision to the source whose open list holds the
  * record. Unknown ids are ignored: the record closed elsewhere first.
  *
+ * An accepted decision names the `current` the reviewer saw. When the
+ * record's `current` has moved on since (a collaborator's edit landed in
+ * between), the decision is refused as `stale` without reaching the
+ * engine: writing the accepted content now would remove that edit.
+ * Nothing is written and the record stays open. The engines make the
+ * matching check on the server for a change this client has not
+ * received yet.
+ *
  * @param objectType The sync object type.
  * @param objectId   The sync object id.
  * @param conflictId The record's id.
@@ -200,7 +208,15 @@ export function resolveConflict(
 ): Promise< SyncConflictOutcome > {
 	for ( const source of sources ) {
 		const open = source.getOpenConflicts( objectType, objectId );
-		if ( open.some( ( conflict ) => conflict.id === conflictId ) ) {
+		const record = open.find( ( conflict ) => conflict.id === conflictId );
+		if ( record ) {
+			if (
+				'accept' === decision.action &&
+				undefined !== decision.current &&
+				decision.current !== record.current
+			) {
+				return Promise.resolve< SyncConflictOutcome >( 'stale' );
+			}
 			return Promise.resolve(
 				source.resolveConflict(
 					objectType,

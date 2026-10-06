@@ -7,7 +7,14 @@
 /**
  * External dependencies
  */
-import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import {
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	jest,
+} from '@jest/globals';
 import * as Y from 'yjs';
 
 // eslint-disable-next-line import/no-unresolved -- Provided at runtime as wp.sync.
@@ -17,6 +24,11 @@ import type { SyncConfig } from '@wordpress/sync';
  * Internal dependencies
  */
 import { createYjsServerEngine } from '../../../../src/engines/yjs-server/engine';
+import {
+	registerConflictSource,
+	resetConflictSourcesForTesting,
+	resolveConflict as registryResolveConflict,
+} from '../../../../src/review/conflicts';
 import {
 	YJS_SERVER_HELD_RESOLVED_TYPE,
 	YJS_SERVER_HELD_TYPE,
@@ -69,6 +81,10 @@ const heldRow = ( overrides: Record< string, unknown > = {} ) => ( {
 
 describe( 'yjs-server security holds (client)', () => {
 	let engine: ReturnType< typeof createYjsServerEngine >;
+
+	afterEach( () => {
+		resetConflictSourcesForTesting();
+	} );
 
 	beforeEach( () => {
 		engine = createYjsServerEngine();
@@ -287,7 +303,10 @@ describe( 'yjs-server security holds (client)', () => {
 		const session = makeSession();
 		session.receiveUpdate( heldRow() );
 
-		const outcome = await engine.conflicts.resolveConflict(
+		// The refusal is the conflict registry's, against the record the
+		// engine publishes; the engine is never asked.
+		registerConflictSource( engine.conflicts );
+		const outcome = await registryResolveConflict(
 			'postType/post',
 			'1',
 			'h-1',

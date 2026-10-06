@@ -127,15 +127,6 @@ export function createYjsServerEngine(): SyncEngine & {
 							.find(
 								( candidate ) => candidate.holdId === conflictId
 							);
-						// The reviewer decided against a sanitized block
-						// this hold no longer shows: nothing is sent.
-						if (
-							hold &&
-							undefined !== decision.current &&
-							decision.current !== hold.sanitized
-						) {
-							return 'stale';
-						}
 						// The server lands the content in place of the
 						// sanitized block, under the reviewer's capability,
 						// and closes the hold in the same request. It

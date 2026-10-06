@@ -86,6 +86,29 @@ describe( 'resolveConflict', () => {
 		);
 	} );
 
+	it( 'refuses an accepted decision made against a current side the record no longer shows, without asking the source', async () => {
+		const only = source( [ 'c1' ], 'resolved' );
+		registerConflictSource( only.source );
+
+		await expect(
+			resolveConflict( ...POST, 'c1', {
+				action: 'accept',
+				content: 'merged',
+				current: 'what the reviewer saw, since changed',
+			} )
+		).resolves.toBe( 'stale' );
+		expect( only.resolve ).not.toHaveBeenCalled();
+
+		await expect(
+			resolveConflict( ...POST, 'c1', {
+				action: 'accept',
+				content: 'merged',
+				current: PARAGRAPH_CONFLICT.current,
+			} )
+		).resolves.toBe( 'resolved' );
+		expect( only.resolve ).toHaveBeenCalledTimes( 1 );
+	} );
+
 	it( 'reads a record no source holds as resolved elsewhere', async () => {
 		const only = source( [ 'c1' ], 'stale' );
 		registerConflictSource( only.source );

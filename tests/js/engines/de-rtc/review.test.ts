@@ -15,6 +15,11 @@ import {
  */
 import { createDeRtcEngine } from '../../../../src/engines/de-rtc/engine';
 import {
+	registerConflictSource,
+	resetConflictSourcesForTesting,
+	resolveConflict as registryResolveConflict,
+} from '../../../../src/review/conflicts';
+import {
 	DE_RTC_ANNOUNCE_TYPE,
 	DE_RTC_PARKED_TYPE,
 	DE_RTC_PROPOSAL_TYPE,
@@ -79,6 +84,10 @@ const parkedRow = (
 		changedBlocks,
 		excerpt,
 	} ),
+} );
+
+afterEach( () => {
+	resetConflictSourcesForTesting();
 } );
 
 describe( 'de-rtc review lane (client)', () => {
@@ -359,7 +368,10 @@ describe( 'de-rtc review lane (client)', () => {
 			)
 		);
 
-		const outcome = await engine.conflicts.resolveConflict(
+		// The refusal is the conflict registry's, against the record the
+		// engine publishes; the engine is never asked.
+		registerConflictSource( engine.conflicts );
+		const outcome = await registryResolveConflict(
 			'postType/book',
 			'1',
 			'p-9-1',

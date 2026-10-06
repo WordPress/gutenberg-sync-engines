@@ -76,6 +76,11 @@ jest.mock( '@wordpress/api-fetch', () => ( {
  */
 import { Awareness } from 'y-protocols/awareness';
 import { createIntentLogManager } from '../../../src/engines/intent-log-manager';
+import {
+	registerConflictSource,
+	resetConflictSourcesForTesting,
+	resolveConflict as registryResolveConflict,
+} from '../../../src/review/conflicts';
 import { createIntentLogEngineAdapter } from '../../../src/engines/intent-log-adapter';
 import {
 	INTENT_LOG_UPDATE_TYPES,
@@ -184,6 +189,7 @@ describe( 'intent-log manager', () => {
 		jest.useRealTimers();
 		removeFilter( FILTER, HOOK );
 		resetEngineAdaptersForTesting();
+		resetConflictSourcesForTesting();
 		resetProviderCreatorsForTesting();
 		delete window.__experimentalEnableRealTimeCollaboration;
 		delete window._wpCollaborationSync;
@@ -2618,13 +2624,16 @@ describe( 'intent-log manager', () => {
 				innerBlocks: [],
 			},
 		] );
-		expect(
-			manager.conflicts.resolveConflict( 'postType/post', '1', seen.id, {
+		// The refusal is the conflict registry's, against the record the
+		// engine publishes; the engine is never asked.
+		registerConflictSource( manager.conflicts );
+		await expect(
+			registryResolveConflict( 'postType/post', '1', seen.id, {
 				action: 'accept',
 				content: replacement,
 				current: seen.current,
 			} )
-		).toBe( 'stale' );
+		).resolves.toBe( 'stale' );
 		expect( transport.captured.sent ).toEqual( [] );
 		expect(
 			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
