@@ -1,10 +1,9 @@
 /**
  * Plugin-local collaboration fixtures: the subtree's fixture wiring
  * (user setup, collaboration toggle, teardown) around a hardened
- * CollaborationUtils. The one override closes a full-suite-load flake
- * in the subtree fixture's login flow; the root-cause fix belongs
- * upstream in Gutenberg (human-owned), so the subtree stays pristine
- * and the specs import this module instead.
+ * CollaborationUtils. Joining users authenticate through a bounded login
+ * request before opening the editor. Both the browser specs and fuzzer use
+ * this module; the pinned subtree remains unchanged.
  */
 
 /**
@@ -17,10 +16,11 @@ export { expect } from '@wordpress/e2e-test-utils-playwright';
 /**
  * Internal dependencies
  */
-import CollaborationUtils, {
+import {
 	SECOND_USER,
 	setCollaboration,
 } from '../../../gutenberg/test/e2e/specs/editor/collaboration/fixtures/collaboration-utils';
+import CollaborationUtils from './authenticated-collaboration-utils';
 
 /**
  * Diagnostic CPU throttle (issue #37): the burst-timing failures only fire
@@ -153,17 +153,7 @@ export async function waitForSyncQuiet( page: Page ): Promise< void > {
 
 class HardenedCollaborationUtils extends CollaborationUtils {
 	/**
-	 * The subtree fixture logs joining users in through wp-login.php,
-	 * whose wp_attempt_focus() steals focus (and SELECTS the username
-	 * field) on a timer after load. Under full-suite load that timer can
-	 * fire between the fixture's two fill() calls, so the password is
-	 * inserted into the still-selected username field, the mangled form
-	 * submits, and the login page re-renders instead of navigating —
-	 * observed in a retry-free full run as a username field holding the
-	 * literal password, an empty password field, and a waitForURL
-	 * timeout. One clean retry (a fresh context, a fresh login page)
-	 * de-races the harness plumbing; the tests' assertion surfaces are
-	 * untouched.
+	 * Add optional diagnostics after the authenticated editor is ready.
 	 *
 	 * @param args joinUser arguments (post ID, user credentials).
 	 * @return The joined user's page and editor.
@@ -171,12 +161,7 @@ class HardenedCollaborationUtils extends CollaborationUtils {
 	async joinUser(
 		...args: Parameters< CollaborationUtils[ 'joinUser' ] >
 	): ReturnType< CollaborationUtils[ 'joinUser' ] > {
-		let joined;
-		try {
-			joined = await super.joinUser( ...args );
-		} catch {
-			joined = await super.joinUser( ...args );
-		}
+		const joined = await super.joinUser( ...args );
 		await applyCpuThrottle( joined.page );
 		await installLongTaskProbe( joined.page );
 		await startCpuProfile( joined.page );
