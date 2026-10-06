@@ -580,6 +580,7 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 			$before_doc  = self::rebuild_doc( $before_bytes, array() );
 			$before_list = self::materialize_blocks( $before_doc, $wrappers );
 			$before_set  = array_fill_keys( $before_list, true );
+			$before_ids  = self::top_level_block_ids( $before_doc );
 			foreach ( $dirty as $index => $serialized ) {
 				if ( isset( $before_set[ $serialized ] ) ) {
 					unset( $dirty[ $index ] );
@@ -616,6 +617,14 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 				);
 				$id_base   = 'kses-' . substr( md5( $room . '|' . $index . '|' . $serialized ), 0, 8 );
 				$specs     = self::blocks_to_yblocks( $parsed, $id_base, $wrappers );
+				// The id of the block the author wrote into. The sanitized
+				// form gets a new id below, so this is the id an open
+				// hold over the same block still carries.
+				$replaced    = $yblocks->get( $index );
+				$replaced_id = null;
+				if ( $replaced instanceof \Yjs\Types\YMap && is_string( $replaced->get( 'clientId' ) ) ) {
+					$replaced_id = $replaced->get( 'clientId' );
+				}
 				$yblocks->delete( $index, 1 );
 				$block_id = null;
 				if ( array() !== $specs ) {
@@ -633,13 +642,17 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 					}
 				}
 				$holds[] = array(
-					'blockId'   => $block_id,
-					'index'     => (int) $index,
-					'held'      => $serialized,
-					'sanitized' => $sanitized,
+					'blockId'    => $block_id,
+					'index'      => (int) $index,
+					'held'       => $serialized,
+					'sanitized'  => $sanitized,
 					// What the block was before this batch, when the same
 					// slot held one ('' for a block this batch added).
-					'base'      => isset( $before_list[ $index ] ) && count( $before_list ) === count( $after ) ? $before_list[ $index ] : '',
+					'base'       => isset( $before_list[ $index ] ) && count( $before_list ) === count( $after ) ? $before_list[ $index ] : '',
+					// Not part of the row: how hold_markup() finds the
+					// open hold over the same block.
+					'replacedId' => $replaced_id,
+					'added'      => null === $replaced_id || ! isset( $before_ids[ $replaced_id ] ),
 				);
 				++$sanitized_count;
 			}
@@ -678,10 +691,11 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 		/**
 		 * Holds one sanitized block's stripped markup for review: records
 		 * it in the room's ledger and announces it as a `held` row every
-		 * client lists. ONE hold per author and slot: a newer hold by the
+		 * client lists. ONE hold per author and block: a newer hold by the
 		 * same author over the same block supersedes the open one, so an
 		 * author who keeps editing a held block raises one review task,
-		 * not one per typing burst.
+		 * not one per typing burst. The block is followed by its id, not
+		 * by its position (see is_hold_over_same_block()).
 		 *
 		 * The row: holdId, blockId (the sanitized block's id in the
 		 * canonical document, null when nothing of the block survived),
@@ -694,7 +708,12 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 		 *
 		 * @param string $room      Room identifier.
 		 * @param int    $client_id The authoring client.
-		 * @param array  $hold      blockId, index, held, sanitized, base.
+		 * @param array  $hold      blockId, index, held, sanitized, base,
+		 *                          and the two fields that find the open
+		 *                          hold over the same block: replacedId
+		 *                          (the id the block had when the author
+		 *                          wrote into it) and added (whether this
+		 *                          batch added the block).
 		 * @return void
 		 */
 		private function hold_markup( string $room, int $client_id, array $hold ): void {
@@ -705,7 +724,7 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 			$ledger = $this->get_open_holds( $room );
 
 			foreach ( $ledger as $open_id => $open ) {
-				if ( ! is_array( $open ) || (int) ( $open['author'] ?? 0 ) !== $author || (int) ( $open['index'] ?? -1 ) !== (int) $hold['index'] ) {
+				if ( ! is_array( $open ) || (int) ( $open['author'] ?? 0 ) !== $author || ! self::is_hold_over_same_block( $open, $hold ) ) {
 					continue;
 				}
 				if ( ( $open['held'] ?? null ) === $hold['held'] ) {
@@ -745,6 +764,37 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 				$ledger[ $hold_id ] = $entry;
 			}
 			$this->storage->set_room_meta( $room, self::META_HELD, $ledger );
+		}
+
+		/**
+		 * Whether a new hold is over the block of an open hold.
+		 *
+		 * The open hold names its sanitized block by id, and the author's
+		 * next attempt is written into that block, so the two match when
+		 * the ids do. Positions are not compared: a block inserted or
+		 * removed above moves every block below it. Example: a hold is
+		 * open on the first block, then the author inserts a new block
+		 * with a script above it. The new hold is also on the first
+		 * position, but it is about another block, so both stay open.
+		 *
+		 * An open hold whose block was removed entirely has no id to
+		 * follow. It matches a block the author ADDED at the same
+		 * position, which is how a second try at the removed block
+		 * arrives. It never matches a block that was already in the
+		 * document.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param array $open The open hold, as the ledger has it.
+		 * @param array $hold The new hold (see hold_markup()).
+		 * @return bool Whether both are over one block.
+		 */
+		private static function is_hold_over_same_block( array $open, array $hold ): bool {
+			if ( is_string( $open['blockId'] ?? null ) ) {
+				return ( $hold['replacedId'] ?? null ) === $open['blockId'];
+			}
+
+			return ! empty( $hold['added'] ) && (int) ( $open['index'] ?? -1 ) === (int) $hold['index'];
 		}
 
 		/**
@@ -1154,6 +1204,32 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 			}
 
 			return $serialized;
+		}
+
+		/**
+		 * The ids of a document's top-level blocks, as array keys.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param \Yjs\Utils\Doc $doc The document.
+		 * @return array<string, true> Block id => true.
+		 */
+		private static function top_level_block_ids( \Yjs\Utils\Doc $doc ): array {
+			$blocks = $doc->getMap( 'document' )->get( 'blocks' );
+			if ( ! ( $blocks instanceof \Yjs\Types\YArray ) ) {
+				return array();
+			}
+
+			$ids    = array();
+			$length = $blocks->length;
+			for ( $i = 0; $i < $length; $i++ ) {
+				$block = $blocks->get( $i );
+				if ( $block instanceof \Yjs\Types\YMap && is_string( $block->get( 'clientId' ) ) ) {
+					$ids[ $block->get( 'clientId' ) ] = true;
+				}
+			}
+
+			return $ids;
 		}
 
 		/**
