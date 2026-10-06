@@ -121,7 +121,9 @@ async function decideConflictCards(
 			name: 'Review conflicting edits',
 		} );
 		await expect( dialog ).toBeVisible( { timeout: 10000 } );
-		await expect( dialog.getByText( 'Merged result' ) ).toBeVisible();
+		await expect(
+			dialog.getByText( 'Merged result', { exact: true } )
+		).toBeVisible();
 		await dialog
 			.getByRole( 'button', { name: 'Accept', exact: true } )
 			.click();

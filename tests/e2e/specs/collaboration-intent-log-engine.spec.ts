@@ -90,7 +90,9 @@ async function decideConflictCards(
 			name: 'Review conflicting edits',
 		} );
 		await expect( dialog ).toBeVisible( { timeout: 10000 } );
-		await expect( dialog.getByText( 'Merged result' ) ).toBeVisible();
+		await expect(
+			dialog.getByText( 'Merged result', { exact: true } )
+		).toBeVisible();
 		await dialog
 			.getByRole( 'button', { name: 'Accept', exact: true } )
 			.click();
@@ -1039,7 +1041,9 @@ test.describe( 'Collaboration - intent-log engine @engine-intent-log', () => {
 
 			// The rest of the dialog works: the merged result can be
 			// accepted, and that closes the dialog.
-			await expect( dialog.getByText( 'Merged result' ) ).toBeVisible();
+			await expect(
+				dialog.getByText( 'Merged result', { exact: true } )
+			).toBeVisible();
 			await dialog
 				.getByRole( 'button', { name: 'Accept', exact: true } )
 				.click();
