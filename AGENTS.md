@@ -935,12 +935,20 @@ applies.
   accepted them at offsets that counted the set-aside text and
   scrambled the paragraph; the early card was the only limit.
   intent-log builds records in `src/engines/intent-log-conflicts.ts`
-  and authors an accepted result as a new change; de-rtc parks
+  and authors an accepted result as a new change. A block record
+  there covers one RUN of sibling blocks: from the first block the
+  set-aside edits touch to the last, the blocks in between included
+  (`coveringRun`), because an accepted result replaces the run as one
+  piece and the reviewer must see all of it. On the `proposed` side
+  the blocks in between read as the current document has them; de-rtc parks
   escalations as durable `parked` rows and resolves them over its REST
   route (`accepted` carries the content); yjs-server has NO merge
   conflicts (CRDT merge detects none to park) but HOLDS markup the kses
   lane strips (`held` / `held-resolved` rows, the `META_HELD` ledger,
-  the `/wp-sync/v1/yjs-server/resolve` route). The framework's own
+  the `/wp-sync/v1/yjs-server/resolve` route). A hold names its block
+  by id, so a sanitized or approved block KEEPS its id
+  (`blocks_to_yblocks`'s `$first_id`), and a request that removes the
+  block closes the hold (`block-removed`). The framework's own
   review panel and notices are no longer fed. Two traps: the review
   dialogs mount block editors whose blocks carry the SAME syncIds as
   the document, so the card filters must stand down inside them
