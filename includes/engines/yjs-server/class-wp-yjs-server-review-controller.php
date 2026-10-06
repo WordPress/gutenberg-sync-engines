@@ -53,6 +53,10 @@ if ( ! class_exists( 'WP_Yjs_Server_Review_Controller' ) ) {
 							'type'        => 'string',
 							'description' => 'The replacement content of an accepted hold, as serialized blocks. Omitted, the held markup lands as it was written.',
 						),
+						'current'    => array(
+							'type'        => 'string',
+							'description' => 'The sanitized block the reviewer saw when they accepted (the hold\'s `sanitized`). The accepted content is refused with a 409 (review_stale) when the block no longer reads that way.',
+						),
 					),
 				)
 			);
@@ -100,7 +104,8 @@ if ( ! class_exists( 'WP_Yjs_Server_Review_Controller' ) ) {
 				$room,
 				(string) $request['holdId'],
 				(string) $request['resolution'],
-				isset( $request['content'] ) ? (string) $request['content'] : null
+				isset( $request['content'] ) ? (string) $request['content'] : null,
+				isset( $request['current'] ) ? (string) $request['current'] : null
 			);
 			if ( is_wp_error( $disposition ) ) {
 				return $disposition;

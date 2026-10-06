@@ -277,7 +277,7 @@ export function createDeRtcEngine(): SyncEngine & {
 				handle?.rejectContested( contestKey );
 				return;
 			}
-			handle?.review.resolve( proposalId, resolution );
+			void handle?.review.resolve( proposalId, resolution );
 		},
 		restoreProposal: ( objectType, objectId, proposalId ) => {
 			const handle = entityReviews.get(
@@ -311,7 +311,26 @@ export function createDeRtcEngine(): SyncEngine & {
 				reviewKey( objectType, objectId )
 			);
 			if ( ! handle ) {
-				return;
+				return 'resolved';
+			}
+			/*
+			 * The reviewer decided against a `current` this client's
+			 * document no longer has (a collaborator's version landed in
+			 * between): nothing is sent, and the record stays open with
+			 * its new `current`. The server makes the matching check for
+			 * a version this client has not received yet (see the
+			 * `seenVersion` the resolver sends).
+			 */
+			if (
+				'accept' === decision.action &&
+				undefined !== decision.current
+			) {
+				const open = handle
+					.getConflicts()
+					.find( ( conflict ) => conflict.id === conflictId );
+				if ( open && open.current !== decision.current ) {
+					return 'stale';
+				}
 			}
 			const contestKey = contestedKeyOf( conflictId );
 			if ( null !== contestKey ) {
@@ -325,7 +344,7 @@ export function createDeRtcEngine(): SyncEngine & {
 				 */
 				if ( 'accept' !== decision.action ) {
 					handle.rejectContested( contestKey );
-					return;
+					return 'resolved';
 				}
 				const canonical = handle
 					.getConflicts()
@@ -333,24 +352,23 @@ export function createDeRtcEngine(): SyncEngine & {
 					?.proposed;
 				if ( decision.content.trim() === ( canonical ?? '' ).trim() ) {
 					handle.adoptContested( contestKey );
-					return;
+					return 'resolved';
 				}
 				handle.writeContested( contestKey, decision.content );
 				handle.rejectContested( contestKey );
-				return;
+				return 'resolved';
 			}
 			if ( 'accept' === decision.action ) {
 				// The server lands the replacement as an ordinary proposal
 				// under the reviewer (kses and the merge run as for any
 				// edit) and closes the record in the same request.
-				handle.review.resolve(
+				return handle.review.resolve(
 					conflictId,
 					'accepted',
 					decision.content
 				);
-				return;
 			}
-			handle.review.resolve( conflictId, 'dismissed' );
+			return handle.review.resolve( conflictId, 'dismissed' );
 		},
 	};
 
@@ -385,21 +403,29 @@ export function createDeRtcEngine(): SyncEngine & {
 			// type; the transport's resolution-row lane is gone and the
 			// server rejects client-sent resolved rows. The room string
 			// mirrors the providers' convention.
-			review.setRestResolver( ( proposalId, resolution, content ) =>
-				apiFetch( {
+			// An accepted result also names the version this client's
+			// document reflects, which is the version the reviewer saw.
+			// The server refuses the result when the record's blocks have
+			// changed since that version.
+			review.setRestResolver( ( proposalId, resolution, content ) => {
+				const seenVersion = bridge.lastVersion();
+				return apiFetch( {
 					data: {
 						client_id: ydoc.clientID,
 						proposalId,
 						resolution,
 						...( undefined !== content ? { content } : {} ),
+						...( 'accepted' === resolution && seenVersion
+							? { seenVersion }
+							: {} ),
 						room: objectId
 							? `${ objectType }:${ objectId }`
 							: objectType,
 					},
 					method: 'POST',
 					path: '/wp-sync/v1/de-rtc/resolve',
-				} )
-			);
+				} );
+			} );
 			const undoFeed = createDeRtcUndoFeed();
 			const authorship = createDeRtcAuthorship( undoFeed );
 			// Save-through-the-room: this post's REST saves carry
@@ -559,7 +585,132 @@ export function createDeRtcEngine(): SyncEngine & {
 					: text;
 			};
 
-			entityReviews.set( key, {
+			const readConflicts = (): SyncConflict[] => [
+				...review.getOpen().map( ( parked ): SyncConflict => {
+					const blocks = parked.changedBlocks ?? [];
+					const ids = blocks
+						.map( ( block ) => block.syncId )
+						.filter(
+							( id ): id is string => 'string' === typeof id
+						);
+					const byIdentity =
+						ids.length > 0 && ids.length === blocks.length;
+					const indexes = blocks.map( ( block ) => block.index );
+					const first = indexes.length ? Math.min( ...indexes ) : 0;
+					const last = indexes.length ? Math.max( ...indexes ) : -1;
+					/*
+					 * The three sides, as the contract wants them:
+					 * `base` from the row's baseHtml (null on rows
+					 * that predate the field), `proposed` from the
+					 * parked blocks, `current` from THIS client's
+					 * document: the same blocks by identity, else the
+					 * covering top-level span.
+					 */
+					const local = localBlocks();
+					let current = '';
+					if ( byIdentity ) {
+						current = ids
+							.map( ( id ) => findBlockBySyncId( local, id ) )
+							.filter( Boolean )
+							.map( serializeBlock )
+							.join( '\n\n' );
+					} else if ( indexes.length ) {
+						current = local
+							.slice( first, last + 1 )
+							.map( serializeBlock )
+							.join( '\n\n' );
+					}
+					const base = blocks.every(
+						( block ) => 'string' === typeof block.baseHtml
+					)
+						? blocks
+								.map( ( block ) => block.baseHtml )
+								.join( '\n\n' )
+						: null;
+					if ( parked.property ) {
+						const name = parked.property.name;
+						const value: unknown = recordMap.toJSON()[ name ];
+						return {
+							id: parked.proposalId,
+							kind: 'merge',
+							authorId: parked.author ?? 0,
+							target: { type: 'property', name },
+							base: null,
+							proposed: propertyText( parked.property.value ),
+							current: propertyText( value ),
+						};
+					}
+					return {
+						id: parked.proposalId,
+						kind:
+							'requires-approval' ===
+							( REVIEW_REASON_MAP[ parked.reason ] ??
+								parked.reason )
+								? 'sequestration'
+								: 'merge',
+						authorId: parked.author ?? 0,
+						target: {
+							type: 'blocks',
+							// Identity wins when every changed block
+							// carries one; the span is the covering
+							// top-level run.
+							...( byIdentity ? { ids } : {} ),
+							index: first,
+							count: last - first + 1,
+						},
+						base,
+						proposed: blocks
+							.map( ( block ) => block.html )
+							.join( '\n\n' ),
+						current,
+						// The server sets an author's later typing
+						// aside into the same record.
+						followsTyping: true,
+					};
+				} ),
+				/*
+				 * A contested block: this client edited a block a
+				 * newer canonical version also changed. `proposed` is
+				 * the canonical form, `current` this client's own
+				 * block; the version both started from is not kept.
+				 */
+				...Array.from( contested.entries() ).map(
+					( [ contestKey, item ] ): SyncConflict => {
+						const local = localBlocks();
+						const own =
+							'string' === typeof contestKey
+								? findBlockBySyncId( local, contestKey )
+								: local[ contestKey ];
+						return {
+							id: `contested-${ contestKey }`,
+							kind: 'merge',
+							authorId: 0,
+							target: {
+								type: 'blocks',
+								...( 'string' === typeof contestKey
+									? { ids: [ contestKey ] }
+									: {} ),
+								index: item.index,
+								count: 1,
+							},
+							base: null,
+							proposed: item.html,
+							current: own ? serializeBlock( own ) : '',
+						};
+					}
+				),
+			];
+
+			/*
+			 * The records as the listeners last read them. A record's
+			 * `current` is read from this client's document on every
+			 * read, so a version landing in a block under review changes
+			 * the record without any row opening or closing. The
+			 * listeners hear about that too (see onDocumentChange), or a
+			 * review dialog would go on showing the block as it was.
+			 */
+			let publishedConflicts = '';
+			const reviewHandle: EntityReviewHandle = {
 				review,
 				adoptContested: ( contestKey ) =>
 					bridge.adoptContestedBlock( contestKey ),
@@ -606,125 +757,11 @@ export function createDeRtcEngine(): SyncEngine & {
 						} )
 					),
 				],
-				getConflicts: () => [
-					...review.getOpen().map( ( parked ): SyncConflict => {
-						const blocks = parked.changedBlocks ?? [];
-						const ids = blocks
-							.map( ( block ) => block.syncId )
-							.filter(
-								( id ): id is string => 'string' === typeof id
-							);
-						const byIdentity =
-							ids.length > 0 && ids.length === blocks.length;
-						const indexes = blocks.map( ( block ) => block.index );
-						const first = indexes.length
-							? Math.min( ...indexes )
-							: 0;
-						const last = indexes.length
-							? Math.max( ...indexes )
-							: -1;
-						/*
-						 * The three sides, as the contract wants them:
-						 * `base` from the row's baseHtml (null on rows
-						 * that predate the field), `proposed` from the
-						 * parked blocks, `current` from THIS client's
-						 * document: the same blocks by identity, else the
-						 * covering top-level span.
-						 */
-						const local = localBlocks();
-						let current = '';
-						if ( byIdentity ) {
-							current = ids
-								.map( ( id ) => findBlockBySyncId( local, id ) )
-								.filter( Boolean )
-								.map( serializeBlock )
-								.join( '\n\n' );
-						} else if ( indexes.length ) {
-							current = local
-								.slice( first, last + 1 )
-								.map( serializeBlock )
-								.join( '\n\n' );
-						}
-						const base = blocks.every(
-							( block ) => 'string' === typeof block.baseHtml
-						)
-							? blocks
-									.map( ( block ) => block.baseHtml )
-									.join( '\n\n' )
-							: null;
-						if ( parked.property ) {
-							const name = parked.property.name;
-							const value: unknown = recordMap.toJSON()[ name ];
-							return {
-								id: parked.proposalId,
-								kind: 'merge',
-								authorId: parked.author ?? 0,
-								target: { type: 'property', name },
-								base: null,
-								proposed: propertyText( parked.property.value ),
-								current: propertyText( value ),
-							};
-						}
-						return {
-							id: parked.proposalId,
-							kind:
-								'requires-approval' ===
-								( REVIEW_REASON_MAP[ parked.reason ] ??
-									parked.reason )
-									? 'sequestration'
-									: 'merge',
-							authorId: parked.author ?? 0,
-							target: {
-								type: 'blocks',
-								// Identity wins when every changed block
-								// carries one; the span is the covering
-								// top-level run.
-								...( byIdentity ? { ids } : {} ),
-								index: first,
-								count: last - first + 1,
-							},
-							base,
-							proposed: blocks
-								.map( ( block ) => block.html )
-								.join( '\n\n' ),
-							current,
-							// The server sets an author's later typing
-							// aside into the same record.
-							followsTyping: true,
-						};
-					} ),
-					/*
-					 * A contested block: this client edited a block a
-					 * newer canonical version also changed. `proposed` is
-					 * the canonical form, `current` this client's own
-					 * block; the version both started from is not kept.
-					 */
-					...Array.from( contested.entries() ).map(
-						( [ contestKey, item ] ): SyncConflict => {
-							const local = localBlocks();
-							const own =
-								'string' === typeof contestKey
-									? findBlockBySyncId( local, contestKey )
-									: local[ contestKey ];
-							return {
-								id: `contested-${ contestKey }`,
-								kind: 'merge',
-								authorId: 0,
-								target: {
-									type: 'blocks',
-									...( 'string' === typeof contestKey
-										? { ids: [ contestKey ] }
-										: {} ),
-									index: item.index,
-									count: 1,
-								},
-								base: null,
-								proposed: item.html,
-								current: own ? serializeBlock( own ) : '',
-							};
-						}
-					),
-				],
+				getConflicts: () => {
+					const conflicts = readConflicts();
+					publishedConflicts = JSON.stringify( conflicts );
+					return conflicts;
+				},
 				writeContested: ( contestKey, content ) => {
 					const index = contested.get( contestKey )?.index ?? 0;
 					overlayParkedBlocks( {
@@ -754,9 +791,23 @@ export function createDeRtcEngine(): SyncEngine & {
 					if ( bridge.isBootstrapped() ) {
 						overlayParkedBlocks( parked );
 					}
-					review.resolve( proposalId, 'restored' );
+					void review.resolve( proposalId, 'restored' );
 				},
-			} );
+			};
+			entityReviews.set( key, reviewHandle );
+
+			const onDocumentChange = () => {
+				if ( 0 === review.getOpen().length && 0 === contested.size ) {
+					return;
+				}
+
+				if (
+					JSON.stringify( readConflicts() ) !== publishedConflicts
+				) {
+					notifyKey( key );
+				}
+			};
+			recordMap.observeDeep( onDocumentChange );
 
 			let observersAttached = false;
 			let onRecordUpdate:
@@ -857,6 +908,7 @@ export function createDeRtcEngine(): SyncEngine & {
 					if ( observersAttached && onRecordUpdate ) {
 						recordMap.unobserveDeep( onRecordUpdate );
 					}
+					recordMap.unobserveDeep( onDocumentChange );
 					if ( entityReviews.get( key )?.review === review ) {
 						entityReviews.delete( key );
 					}

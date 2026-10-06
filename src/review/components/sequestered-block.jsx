@@ -4,12 +4,13 @@ import { useSelect } from '@wordpress/data';
 import { __ } from '@wordpress/i18n';
 import { Button } from '@wordpress/components';
 import { useBlockProps } from '@wordpress/block-editor';
-import { useOpenConflicts, useResolveConflict } from '../conflicts';
+import { useOpenConflicts } from '../conflicts';
 import KsesReviewDialog from './kses-review-dialog';
 import {
 	canApproveUnfilteredHtml,
 	conflictsTargetingBlock,
 	useCurrentPost,
+	useDecideConflict,
 } from './review-data';
 
 const EMPTY_CONFLICTS = [];
@@ -158,14 +159,13 @@ export function SequesteredBlockBody( { sequestration, canReview, onReview } ) {
  */
 export default function SequesteredBlock( { conflicts } ) {
 	const blockProps = useBlockProps();
-	const { postType, postId } = useCurrentPost();
-	const resolve = useResolveConflict( postType, postId );
+	const decide = useDecideConflict();
 	const [ isReviewing, setIsReviewing ] = useState( false );
 	const [ conflict ] = conflicts;
 	const sequestration = sequestrationOf( conflict );
 
 	const accept = ( content ) => {
-		resolve( conflict.id, { action: 'accept', content } );
+		decide( conflict, { action: 'accept', content } );
 		setIsReviewing( false );
 	};
 

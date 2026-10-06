@@ -19,7 +19,7 @@ import {
 	base64ToUint8Array,
 	createSyncUpdate,
 } from '../../providers/http-polling/utils';
-import type { YjsServerHolds } from './holds';
+import { holdFromJson, type YjsServerHolds } from './holds';
 
 /**
  * Origin tag for Yjs transactions applied by this session, so updates the
@@ -193,23 +193,9 @@ export function createYjsServerSessionCodec(
 			// ledger.
 			case YJS_SERVER_HELD_TYPE: {
 				try {
-					const decoded = JSON.parse( update.data );
-					if (
-						'string' === typeof decoded?.holdId &&
-						'' !== decoded.holdId &&
-						'string' === typeof decoded?.held
-					) {
-						options.holds?.noteHeld( {
-							...decoded,
-							blockId:
-								'string' === typeof decoded.blockId
-									? decoded.blockId
-									: null,
-							index: Number( decoded.index ) || 0,
-							sanitized: String( decoded.sanitized ?? '' ),
-							base: String( decoded.base ?? '' ),
-							author: Number( decoded.author ) || 0,
-						} );
+					const hold = holdFromJson( JSON.parse( update.data ) );
+					if ( hold ) {
+						options.holds?.noteHeld( hold );
 					}
 				} catch {
 					// A malformed row announces nothing.

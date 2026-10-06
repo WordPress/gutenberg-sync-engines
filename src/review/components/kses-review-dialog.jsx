@@ -3,6 +3,7 @@ import { useState } from '@wordpress/element';
 import { __ } from '@wordpress/i18n';
 import { Button, Modal } from '@wordpress/components';
 import { RevisionsCodeDiff, hasCodeDiff } from '../revisions-diff';
+import { ChangedWhileReviewingNotice } from './merge-dialog';
 import PlainTextDiff from './plain-text-diff';
 
 /**
@@ -20,6 +21,12 @@ import PlainTextDiff from './plain-text-diff';
  * without the bundled copy's addition), the same comparison shows as
  * plain text with the added and removed lines marked.
  *
+ * The author can go on editing a held block while the dialog is open,
+ * which changes the held markup. The dialog follows it while the reviewer
+ * has not edited the markup themselves, and leaves their edit alone
+ * otherwise. A notice says which: approving the older markup would drop
+ * what the author wrote since.
+ *
  * All held markup renders as inert text, never live DOM (the code diff
  * and its plain text stand-in both render lines as text). The point of
  * the approval gate is that this markup has not been trusted.
@@ -36,7 +43,26 @@ export function KsesReviewDialogBody( { sequestration, onApprove, onRemove } ) {
 		sequestration.proposed
 	);
 	const [ isEditing, setIsEditing ] = useState( false );
+	// Whether the reviewer has changed the markup by hand.
+	const [ isEdited, setIsEdited ] = useState( false );
+	// The held markup as the dialog last showed it, and what the dialog
+	// did when it last changed: 'updated', 'kept', or null.
+	const [ shownProposed, setShownProposed ] = useState(
+		sequestration.proposed
+	);
+	const [ changeHandling, setChangeHandling ] = useState( null );
 	const isUpdate = 'update' === sequestration.kind;
+
+	if ( shownProposed !== sequestration.proposed ) {
+		setShownProposed( sequestration.proposed );
+
+		if ( isEdited ) {
+			setChangeHandling( 'kept' );
+		} else {
+			setProposedHtml( sequestration.proposed );
+			setChangeHandling( 'updated' );
+		}
+	}
 
 	let original = null;
 	if ( isUpdate ) {
@@ -73,6 +99,24 @@ export function KsesReviewDialogBody( { sequestration, onApprove, onRemove } ) {
 							'This proposed block contains content that needs approval from someone allowed to publish unfiltered HTML.'
 					  ) }
 			</p>
+			{ 'updated' === changeHandling && (
+				<ChangedWhileReviewingNotice
+					onDismiss={ () => setChangeHandling( null ) }
+				>
+					{ __(
+						'The author changed this content while you were reviewing it. You now see the newer version.'
+					) }
+				</ChangedWhileReviewingNotice>
+			) }
+			{ 'kept' === changeHandling && (
+				<ChangedWhileReviewingNotice
+					onDismiss={ () => setChangeHandling( null ) }
+				>
+					{ __(
+						'The author changed this content while you were reviewing it. Your edit was kept, so it does not include their newer changes.'
+					) }
+				</ChangedWhileReviewingNotice>
+			) }
 			<div className="gse-review-kses-dialog__pane">
 				<h3 className="gse-review-kses-dialog__pane-label">
 					{ isUpdate
@@ -93,9 +137,10 @@ export function KsesReviewDialogBody( { sequestration, onApprove, onRemove } ) {
 						aria-label={ __( 'Proposed block HTML' ) }
 						rows={ 6 }
 						value={ proposedHtml }
-						onChange={ ( event ) =>
-							setProposedHtml( event.target.value )
-						}
+						onChange={ ( event ) => {
+							setProposedHtml( event.target.value );
+							setIsEdited( true );
+						} }
 					/>
 				</div>
 			) }

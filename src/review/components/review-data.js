@@ -1,8 +1,14 @@
 // @ts-nocheck -- Prototype JavaScript moved as is from the bundled Gutenberg fork; typing it (TSX) is a later pass.
-import { useSelect } from '@wordpress/data';
+import { useDispatch, useSelect } from '@wordpress/data';
+import { useCallback } from '@wordpress/element';
 import { __ } from '@wordpress/i18n';
 import { store as blockEditorStore } from '@wordpress/block-editor';
 import { store as editorStore } from '@wordpress/editor';
+import { store as noticesStore } from '@wordpress/notices';
+import { useResolveConflict } from '../conflicts';
+
+// One notice however many decisions are refused.
+const STALE_NOTICE_ID = 'gutenberg-sync-engines-review-stale';
 
 export const REASON_LABELS = {
 	'frame-conflict': __( 'It conflicted with a collaborator’s change.' ),
@@ -45,6 +51,57 @@ export function useCurrentPost() {
 			postId: getCurrentPostId(),
 		};
 	}, [] );
+}
+
+/**
+ * An accepted decision with the `current` side the reviewer decided
+ * against, so the engine can refuse it when the content has changed since
+ * (see SyncConflictDecision). The record a card or a dialog was last
+ * rendered with is the one the reviewer saw. Other decisions pass through.
+ *
+ * @param {Object} conflict The record as it was last shown.
+ * @param {Object} decision The decision.
+ * @return {Object} The decision to send.
+ */
+export function withSeenCurrent( conflict, decision ) {
+	if ( 'accept' !== decision.action || undefined !== decision.current ) {
+		return decision;
+	}
+
+	return { ...decision, current: conflict.current };
+}
+
+/**
+ * Sends a decision on one of the current post's conflicts to its engine,
+ * and tells the reviewer when the engine refused it because the content
+ * had changed. The record is still open then, with the content as it is
+ * now, so they can review it again.
+ *
+ * @return {Function} `( conflict, decision ) => Promise< outcome >`.
+ */
+export function useDecideConflict() {
+	const { postType, postId } = useCurrentPost();
+	const resolve = useResolveConflict( postType, postId );
+	const { createWarningNotice } = useDispatch( noticesStore );
+
+	return useCallback(
+		( conflict, decision ) =>
+			resolve( conflict.id, withSeenCurrent( conflict, decision ) ).then(
+				( outcome ) => {
+					if ( 'stale' === outcome ) {
+						createWarningNotice(
+							__(
+								'This content changed before your decision arrived, so nothing was changed. Review it again.'
+							),
+							{ id: STALE_NOTICE_ID }
+						);
+					}
+
+					return outcome;
+				}
+			),
+		[ resolve, createWarningNotice ]
+	);
 }
 
 /**

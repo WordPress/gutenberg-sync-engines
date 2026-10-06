@@ -623,6 +623,14 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 					// The sanitized block's id, which every editor adopts:
 					// the review card's anchor.
 					$block_id = $id_base . '-0';
+					// The hold records the block as the document now has
+					// it, written out the way an approval reads it back
+					// (see apply_held_content()): the two then match byte
+					// for byte for as long as nobody edits the block.
+					$inserted = $yblocks->get( $index );
+					if ( $inserted instanceof \Yjs\Types\YMap ) {
+						$sanitized = self::materialize_yblock( $inserted, $wrappers );
+					}
 				}
 				$holds[] = array(
 					'blockId'   => $block_id,
@@ -749,6 +757,12 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 		 * for every client. An unknown or closed hold acks without
 		 * changing anything.
 		 *
+		 * An approval replaces the sanitized block wholly, so it must not
+		 * land on a block the reviewer never saw. When the block no longer
+		 * reads the way the reviewer saw it (`$seen`), the answer is a 409
+		 * `review_stale`: nothing is written, the hold stays open, and it
+		 * is announced again with the block as it reads now.
+		 *
 		 * @since n.e.x.t
 		 *
 		 * @param string      $room       Room identifier.
@@ -757,9 +771,12 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 		 * @param string|null $content    The replacement for 'accepted', as
 		 *                                serialized blocks ('' removes the
 		 *                                block); null lands the held markup.
+		 * @param string|null $seen       The sanitized block the reviewer
+		 *                                saw, for 'accepted'; null stands
+		 *                                for the hold as it is recorded.
 		 * @return array|WP_Error Disposition, or error.
 		 */
-		public function resolve_hold( string $room, string $hold_id, string $resolution, ?string $content = null ) {
+		public function resolve_hold( string $room, string $hold_id, string $resolution, ?string $content = null, ?string $seen = null ) {
 			if ( '' === $hold_id || ! in_array( $resolution, array( 'accepted', 'dismissed' ), true ) ) {
 				return new WP_Error(
 					'rest_sync_invalid_intent',
@@ -785,7 +802,7 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 						array( 'status' => 403 )
 					);
 				}
-				$applied = $this->apply_held_content( $room, $hold, null === $content ? (string) $hold['held'] : $content );
+				$applied = $this->apply_held_content( $room, $hold, null === $content ? (string) $hold['held'] : $content, $seen );
 				if ( is_wp_error( $applied ) ) {
 					return $applied;
 				}
@@ -827,14 +844,20 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 		 * its recorded slot), and the delta broadcasts as a server-authored
 		 * row, the way the kses lane's own compensation does.
 		 *
+		 * The block is replaced wholly, so an edit made to it after the
+		 * reviewer last saw it would be lost. That case is refused before
+		 * anything is written (see refuse_stale_hold()).
+		 *
 		 * @since n.e.x.t
 		 *
-		 * @param string $room    Room identifier.
-		 * @param array  $hold    The hold.
-		 * @param string $content Serialized replacement blocks ('' removes).
+		 * @param string      $room    Room identifier.
+		 * @param array       $hold    The hold.
+		 * @param string      $content Serialized replacement blocks ('' removes).
+		 * @param string|null $seen    The sanitized block the reviewer saw;
+		 *                             null stands for the hold as recorded.
 		 * @return bool|WP_Error Whether the document changed, or an error.
 		 */
-		private function apply_held_content( string $room, array $hold, string $content ) {
+		private function apply_held_content( string $room, array $hold, string $content, ?string $seen = null ) {
 			$this->room_docs[ $room ] = null;
 			$state                    = $this->load_room( $room );
 			if ( is_wp_error( $state ) ) {
@@ -866,7 +889,13 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 			$index = null === $found ? min( max( 0, (int) ( $hold['index'] ?? 0 ) ), $length ) : $found;
 
 			$wrappers = $this->room_wrappers( $room );
-			$parsed   = array();
+			if ( null !== $found ) {
+				$live = self::materialize_yblock( $yblocks->get( $found ), $wrappers );
+				if ( ( $seen ?? (string) ( $hold['sanitized'] ?? '' ) ) !== $live ) {
+					return $this->refuse_stale_hold( $room, $hold, $live );
+				}
+			}
+			$parsed = array();
 			if ( '' !== trim( $content ) ) {
 				$parsed = array_values(
 					array_filter(
@@ -911,6 +940,42 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 			do_action( 'qm/debug', "wp-sync: yjs-server landed approved markup for a held block in {$room}" );
 
 			return true;
+		}
+
+		/**
+		 * Refuses an approval whose block changed after the reviewer saw
+		 * it. The hold stays open and now records the block as it reads,
+		 * and that hold is announced again so every reviewer's dialog shows
+		 * the block an approval would really replace. The refusal carries
+		 * the same hold, for the reviewer who was refused.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param string $room Room identifier.
+		 * @param array  $hold The hold.
+		 * @param string $live The sanitized block as the document has it.
+		 * @return WP_Error The 409 `review_stale` refusal.
+		 */
+		private function refuse_stale_hold( string $room, array $hold, string $live ): WP_Error {
+			$hold_id = (string) ( $hold['holdId'] ?? '' );
+			if ( ( $hold['sanitized'] ?? null ) !== $live ) {
+				$hold['sanitized'] = $live;
+				$ledger            = $this->get_open_holds( $room );
+				if ( isset( $ledger[ $hold_id ] ) && method_exists( $this->storage, 'set_room_meta' ) ) {
+					$ledger[ $hold_id ] = $hold;
+					$this->add_row( $room, self::GENESIS_CLIENT_ID, self::UPDATE_TYPE_HELD, (string) wp_json_encode( $hold ) );
+					$this->storage->set_room_meta( $room, self::META_HELD, $ledger );
+				}
+			}
+
+			return new WP_Error(
+				'review_stale',
+				__( 'This block changed after the decision was made. Review it again.', 'gutenberg-sync-engines' ),
+				array(
+					'status' => 409,
+					'hold'   => $hold,
+				)
+			);
 		}
 
 		/**
@@ -1089,6 +1154,28 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 			}
 
 			return $serialized;
+		}
+
+		/**
+		 * One block of the canonical document as serialized block markup,
+		 * written out the way materialize_blocks() writes every block.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param mixed $yblock   The block's shared type in the document.
+		 * @param array $wrappers Wrapper side-table.
+		 * @return string The serialized block ('' when it is not a block).
+		 */
+		private static function materialize_yblock( $yblock, array $wrappers ): string {
+			if ( ! ( $yblock instanceof \Yjs\Types\YMap ) ) {
+				return '';
+			}
+			$block = self::normalize_json( $yblock->toJSON() );
+			if ( ! is_array( $block ) ) {
+				return '';
+			}
+
+			return serialize_block( self::to_serializable_block( $block, $wrappers ) );
 		}
 
 		/**

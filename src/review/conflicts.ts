@@ -22,6 +22,7 @@ import { useCallback, useSyncExternalStore } from '@wordpress/element';
 import type {
 	SyncConflict,
 	SyncConflictDecision,
+	SyncConflictOutcome,
 	SyncConflictSource,
 } from './types';
 
@@ -187,25 +188,32 @@ export function subscribeConflicts(
  * @param objectId   The sync object id.
  * @param conflictId The record's id.
  * @param decision   The decision.
+ * @return What became of the decision (see SyncConflictOutcome).
  */
 export function resolveConflict(
 	objectType: string,
 	objectId: string | null,
 	conflictId: string,
 	decision: SyncConflictDecision
-): void {
+): Promise< SyncConflictOutcome > {
 	for ( const source of sources ) {
 		const open = source.getOpenConflicts( objectType, objectId );
 		if ( open.some( ( conflict ) => conflict.id === conflictId ) ) {
-			source.resolveConflict(
-				objectType,
-				objectId,
-				conflictId,
-				decision
+			return Promise.resolve(
+				source.resolveConflict(
+					objectType,
+					objectId,
+					conflictId,
+					decision
+				)
+			).then(
+				( outcome ) => outcome ?? 'resolved',
+				() => 'failed'
 			);
-			return;
 		}
 	}
+
+	return Promise.resolve( 'resolved' );
 }
 
 /**
@@ -263,19 +271,28 @@ export function useOpenConflicts(
  *
  * @param postType The current post type.
  * @param postId   The current post id.
- * @return `( conflictId, decision ) => void`.
+ * @return `( conflictId, decision ) => Promise< SyncConflictOutcome >`.
  */
 export function useResolveConflict(
 	postType: string | undefined,
 	postId: string | number | undefined
-): ( conflictId: string, decision: SyncConflictDecision ) => void {
+): (
+	conflictId: string,
+	decision: SyncConflictDecision
+) => Promise< SyncConflictOutcome > {
 	const { objectType, objectId } = postObject( postType, postId );
 	return useCallback(
 		( conflictId: string, decision: SyncConflictDecision ) => {
 			if ( null === objectType ) {
-				return;
+				return Promise.resolve< SyncConflictOutcome >( 'resolved' );
 			}
-			resolveConflict( objectType, objectId, conflictId, decision );
+
+			return resolveConflict(
+				objectType,
+				objectId,
+				conflictId,
+				decision
+			);
 		},
 		[ objectType, objectId ]
 	);

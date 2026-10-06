@@ -622,6 +622,104 @@ class Tests_Collaboration_WpDeRtcEngine extends WP_UnitTestCase {
 		$this->assertStringContainsString( 'Beta block original text.', $content );
 	}
 
+	/**
+	 * A peer (client 1) changes one block's text on top of the latest
+	 * version, and the change is accepted.
+	 *
+	 * @param string $proposal_id The proposal's id.
+	 * @param string $search      Text in the block.
+	 * @param string $replace     What the peer makes of it.
+	 * @return void
+	 */
+	private function peer_edits( string $proposal_id, string $search, string $replace ): void {
+		$latest   = $this->latest_from_response( $this->engine()->get_updates_since( $this->room(), 1, 0, array() ) );
+		$proposed = str_replace( $search, $replace, $latest['content'] );
+		$this->assertNotSame( $latest['content'], $proposed, 'the fixture text must be in the content' );
+		$result = $this->engine()->handle_updates(
+			$this->room(),
+			1,
+			0,
+			array( $this->proposal( $proposal_id, $latest['version'], $latest['content'], $proposed ) ),
+			array()
+		);
+		$this->assertSame( 'applied', $result['dispositions'][0]['status'] );
+		$this->assertArrayNotHasKey( 'parkedBlocks', $result['dispositions'][0] );
+	}
+
+	public function test_accepted_resolution_is_refused_when_the_parked_block_changed_after_the_reviewer_saw_it() {
+		$this->escalate_conflict();
+		// The reviewer opens the dialog on this version.
+		$seen = $this->latest_from_response( $this->engine()->get_updates_since( $this->room(), 3, 0, array() ) );
+
+		// A peer edits the block under review while the dialog is open.
+		$this->peer_edits( 'p-a2', 'Alpha block A-REWRITE text', 'Alpha block A-REWRITE text, and a later thought' );
+		$before = $this->engine()->materialize( $this->room() );
+		$this->assertStringContainsString( 'and a later thought', $before );
+
+		$replacement = "<!-- wp:paragraph -->\n<p>Alpha block REVIEWED text.</p>\n<!-- /wp:paragraph -->";
+		$refused     = $this->engine()->resolve_proposal( $this->room(), 'p-b', 'accepted', 5, $replacement, $seen['version'] );
+		$this->assertWPError( $refused );
+		$this->assertSame( 'review_stale', $refused->get_error_code() );
+		$this->assertSame( 409, $refused->get_error_data()['status'] );
+
+		// Nothing was written over the peer's edit, and the record stays open.
+		$this->assertSame( $before, $this->engine()->materialize( $this->room() ) );
+		$read = $this->engine()->get_updates_since( $this->room(), 6, 0, array() );
+		$this->assertCount( 0, $this->rows_of_type( $read, WP_De_RTC_Engine::UPDATE_TYPE_RESOLVED ) );
+
+		// The reviewer looks again, at the version that holds the peer's
+		// edit, and the same decision goes through.
+		$now      = $this->latest_from_response( $read );
+		$accepted = $this->engine()->resolve_proposal( $this->room(), 'p-b', 'accepted', 5, $replacement, $now['version'] );
+		$this->assertIsArray( $accepted );
+		$this->assertSame( 'applied', $accepted['applied']['status'] );
+		$this->assertStringContainsString( 'Alpha block REVIEWED text.', $this->engine()->materialize( $this->room() ) );
+	}
+
+	public function test_accepted_resolution_goes_ahead_when_only_other_blocks_changed_since() {
+		$this->escalate_conflict();
+		$seen = $this->latest_from_response( $this->engine()->get_updates_since( $this->room(), 3, 0, array() ) );
+
+		// A peer edits ANOTHER block while the dialog is open.
+		$this->peer_edits( 'p-a2', 'Beta block original text.', 'Beta block, edited meanwhile.' );
+
+		$replacement = "<!-- wp:paragraph -->\n<p>Alpha block REVIEWED text.</p>\n<!-- /wp:paragraph -->";
+		$accepted    = $this->engine()->resolve_proposal( $this->room(), 'p-b', 'accepted', 5, $replacement, $seen['version'] );
+		$this->assertIsArray( $accepted );
+		$this->assertSame( 'applied', $accepted['applied']['status'] );
+
+		// Both the reviewer's result and the peer's edit are in the document.
+		$content = $this->engine()->materialize( $this->room() );
+		$this->assertStringContainsString( 'Alpha block REVIEWED text.', $content );
+		$this->assertStringContainsString( 'Beta block, edited meanwhile.', $content );
+	}
+
+	public function test_accepted_resolution_is_refused_when_the_version_the_reviewer_saw_is_no_longer_kept() {
+		$this->escalate_conflict();
+		$before = $this->engine()->materialize( $this->room() );
+
+		// The version cannot be compared with the current one, so the
+		// reviewer has to look again.
+		$replacement = "<!-- wp:paragraph -->\n<p>Alpha block REVIEWED text.</p>\n<!-- /wp:paragraph -->";
+		$refused     = $this->engine()->resolve_proposal( $this->room(), 'p-b', 'accepted', 5, $replacement, 'a-version-long-gone' );
+		$this->assertWPError( $refused );
+		$this->assertSame( 'review_stale', $refused->get_error_code() );
+		$this->assertSame( $before, $this->engine()->materialize( $this->room() ) );
+	}
+
+	public function test_dismissed_resolution_is_never_stale() {
+		$this->escalate_conflict();
+		$seen = $this->latest_from_response( $this->engine()->get_updates_since( $this->room(), 3, 0, array() ) );
+		$this->peer_edits( 'p-a2', 'Alpha block A-REWRITE text', 'Alpha block A-REWRITE text, and a later thought' );
+		$before = $this->engine()->materialize( $this->room() );
+
+		// Dismissing keeps the document as it is, whatever it is now.
+		$dismissed = $this->engine()->resolve_proposal( $this->room(), 'p-b', 'dismissed', 5, null, $seen['version'] );
+		$this->assertIsArray( $dismissed );
+		$this->assertSame( 'resolved', $dismissed['status'] );
+		$this->assertSame( $before, $this->engine()->materialize( $this->room() ) );
+	}
+
 	public function test_accepted_resolution_is_refused_when_the_parked_block_was_deleted_since() {
 		$this->escalate_conflict();
 		$read   = $this->engine()->get_updates_since( $this->room(), 3, 0, array() );
@@ -798,7 +896,26 @@ class Tests_Collaboration_WpDeRtcEngine extends WP_UnitTestCase {
 		$this->assertSame( 'title', $parked[0]['property']['name'] );
 		$this->assertNotNull( $base );
 
-		$accepted = $this->engine()->resolve_proposal( $this->room(), $parked[0]['proposalId'], 'accepted', 5, 'Title the reviewer chose' );
+		// The reviewer opens the dialog on this version. A peer then sets
+		// the title again, so a result made against the older title is refused.
+		$seen  = $this->latest_from_response( $this->engine()->get_updates_since( $this->room(), 3, 0, array() ) );
+		$again = $this->engine()->handle_updates(
+			$this->room(),
+			1,
+			0,
+			array( $this->property_proposal( 'p-t3', $seen['version'], $seen['content'], array( 'title' => 'Title from one, again' ) ) ),
+			array()
+		);
+		$this->assertSame( 'applied', $again['dispositions'][0]['status'] );
+		$refused = $this->engine()->resolve_proposal( $this->room(), $parked[0]['proposalId'], 'accepted', 5, 'Title the reviewer chose', $seen['version'] );
+		$this->assertWPError( $refused );
+		$this->assertSame( 'review_stale', $refused->get_error_code() );
+		$read = $this->engine()->get_updates_since( $this->room(), 6, 0, array() );
+		$this->assertSame( 'Title from one, again', $this->latest_properties( $read )['title'] );
+
+		// Against the version that holds the peer's title, it goes through.
+		$now      = $this->latest_from_response( $read );
+		$accepted = $this->engine()->resolve_proposal( $this->room(), $parked[0]['proposalId'], 'accepted', 5, 'Title the reviewer chose', $now['version'] );
 		$this->assertSame( 'resolved', $accepted['status'] );
 		$props = $this->latest_properties( $this->engine()->get_updates_since( $this->room(), 6, 0, array() ) );
 		$this->assertSame( 'Title the reviewer chose', $props['title'] );

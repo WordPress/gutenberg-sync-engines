@@ -1,4 +1,9 @@
 /**
+ * Internal dependencies
+ */
+import { restErrorParts } from '../rest-error';
+
+/**
  * A parked (escalated) proposal as the server's `parked` row
  * carries it. `changedBlocks` are the proposal's blocks that differed
  * from its base — identified by syncId (and path) when the server merged
@@ -54,6 +59,17 @@ export interface DeRtcParkedProposal {
 export type DeRtcResolution = 'restored' | 'dismissed' | 'accepted';
 
 /**
+ * What became of a decision: the server took it (`resolved`), the server
+ * refused an accepted result because the content had changed since the
+ * reviewer saw it (`stale`), or the request failed (`failed`). The task
+ * is open again after the last two.
+ */
+export type DeRtcResolveOutcome = 'resolved' | 'stale' | 'failed';
+
+/** The error code the review route answers a stale accepted result with. */
+export const DE_RTC_REVIEW_STALE_CODE = 'review_stale';
+
+/**
  * The per-entity open-proposal ledger the session codec feeds (parked and
  * resolved rows) and the engine's review source reads.
  */
@@ -82,13 +98,14 @@ export interface DeRtcReviewState {
 	 * Optimistically closes a parked proposal and POSTs the resolution.
 	 * The `restored` resolution is sent AFTER the caller re-applied the
 	 * parked content as ordinary local edits; `accepted` carries the
-	 * reviewer's replacement content for the server to apply.
+	 * reviewer's replacement content for the server to apply. Settles
+	 * with what became of the decision, and never rejects.
 	 */
 	resolve: (
 		proposalId: string,
 		resolution: DeRtcResolution,
 		content?: string
-	) => void;
+	) => Promise< DeRtcResolveOutcome >;
 }
 
 /**
@@ -213,9 +230,9 @@ export function createDeRtcReviewState(): DeRtcReviewState {
 			if ( ! resolver ) {
 				// No lane (session torn down): the parked row is durable
 				// server-side, so the task resurfaces on the next load.
-				return;
+				return Promise.resolve( 'resolved' );
 			}
-			Promise.all(
+			return Promise.all(
 				ids.map( ( id ) => {
 					if ( id === proposalId ) {
 						return resolver( id, resolution, content );
@@ -225,16 +242,31 @@ export function createDeRtcReviewState(): DeRtcReviewState {
 						'accepted' === resolution ? 'dismissed' : resolution
 					);
 				} )
-			).catch( () => {
-				// A failed POST must not strand the decision: reopen the
-				// task so the reviewer can decide again. Ids whose POST
-				// did land re-ack idempotently on the retry.
-				ids.forEach( ( id ) => resolvedIds.delete( id ) );
-				if ( item ) {
-					open.set( proposalId, item );
+			).then(
+				(): DeRtcResolveOutcome => 'resolved',
+				( error: unknown ): DeRtcResolveOutcome => {
+					// A failed POST must not strand the decision: reopen the
+					// task so the reviewer can decide again. Ids whose POST
+					// did land re-ack idempotently on the retry. The server
+					// also refuses an accepted result whose content changed
+					// after the reviewer saw it; the task reopens the same
+					// way, and the caller is told why.
+					ids.forEach( ( id ) => resolvedIds.delete( id ) );
+					if ( item ) {
+						open.set( proposalId, item );
+					}
+					notify();
+
+					if (
+						DE_RTC_REVIEW_STALE_CODE ===
+						restErrorParts( error ).code
+					) {
+						return 'stale';
+					}
+
+					return 'failed';
 				}
-				notify();
-			} );
+			);
 		},
 	};
 }

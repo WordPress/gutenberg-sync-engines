@@ -11,7 +11,11 @@ import {
 	mergedGridFromModel,
 	mergeTableGrids,
 } from './merge-table-grids';
-import { MissingBaseNotice, useIsOwnProposal } from './merge-dialog';
+import {
+	ChangedWhileReviewingNotice,
+	MissingBaseNotice,
+	useIsOwnProposal,
+} from './merge-dialog';
 
 /**
  * The merged result as blocks, seeded from a grid.
@@ -71,6 +75,12 @@ function GridPane( { label, grid, baseGrid, onRestore } ) {
  * hands the merged table's head, body, and foot attributes back; Cancel
  * closes without changing anything.
  *
+ * The record can change while the dialog is open (a collaborator edits
+ * the table, or the author types on). The panes always show the record
+ * as it is. The merged table follows while it is still a plain copy of
+ * the suggested merge or of the version that changed, and is left alone
+ * once the reviewer has edited it by hand. A notice says which.
+ *
  * Position-independent so it can be unit-tested without the modal.
  *
  * @param {Object}   props
@@ -102,9 +112,43 @@ export function TableMergeDialogBody( {
 	const [ merged, setMerged ] = useState( () =>
 		mergedBlocksFromGrid( mergedGridFromModel( model ) )
 	);
+	// What the merged table is a plain copy of: 'suggested' (the merge of
+	// the three grids), 'yours', 'current', or null once the reviewer has
+	// edited it by hand.
+	const [ seedSide, setSeedSide ] = useState( 'suggested' );
+	// The grids as the dialog last showed them, and what it did with the
+	// merged table when they last changed: 'updated', 'kept', or null.
+	const [ shown, setShown ] = useState( { base, yours, current } );
+	const [ changeHandling, setChangeHandling ] = useState( null );
 
-	const restoreGrid = ( grid ) => {
+	if (
+		shown.base !== base ||
+		shown.yours !== yours ||
+		shown.current !== current
+	) {
+		setShown( { base, yours, current } );
+
+		if ( 'suggested' === seedSide ) {
+			setMerged( mergedBlocksFromGrid( mergedGridFromModel( model ) ) );
+			setChangeHandling( 'updated' );
+		} else if ( 'yours' === seedSide && shown.yours !== yours ) {
+			setMerged( mergedBlocksFromGrid( yours ) );
+			setChangeHandling( 'updated' );
+		} else if ( 'current' === seedSide && shown.current !== current ) {
+			setMerged( mergedBlocksFromGrid( current ) );
+			setChangeHandling( 'updated' );
+		} else {
+			setChangeHandling( 'kept' );
+		}
+	}
+
+	const restoreGrid = ( side, grid ) => {
 		setMerged( mergedBlocksFromGrid( grid ) );
+		setSeedSide( side );
+	};
+	const onEditMerged = ( blocks ) => {
+		setMerged( blocks );
+		setSeedSide( null );
 	};
 
 	return (
@@ -115,25 +159,46 @@ export function TableMergeDialogBody( {
 				) }
 			</p>
 			{ isBaseMissing && <MissingBaseNotice /> }
+			{ 'updated' === changeHandling && (
+				<ChangedWhileReviewingNotice
+					onDismiss={ () => setChangeHandling( null ) }
+				>
+					{ __(
+						'This table changed while you were reviewing it. The merged result now starts from the newer version.'
+					) }
+				</ChangedWhileReviewingNotice>
+			) }
+			{ 'kept' === changeHandling && (
+				<ChangedWhileReviewingNotice
+					onDismiss={ () => setChangeHandling( null ) }
+				>
+					{ __(
+						'This table changed while you were reviewing it. The merged result was not changed. Check it against the versions above before you accept.'
+					) }
+				</ChangedWhileReviewingNotice>
+			) }
 			<div className="gse-review-merge-dialog__panes">
 				<GridPane
 					label={ proposedLabel }
 					grid={ yours }
 					baseGrid={ base }
-					onRestore={ () => restoreGrid( yours ) }
+					onRestore={ () => restoreGrid( 'yours', yours ) }
 				/>
 				<GridPane
 					label={ __( 'Current version' ) }
 					grid={ current }
 					baseGrid={ base }
-					onRestore={ () => restoreGrid( current ) }
+					onRestore={ () => restoreGrid( 'current', current ) }
 				/>
 			</div>
 			<div className="gse-review-merge-dialog__merged">
 				<h3 className="gse-review-merge-dialog__pane-label">
 					{ __( 'Merged result' ) }
 				</h3>
-				<MergedResultEditor blocks={ merged } onChange={ setMerged } />
+				<MergedResultEditor
+					blocks={ merged }
+					onChange={ onEditMerged }
+				/>
 				<p className="gse-review-merge-dialog__help">
 					{ __(
 						'This table replaces the conflicted content when you accept.'
@@ -234,7 +299,14 @@ export function TableConflictPreview( { conflict } ) {
  */
 export function TableConflictView( { conflict, onDecide, onClose } ) {
 	const isOwn = useIsOwnProposal( conflict.authorId );
-	const grids = useMemo( () => tableGridsOf( conflict ), [ conflict ] );
+	// The grids are rebuilt only when a side's content changes. The
+	// record itself is a new object on every publish, and the dialog
+	// reads a new grid as a changed table.
+	const { base, proposed, current } = conflict;
+	const grids = useMemo(
+		() => tableGridsOf( { base, proposed, current } ),
+		[ base, proposed, current ]
+	);
 	let proposedLabel = __( 'Proposed version' );
 	if ( isOwn ) {
 		proposedLabel = __( 'Your version' );

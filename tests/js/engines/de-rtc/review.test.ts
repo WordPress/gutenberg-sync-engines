@@ -250,6 +250,160 @@ describe( 'de-rtc review lane (client)', () => {
 		expect( dismissedCall.data ).not.toHaveProperty( 'content' );
 	} );
 
+	it( 'publishes a record again when a new version changes its current side', () => {
+		const { session } = makeEntity();
+		session.receiveUpdate(
+			snapshotRow( 'v1', contentOf( BLOCK_A, BLOCK_B ) )
+		);
+		session.receiveUpdate(
+			parkedRow( 'p-9-1', 'manual-conflict-required', 9, [
+				{ index: 1, html: contentOf( BLOCK_C ) },
+			] )
+		);
+		const changed = jest.fn();
+		engine.conflicts.subscribe( 'postType/book', '1', changed );
+		// The review UI reads the record, as it does after every change.
+		expect(
+			engine.conflicts.getOpenConflicts( 'postType/book', '1' )[ 0 ]
+				.current
+		).toBe( contentOf( BLOCK_B ) );
+
+		// A collaborator's edit of the block under review lands.
+		const edited = {
+			name: 'core/paragraph',
+			attributes: { content: 'Beta, edited by a peer' },
+		};
+		session.receiveUpdate(
+			snapshotRow( 'v2', contentOf( BLOCK_A, edited ) )
+		);
+
+		// No row opened or closed, but the record changed: the listeners
+		// hear about it, or an open dialog would keep the old block.
+		expect( changed ).toHaveBeenCalled();
+		expect(
+			engine.conflicts.getOpenConflicts( 'postType/book', '1' )[ 0 ]
+				.current
+		).toBe( contentOf( edited ) );
+
+		// A version that leaves the record's block alone says nothing.
+		changed.mockClear();
+		session.receiveUpdate(
+			snapshotRow(
+				'v3',
+				contentOf(
+					{ name: 'core/paragraph', attributes: { content: 'A2' } },
+					edited
+				)
+			)
+		);
+		expect( changed ).not.toHaveBeenCalled();
+	} );
+
+	it( 'an accepted result names the version the reviewer saw, and a stale refusal reopens the record', async () => {
+		const { session } = makeEntity();
+		session.receiveUpdate(
+			snapshotRow( 'v1', contentOf( BLOCK_A, BLOCK_B ) )
+		);
+		session.receiveUpdate(
+			parkedRow( 'p-9-1', 'manual-conflict-required', 9, [
+				{ index: 1, html: contentOf( BLOCK_C ) },
+			] )
+		);
+		// The server holds a newer version in which the block changed.
+		apiFetchMock.mockRejectedValueOnce( {
+			code: 'review_stale',
+			message: 'This content changed after the decision was made.',
+			data: { status: 409 },
+		} );
+
+		const outcome = await engine.conflicts.resolveConflict(
+			'postType/book',
+			'1',
+			'p-9-1',
+			{
+				action: 'accept',
+				content: contentOf( BLOCK_A ),
+				current: contentOf( BLOCK_B ),
+			}
+		);
+
+		expect( apiFetchMock ).toHaveBeenCalledWith(
+			expect.objectContaining( {
+				data: expect.objectContaining( {
+					proposalId: 'p-9-1',
+					resolution: 'accepted',
+					seenVersion: 'v1',
+				} ),
+			} )
+		);
+		expect( outcome ).toBe( 'stale' );
+		expect(
+			engine.conflicts.getOpenConflicts( 'postType/book', '1' )
+		).toHaveLength( 1 );
+	} );
+
+	it( 'refuses an accepted result made against a current side the document no longer has, without a request', async () => {
+		const { session } = makeEntity();
+		session.receiveUpdate(
+			snapshotRow( 'v1', contentOf( BLOCK_A, BLOCK_B ) )
+		);
+		session.receiveUpdate(
+			parkedRow( 'p-9-1', 'manual-conflict-required', 9, [
+				{ index: 1, html: contentOf( BLOCK_C ) },
+			] )
+		);
+		const seen = engine.conflicts.getOpenConflicts(
+			'postType/book',
+			'1'
+		)[ 0 ].current;
+
+		// The block changes after the reviewer last saw it.
+		session.receiveUpdate(
+			snapshotRow(
+				'v2',
+				contentOf( BLOCK_A, {
+					name: 'core/paragraph',
+					attributes: { content: 'Beta, edited by a peer' },
+				} )
+			)
+		);
+
+		const outcome = await engine.conflicts.resolveConflict(
+			'postType/book',
+			'1',
+			'p-9-1',
+			{ action: 'accept', content: contentOf( BLOCK_A ), current: seen }
+		);
+
+		expect( outcome ).toBe( 'stale' );
+		expect( apiFetchMock ).not.toHaveBeenCalled();
+		expect(
+			engine.conflicts.getOpenConflicts( 'postType/book', '1' )
+		).toHaveLength( 1 );
+	} );
+
+	it( 'dismiss sends no version: keeping the document as it is cannot be stale', async () => {
+		const { session } = makeEntity();
+		session.receiveUpdate( snapshotRow( 'v1', contentOf( BLOCK_A ) ) );
+		session.receiveUpdate(
+			parkedRow( 'p-9-1', 'manual-conflict-required', 9, [
+				{ index: 0, html: contentOf( BLOCK_C ) },
+			] )
+		);
+
+		expect(
+			await engine.conflicts.resolveConflict(
+				'postType/book',
+				'1',
+				'p-9-1',
+				{ action: 'dismiss' }
+			)
+		).toBe( 'resolved' );
+		expect( apiFetchMock.mock.calls[ 0 ][ 0 ].data ).not.toHaveProperty(
+			'seenVersion'
+		);
+	} );
+
 	it( 'presents a parked row as a review item with normalized reasons', () => {
 		const { session } = makeEntity();
 		const changed = jest.fn();

@@ -92,10 +92,29 @@ export type SyncConflictTarget =
  *   added). For a property, `content` is the new value in the same
  *   encoding as the sides.
  * - `dismiss`: close the parked edit and keep the document as it is.
+ *
+ * An `accept` also names the `current` side the reviewer decided
+ * against. The engine refuses the decision when the target no longer
+ * reads that way (a collaborator changed it in the meantime): nothing is
+ * written, the record stays open with its new `current`, and the outcome
+ * is `stale`. Without `current` the engine checks against the record as
+ * it holds it.
  */
 export type SyncConflictDecision =
-	| { action: 'accept'; content: string }
+	| { action: 'accept'; content: string; current?: string }
 	| { action: 'dismiss' };
+
+/**
+ * What became of a decision.
+ *
+ * - `resolved`: the engine took it. An accepted result is still an
+ *   ordinary edit, so the engine may merge it or set it aside again.
+ * - `stale`: the target changed after the reviewer last saw it. Nothing
+ *   was written and the record is still open.
+ * - `failed`: the decision did not reach the server. The record is
+ *   still open.
+ */
+export type SyncConflictOutcome = 'resolved' | 'stale' | 'failed';
 
 /**
  * What an engine implements to take part in conflict review. Register
@@ -117,12 +136,16 @@ export interface SyncConflictSource {
 		objectId: ObjectID | null,
 		listener: () => void
 	) => () => void;
+	/**
+	 * Applies a decision. Returns what became of it, at once or once the
+	 * server has answered; returning nothing reads as `resolved`.
+	 */
 	resolveConflict: (
 		objectType: ObjectType,
 		objectId: ObjectID | null,
 		conflictId: string,
 		decision: SyncConflictDecision
-	) => void;
+	) => void | SyncConflictOutcome | Promise< SyncConflictOutcome >;
 }
 
 /*
@@ -141,9 +164,10 @@ export interface SyncConflictSource {
  * how a conflict should look. The engine owns the replacement: it turns
  * the accepted content into the smallest edit against its own document
  * and closes the parked edit in the same round, so the two can never
- * race each other. That edit merges like any other, so a change that
- * lands between the record's last publish and the decision is merged or
- * parked the way any edit would be.
+ * race each other. A record is published again whenever one of its sides
+ * changes, and an accepted decision names the `current` it was made
+ * against: when the target has changed since, the engine refuses the
+ * decision instead of writing over the change (see SyncConflictOutcome).
  *
  * Two rules keep one record equal to one card:
  *

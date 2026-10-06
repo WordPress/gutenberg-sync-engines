@@ -660,6 +660,43 @@ test.describe( 'Collaboration - de-rtc engine @engine-de-rtc', () => {
 			dialog.locator( '.gse-review-merge-dialog__notice' )
 		).toHaveCount( 0 );
 
+		/*
+		 * The current version changes while the dialog is open. The
+		 * block is edited through the editor's store, behind the card,
+		 * which stands in for a collaborator's version arriving: either
+		 * way the reviewer's document changes under the open dialog. The
+		 * merged result is still a plain copy of the current version, so
+		 * it follows, and a notice says so.
+		 */
+		const laterText = `${ userOneText } delta`;
+		const laterCommit = page1.waitForResponse( isAutosaveCommit, {
+			timeout: 30000,
+		} );
+		await page1.evaluate( ( content ) => {
+			const { select, dispatch } = window.wp.data;
+			const [ block ] = select( 'core/block-editor' ).getBlocks();
+			dispatch( 'core/block-editor' ).updateBlockAttributes(
+				block.clientId,
+				{ content }
+			);
+		}, laterText );
+		await expect(
+			dialog.locator( '.gse-review-merge-dialog__notice' )
+		).toContainText(
+			'The merged result now starts from the newer version',
+			{ timeout: 10000 }
+		);
+		await expect(
+			dialog.locator( '.gse-review-merge-dialog__merged' )
+		).toContainText( laterText );
+		await expect(
+			dialog.locator( '.gse-review-merge-dialog__pane' ).nth( 1 )
+		).toContainText( 'delta' );
+		// Let that edit settle as a version, so the decision below names
+		// the version that holds it.
+		await laterCommit;
+		await page1.waitForTimeout( 2000 );
+
 		// Accepting the proposed version lands it for both, and one
 		// decision closes the record everywhere.
 		await proposedPane

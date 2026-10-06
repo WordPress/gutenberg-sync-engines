@@ -8,11 +8,15 @@ import {
 	store as blockEditorStore,
 	useBlockProps,
 } from '@wordpress/block-editor';
-import { useOpenConflicts, useResolveConflict } from '../conflicts';
+import { useOpenConflicts } from '../conflicts';
 import { getSyncConflictView } from '../views';
 import DiffText from './diff-text';
 import CollaborationMergeDialog from './merge-dialog';
-import { conflictsTargetingBlock, useCurrentPost } from './review-data';
+import {
+	conflictsTargetingBlock,
+	useCurrentPost,
+	useDecideConflict,
+} from './review-data';
 
 const EMPTY_CONFLICTS = [];
 
@@ -217,7 +221,10 @@ export function ConflictBlockBody( {
  * The reviewer's decision goes to the ENGINE as content
  * (`resolveConflict` with `accept` plus serialized blocks): the engine
  * applies the replacement as an ordinary edit and closes the record in
- * the same round. The card never writes into the canvas itself: a canvas
+ * the same round. The decision names the current version the dialog
+ * showed, and the engine refuses it when a collaborator changed the
+ * content in the meantime: the card then stays, with the content as it
+ * is now. The card never writes into the canvas itself: a canvas
  * write dispatched right before resolving is silently lost to the sync
  * push the resolution triggers (see AGENTS.md on pushes from inside
  * update()).
@@ -233,8 +240,7 @@ export function ConflictBlockBody( {
  */
 export default function ConflictBlock( { clientId, blockName, conflicts } ) {
 	const blockProps = useBlockProps();
-	const { postType, postId } = useCurrentPost();
-	const resolve = useResolveConflict( postType, postId );
+	const decide = useDecideConflict();
 	const [ isReviewing, setIsReviewing ] = useState( false );
 	const [ conflict ] = conflicts;
 	const isContainer = useSelect(
@@ -250,7 +256,7 @@ export default function ConflictBlock( { clientId, blockName, conflicts } ) {
 
 	const onClose = () => setIsReviewing( false );
 	const onDecide = ( decision ) => {
-		resolve( conflict.id, decision );
+		decide( conflict, decision );
 		setIsReviewing( false );
 	};
 

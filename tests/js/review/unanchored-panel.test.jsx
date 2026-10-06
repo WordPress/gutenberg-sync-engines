@@ -47,7 +47,7 @@ describe( 'UnanchoredConflictsBody', () => {
 		await user.click(
 			screen.getByRole( 'button', { name: 'Use proposed' } )
 		);
-		expect( onDecide ).toHaveBeenLastCalledWith( 'c-title', {
+		expect( onDecide ).toHaveBeenLastCalledWith( TITLE_CONFLICT, {
 			action: 'accept',
 			content: 'Title B',
 		} );
@@ -55,7 +55,7 @@ describe( 'UnanchoredConflictsBody', () => {
 		await user.click(
 			screen.getByRole( 'button', { name: 'Keep current' } )
 		);
-		expect( onDecide ).toHaveBeenLastCalledWith( 'c-title', {
+		expect( onDecide ).toHaveBeenLastCalledWith( TITLE_CONFLICT, {
 			action: 'dismiss',
 		} );
 	} );
@@ -81,7 +81,7 @@ describe( 'UnanchoredConflictsBody', () => {
 		await user.click(
 			screen.getByRole( 'button', { name: 'Use proposed' } )
 		);
-		expect( onDecide ).toHaveBeenCalledWith( 'c-insert', {
+		expect( onDecide ).toHaveBeenCalledWith( HELD_INSERTION, {
 			action: 'accept',
 			content: HELD_INSERTION.proposed,
 		} );

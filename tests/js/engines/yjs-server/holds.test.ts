@@ -181,6 +181,9 @@ describe( 'yjs-server security holds (client)', () => {
 				holdId: 'h-1',
 				resolution: 'accepted',
 				content: HELD,
+				// The sanitized block the reviewer saw, for the server's
+				// stale check.
+				current: SANITIZED,
 				room: 'postType/post:1',
 			},
 		} );
@@ -216,6 +219,106 @@ describe( 'yjs-server security holds (client)', () => {
 			engine.conflicts.getOpenConflicts( 'postType/post', '1' )
 		).toHaveLength( 1 );
 		expect( changed ).toHaveBeenCalledTimes( 3 );
+	} );
+
+	it( 'an approval the server refuses as stale reopens the hold with the block as it reads now', async () => {
+		const EDITED =
+			'<!-- wp:paragraph -->\n<p>Hello alert(1) and more</p>\n<!-- /wp:paragraph -->';
+		// The route's answer when the sanitized block changed after the
+		// reviewer saw it: a 409 carrying the refreshed hold.
+		apiFetchMock.mockRejectedValueOnce( {
+			code: 'review_stale',
+			message: 'This block changed after the decision was made.',
+			data: {
+				status: 409,
+				hold: JSON.parse( heldRow( { sanitized: EDITED } ).data ),
+			},
+		} );
+		const session = makeSession();
+		session.receiveUpdate( heldRow() );
+
+		const outcome = await engine.conflicts.resolveConflict(
+			'postType/post',
+			'1',
+			'h-1',
+			{ action: 'accept', content: HELD, current: SANITIZED }
+		);
+
+		expect( outcome ).toBe( 'stale' );
+		const open = engine.conflicts.getOpenConflicts( 'postType/post', '1' );
+		expect( open ).toHaveLength( 1 );
+		expect( open[ 0 ].current ).toBe( EDITED );
+
+		// The second try names the block as it reads now, and goes through.
+		expect(
+			await engine.conflicts.resolveConflict(
+				'postType/post',
+				'1',
+				'h-1',
+				{ action: 'accept', content: HELD, current: EDITED }
+			)
+		).toBe( 'resolved' );
+		expect( apiFetchMock ).toHaveBeenLastCalledWith(
+			expect.objectContaining( {
+				data: expect.objectContaining( { current: EDITED } ),
+			} )
+		);
+	} );
+
+	it( 'a hold announced again with a changed block replaces the open one', () => {
+		const EDITED =
+			'<!-- wp:paragraph -->\n<p>Hello alert(1) and more</p>\n<!-- /wp:paragraph -->';
+		const changed = jest.fn();
+		engine.conflicts.subscribe( 'postType/post', '1', changed );
+		const session = makeSession();
+
+		session.receiveUpdate( heldRow() );
+		// The server refused another reviewer's stale approval and
+		// announced the hold again with the block as it reads now.
+		session.receiveUpdate( heldRow( { sanitized: EDITED } ) );
+
+		const open = engine.conflicts.getOpenConflicts( 'postType/post', '1' );
+		expect( open ).toHaveLength( 1 );
+		expect( open[ 0 ].current ).toBe( EDITED );
+		expect( changed ).toHaveBeenCalledTimes( 2 );
+	} );
+
+	it( 'refuses an approval made against a block the hold no longer shows, without a request', async () => {
+		const session = makeSession();
+		session.receiveUpdate( heldRow() );
+
+		const outcome = await engine.conflicts.resolveConflict(
+			'postType/post',
+			'1',
+			'h-1',
+			{
+				action: 'accept',
+				content: HELD,
+				current:
+					'<!-- wp:paragraph -->\n<p>Older</p>\n<!-- /wp:paragraph -->',
+			}
+		);
+
+		expect( outcome ).toBe( 'stale' );
+		expect( apiFetchMock ).not.toHaveBeenCalled();
+		expect(
+			engine.conflicts.getOpenConflicts( 'postType/post', '1' )
+		).toHaveLength( 1 );
+	} );
+
+	it( 'reports a decision the request failed on as failed', async () => {
+		apiFetchMock.mockRejectedValueOnce( new Error( 'offline' ) );
+		const session = makeSession();
+		session.receiveUpdate( heldRow() );
+
+		expect(
+			await engine.conflicts.resolveConflict(
+				'postType/post',
+				'1',
+				'h-1',
+				{ action: 'dismiss' }
+			)
+		).toBe( 'failed' );
 	} );
 
 	it( 'leaves the document alone: review rows carry no content', () => {

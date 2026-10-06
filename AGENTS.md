@@ -891,6 +891,21 @@ applies.
   in `src/index.ts`, and takes the reviewer's decision back through
   `resolveConflict` (`accept` with the merged content, or `dismiss`).
   The ENGINE applies the decision; the UI never writes to the canvas.
+  An accepted decision must not land on content the reviewer never
+  saw. Each engine publishes a record again when a side changes (a
+  document change, not only a record opening or closing, so an engine
+  must tell the listeners itself), the dialogs follow the change or
+  say they did not, and an `accept` names the `current` the reviewer
+  saw. The engine refuses a decision made against an older `current`
+  (outcome `stale`, see `SyncConflictOutcome`): nothing is written,
+  the record stays open, and `useDecideConflict` raises a notice. The
+  two review routes make the same check for a change the client has
+  not received yet and answer 409 `review_stale`: de-rtc compares the
+  parked blocks between the version the client names (`seenVersion`)
+  and the current one, yjs-server compares the sanitized block with
+  the hold's `sanitized` (and announces the hold again with the block
+  as it reads now). intent-log has no route: its accepted result is
+  an ordinary edit that the server merges or sets aside.
   A card WAITS while its author is still typing in the block
   (`src/review/typing-hold.ts`: 1.2 s without typing, 20 s at most),
   but only for records an engine marks `followsTyping`, which promises

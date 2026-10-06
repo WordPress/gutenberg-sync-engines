@@ -27,6 +27,28 @@ export function MissingBaseNotice() {
 }
 
 /**
+ * The notice a review dialog shows when the record changed while the
+ * dialog was open: a collaborator edited the content, or the author
+ * typed on. The dialog says what it did with the result the reviewer is
+ * working on.
+ *
+ * @param {Object}   props
+ * @param {string}   props.children  What happened, in the dialog's words.
+ * @param {Function} props.onDismiss Hide the notice.
+ */
+export function ChangedWhileReviewingNotice( { children, onDismiss } ) {
+	return (
+		<Notice
+			className="gse-review-merge-dialog__notice"
+			status="warning"
+			onRemove={ onDismiss }
+		>
+			{ children }
+		</Notice>
+	);
+}
+
+/**
  * One version pane: a heading, this version's blocks rendered read-only
  * with the revisions diff highlighting against the base version, and a
  * button copying this version into the merged result.
@@ -82,6 +104,13 @@ function Pane( { label, content, baseContent, onRestore } ) {
  * wholly. Accept hands the merged result back as serialized block
  * content; Cancel closes without changing anything.
  *
+ * The record can change while the dialog is open: a collaborator edits
+ * the block, or the author types on. The panes always show the record
+ * as it is. The merged result follows only while it is still a plain
+ * copy of the version that changed. Once the reviewer has edited it by
+ * hand it is left alone. Either way a notice says so, because accepting
+ * a result built from the older version would undo the newer edit.
+ *
  * The merged editor deliberately stays free of the diff highlighting:
  * the inline diff marks are rich-text formats living in the content,
  * and they would serialize into the accepted result.
@@ -122,8 +151,39 @@ export function MergeDialogBody( {
 	// pane's "Restore this version" reseeds it, and it stays
 	// hand-editable in the merged block editor below the panes.
 	const [ merged, setMerged ] = useState( () => parse( current ) );
+	// Which version the merged result is a plain copy of: 'current',
+	// 'proposed', or null once the reviewer has edited it by hand.
+	const [ seedSide, setSeedSide ] = useState( 'current' );
+	// The versions as the dialog last showed them, and what it did with
+	// the merged result when they last changed: 'updated', 'kept', or
+	// null (nothing changed, or the notice was dismissed).
+	const [ shown, setShown ] = useState( { proposed, current } );
+	const [ changeHandling, setChangeHandling ] = useState( null );
 	const isBaseMissing = null === base || undefined === base;
 	const baseContent = base ?? current;
+
+	if ( shown.proposed !== proposed || shown.current !== current ) {
+		setShown( { proposed, current } );
+
+		if ( 'current' === seedSide && shown.current !== current ) {
+			setMerged( parse( current ) );
+			setChangeHandling( 'updated' );
+		} else if ( 'proposed' === seedSide && shown.proposed !== proposed ) {
+			setMerged( parse( proposed ) );
+			setChangeHandling( 'updated' );
+		} else {
+			setChangeHandling( 'kept' );
+		}
+	}
+
+	const restore = ( side, content ) => {
+		setMerged( parse( content ) );
+		setSeedSide( side );
+	};
+	const onEditMerged = ( blocks ) => {
+		setMerged( blocks );
+		setSeedSide( null );
+	};
 
 	return (
 		<div className="gse-review-merge-dialog__body">
@@ -134,18 +194,36 @@ export function MergeDialogBody( {
 				) }
 			</p>
 			{ isBaseMissing && <MissingBaseNotice /> }
+			{ 'updated' === changeHandling && (
+				<ChangedWhileReviewingNotice
+					onDismiss={ () => setChangeHandling( null ) }
+				>
+					{ __(
+						'This content changed while you were reviewing it. The merged result now starts from the newer version.'
+					) }
+				</ChangedWhileReviewingNotice>
+			) }
+			{ 'kept' === changeHandling && (
+				<ChangedWhileReviewingNotice
+					onDismiss={ () => setChangeHandling( null ) }
+				>
+					{ __(
+						'This content changed while you were reviewing it. The merged result was not changed. Check it against the versions above before you accept.'
+					) }
+				</ChangedWhileReviewingNotice>
+			) }
 			<div className="gse-review-merge-dialog__panes">
 				<Pane
 					label={ proposedLabel }
 					content={ proposed }
 					baseContent={ baseContent }
-					onRestore={ () => setMerged( parse( proposed ) ) }
+					onRestore={ () => restore( 'proposed', proposed ) }
 				/>
 				<Pane
 					label={ __( 'Current version' ) }
 					content={ current }
 					baseContent={ baseContent }
-					onRestore={ () => setMerged( parse( current ) ) }
+					onRestore={ () => restore( 'current', current ) }
 				/>
 			</div>
 			<div className="gse-review-merge-dialog__merged">
@@ -154,7 +232,7 @@ export function MergeDialogBody( {
 				</h3>
 				<MergedResultEditor
 					blocks={ merged }
-					onChange={ setMerged }
+					onChange={ onEditMerged }
 					templateLock={ templateLock }
 				/>
 				<p className="gse-review-merge-dialog__help">{ help }</p>

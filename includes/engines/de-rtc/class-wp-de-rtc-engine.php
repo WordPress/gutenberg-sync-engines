@@ -1652,14 +1652,24 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 		 * apply_accepted_content()) and the parked id closes in the same
 		 * request, so the two can never race each other.
 		 *
-		 * @param string      $room        Room identifier.
-		 * @param string      $proposal_id Parked proposal id.
-		 * @param string      $resolution  'restored', 'dismissed', or 'accepted'.
-		 * @param int         $client_id   Resolving client id (0 = none declared).
-		 * @param string|null $content     The replacement for 'accepted'.
+		 * An `accepted` resolution may name the version the reviewer saw.
+		 * When the parked blocks have changed since that version, the
+		 * replacement would write over a change the reviewer never saw:
+		 * the answer is a 409 `review_stale`, nothing is written, and the
+		 * record stays open.
+		 *
+		 * @since n.e.x.t Takes the version the reviewer saw.
+		 *
+		 * @param string      $room         Room identifier.
+		 * @param string      $proposal_id  Parked proposal id.
+		 * @param string      $resolution   'restored', 'dismissed', or 'accepted'.
+		 * @param int         $client_id    Resolving client id (0 = none declared).
+		 * @param string|null $content      The replacement for 'accepted'.
+		 * @param string|null $seen_version The version the reviewer saw, for
+		 *                                  'accepted' (null skips the check).
 		 * @return array|WP_Error Disposition, or error.
 		 */
-		public function resolve_proposal( string $room, string $proposal_id, string $resolution, int $client_id = 0, ?string $content = null ) {
+		public function resolve_proposal( string $room, string $proposal_id, string $resolution, int $client_id = 0, ?string $content = null, ?string $seen_version = null ) {
 			if (
 				'' === $proposal_id ||
 				! in_array( $resolution, array( 'restored', 'dismissed', 'accepted' ), true ) ||
@@ -1674,7 +1684,7 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 			$review  = $this->load_review_ledger( $room );
 			$applied = null;
 			if ( 'accepted' === $resolution ) {
-				$applied = $this->apply_accepted_content( $room, $proposal_id, (string) $content, $client_id, $review );
+				$applied = $this->apply_accepted_content( $room, $proposal_id, (string) $content, $client_id, $review, $seen_version );
 				if ( is_wp_error( $applied ) ) {
 					return $applied;
 				}
@@ -1934,19 +1944,28 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 		 * so a concurrent change merges or parks the way any edit would.
 		 * The caller closes the parked id in the same request.
 		 *
+		 * A change that lands DURING this request is covered by that
+		 * ordinary path. A change that landed BEFORE it, after the version
+		 * the reviewer saw, is not: the replacement starts from the current
+		 * version, so it would simply write over the change. That case is
+		 * refused here (see is_parked_target_changed_since()).
+		 *
 		 * @since n.e.x.t
 		 *
-		 * @param string $room        Room identifier.
-		 * @param string $proposal_id Parked proposal id.
-		 * @param string $content     The reviewer's replacement (serialized
-		 *                            blocks, or the property value).
-		 * @param int    $client_id   Resolving client id.
-		 * @param array  $review      Review ledger (by reference).
+		 * @param string      $room         Room identifier.
+		 * @param string      $proposal_id  Parked proposal id.
+		 * @param string      $content      The reviewer's replacement
+		 *                                  (serialized blocks, or the
+		 *                                  property value).
+		 * @param int         $client_id    Resolving client id.
+		 * @param array       $review       Review ledger (by reference).
+		 * @param string|null $seen_version The version the reviewer saw
+		 *                                  (null skips the stale check).
 		 * @return array|WP_Error|null The replacement's disposition, null
 		 *                             when the record was already closed,
 		 *                             or an error.
 		 */
-		private function apply_accepted_content( string $room, string $proposal_id, string $content, int $client_id, array &$review ) {
+		private function apply_accepted_content( string $room, string $proposal_id, string $content, int $client_id, array &$review, ?string $seen_version = null ) {
 			$parked = $review['open'][ $proposal_id ] ?? null;
 			if ( ! is_array( $parked ) || isset( $review['resolved'][ $proposal_id ] ) ) {
 				return null; // Closed elsewhere: nothing to apply, the ack is idempotent.
@@ -1965,6 +1984,19 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 			$state = $this->load_room( $room );
 			if ( is_wp_error( $state ) ) {
 				return $state;
+			}
+
+			if (
+				null !== $seen_version &&
+				'' !== $seen_version &&
+				(string) $state['version'] !== $seen_version &&
+				$this->is_parked_target_changed_since( $state, $parked, $seen_version )
+			) {
+				return new WP_Error(
+					'review_stale',
+					__( 'This content changed after the decision was made. Review it again.', 'gutenberg-sync-engines' ),
+					array( 'status' => 409 )
+				);
 			}
 
 			$proposal = array(
@@ -2000,6 +2032,94 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 			}
 
 			return $disposition;
+		}
+
+		/**
+		 * Whether a parked record's target reads differently now than it
+		 * did at an earlier version: the parked blocks (or the parked
+		 * property) were changed in between. A version that is no longer
+		 * kept cannot be compared, and counts as changed.
+		 *
+		 * Example: a reviewer opens the dialog at version 7. A peer edits
+		 * the parked paragraph, which makes version 8. The reviewer accepts
+		 * with `seenVersion` 7: the paragraph differs between 7 and 8, so
+		 * the answer is true. Had the peer edited another paragraph, the
+		 * answer would be false and the accept would go ahead.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param array  $state        Room state.
+		 * @param array  $parked       The parked row.
+		 * @param string $seen_version The earlier version.
+		 * @return bool Whether the target changed.
+		 */
+		private function is_parked_target_changed_since( array $state, array $parked, string $seen_version ): bool {
+			if ( is_array( $parked['property'] ?? null ) && is_string( $parked['property']['name'] ?? null ) ) {
+				$name       = $parked['property']['name'];
+				$by_version = is_array( $state['properties_by_version'] ?? null ) ? $state['properties_by_version'] : array();
+				if ( ! is_array( $by_version[ $seen_version ] ?? null ) ) {
+					return true;
+				}
+				$now = is_array( $state['properties'] ?? null ) ? $state['properties'] : array();
+
+				return ! self::property_values_equal( $by_version[ $seen_version ][ $name ] ?? null, $now[ $name ] ?? null );
+			}
+
+			$seen_content = $this->resolve_base_content( $state, $seen_version );
+			if ( ! is_string( $seen_content ) ) {
+				return true;
+			}
+			$changed_blocks = is_array( $parked['changedBlocks'] ?? null ) ? $parked['changedBlocks'] : array();
+
+			return self::parked_span_form( $seen_content, $changed_blocks ) !== self::parked_span_form( (string) $state['content'], $changed_blocks );
+		}
+
+		/**
+		 * A parked span as some content has it, located the way
+		 * replace_parked_span() locates it: the parked blocks by identity
+		 * when every one carries a syncId (a block the content does not
+		 * hold reads as empty), else the covering top-level index run.
+		 * On freeform boundaries the span is the whole content.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param string $content        Serialized content.
+		 * @param array  $changed_blocks The parked row's changed blocks.
+		 * @return string The span's serialized form.
+		 */
+		private static function parked_span_form( string $content, array $changed_blocks ): string {
+			$ids     = array();
+			$indexes = array();
+			foreach ( $changed_blocks as $block ) {
+				if ( ! is_array( $block ) ) {
+					continue;
+				}
+				if ( is_string( $block['syncId'] ?? null ) && '' !== $block['syncId'] ) {
+					$ids[] = $block['syncId'];
+				}
+				if ( isset( $block['index'] ) ) {
+					$indexes[] = (int) $block['index'];
+				}
+			}
+
+			if ( array() !== $ids && count( $ids ) === count( $changed_blocks ) ) {
+				$by_id = array();
+				self::index_serialized_blocks_by_id( parse_blocks( $content ), $by_id );
+				$forms = array();
+				foreach ( $ids as $id ) {
+					$forms[] = $by_id[ $id ] ?? '';
+				}
+
+				return implode( "\n\n", $forms );
+			}
+
+			$records = wp_de_rtc_get_top_level_serialized_block_records( $content );
+			if ( is_wp_error( $records ) || array() === $indexes ) {
+				return $content;
+			}
+			$first = max( 0, min( $indexes ) );
+
+			return implode( "\n\n", array_slice( $records, $first, max( $indexes ) - $first + 1 ) );
 		}
 
 		/**

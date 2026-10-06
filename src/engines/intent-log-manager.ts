@@ -54,6 +54,7 @@ import type { EngineDocument } from './intent-log/engine-types';
 import type {
 	SyncConflict,
 	SyncConflictDecision,
+	SyncConflictOutcome,
 	SyncConflictSource,
 } from '../review/types';
 import type {
@@ -984,7 +985,10 @@ function chooseObservedBaseline(
  */
 interface ConflictEntity {
 	list: () => SyncConflict[];
-	resolve: ( conflictId: string, decision: SyncConflictDecision ) => void;
+	resolve: (
+		conflictId: string,
+		decision: SyncConflictDecision
+	) => SyncConflictOutcome;
 }
 
 const conflictEntities = new Map< string, ConflictEntity >();
@@ -1012,11 +1016,10 @@ export const intentLogConflictSource: SyncConflictSource = {
 			conflictListeners.get( key )?.delete( listener );
 		};
 	},
-	resolveConflict: ( objectType, objectId, conflictId, decision ) => {
+	resolveConflict: ( objectType, objectId, conflictId, decision ) =>
 		conflictEntities
 			.get( conflictKey( objectType, objectId ) )
-			?.resolve( conflictId, decision );
-	},
+			?.resolve( conflictId, decision ),
 };
 
 /**
@@ -1876,14 +1879,44 @@ export function createIntentLogManager( debug = false ): SyncManager {
 				state.capturing = false;
 			}
 		};
+		/*
+		 * The records as the listeners last read them. A record's sides
+		 * are rebuilt from the document on every read, so a change to the
+		 * document (a collaborator's edit landing in a block under
+		 * review) changes them without any proposal opening or closing.
+		 * The listeners hear about that too, or a review dialog would go
+		 * on showing the block as it was.
+		 */
+		let publishedRecords = '';
+		const listConflicts = (): SyncConflict[] => {
+			const conflicts = conflictRecords().map(
+				( parked ) => parked.conflict
+			);
+			publishedRecords = JSON.stringify( conflicts );
+			return conflicts;
+		};
 		conflictEntities.set( key, {
-			list: () => conflictRecords().map( ( parked ) => parked.conflict ),
+			list: listConflicts,
 			resolve: ( conflictId, decision ) => {
 				const parked = conflictRecords().find(
 					( candidate ) => candidate.conflict.id === conflictId
 				);
 				if ( ! parked ) {
-					return;
+					return 'resolved';
+				}
+				/*
+				 * The reviewer decided against a `current` the document no
+				 * longer has: a collaborator's edit landed in between.
+				 * Writing the accepted content now would remove that edit
+				 * (the replacement is a diff against the document as it is
+				 * NOW). Nothing is written and the record stays open.
+				 */
+				if (
+					'accept' === decision.action &&
+					undefined !== decision.current &&
+					decision.current !== parked.conflict.current
+				) {
+					return 'stale';
 				}
 				const memberIds = parked.members.map(
 					( member ) => member.intent.intentId
@@ -1903,7 +1936,7 @@ export function createIntentLogManager( debug = false ): SyncManager {
 								id
 							);
 						}
-						return;
+						return 'resolved';
 					}
 					if ( undefined !== parked.property ) {
 						const original =
@@ -1937,20 +1970,43 @@ export function createIntentLogManager( debug = false ): SyncManager {
 				for ( const id of memberIds ) {
 					session.resolveProposal( id, 'dismissed' );
 				}
+				return 'resolved';
 			},
 		} );
-		session.onProposalsChange( () => {
+		/*
+		 * One notification per delivery batch. A change to the open list
+		 * always notifies; a change to the document notifies only when it
+		 * changed what a record shows.
+		 */
+		let proposalsChanged = false;
+		const scheduleConflictNotify = ( isProposalsChange: boolean ) => {
+			proposalsChanged = proposalsChanged || isProposalsChange;
 			if ( proposalsNotifyScheduled ) {
 				return;
 			}
 			proposalsNotifyScheduled = true;
 			void Promise.resolve().then( () => {
 				proposalsNotifyScheduled = false;
+				const mustNotify = proposalsChanged;
+				proposalsChanged = false;
 				if ( state.unloaded ) {
 					return;
 				}
+				if ( ! mustNotify ) {
+					const published = publishedRecords;
+					listConflicts();
+					if ( published === publishedRecords ) {
+						return;
+					}
+				}
 				notifyConflictListeners( key );
 			} );
+		};
+		session.onProposalsChange( () => scheduleConflictNotify( true ) );
+		session.onChange( () => {
+			if ( session.getOpenProposals().length > 0 ) {
+				scheduleConflictNotify( false );
+			}
 		} );
 
 		log( 'connecting', { key } );

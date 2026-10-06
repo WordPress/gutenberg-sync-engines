@@ -169,4 +169,98 @@ describe( 'KsesReviewDialogBody', () => {
 			expect( onApprove ).toHaveBeenCalledWith( KSES_UPDATE.proposed );
 		} );
 	} );
+	describe( 'when the author changes the held markup while the dialog is open', () => {
+		// A notice also announces its text to screen readers, in a second
+		// element, so the queries name the visible one.
+		const NOTICE = { selector: '.components-notice__content' };
+		const newer = {
+			...KSES_NEW,
+			proposed: KSES_NEW.proposed.replace( 'alert(0);', 'alert(1);' ),
+		};
+
+		it( 'follows the newer markup while the reviewer has not edited it', async () => {
+			const user = userEvent.setup();
+			const onApprove = jest.fn();
+			const { rerender } = render(
+				<KsesReviewDialogBody
+					sequestration={ KSES_NEW }
+					onApprove={ onApprove }
+					onRemove={ noop }
+				/>
+			);
+
+			rerender(
+				<KsesReviewDialogBody
+					sequestration={ newer }
+					onApprove={ onApprove }
+					onRemove={ noop }
+				/>
+			);
+
+			expect(
+				screen.getByText( /You now see the newer version/, NOTICE )
+			).toBeVisible();
+			await user.click(
+				screen.getByRole( 'button', { name: 'Approve' } )
+			);
+			// Not the markup the dialog opened with.
+			expect( onApprove ).toHaveBeenCalledWith( newer.proposed );
+		} );
+
+		it( "keeps the reviewer's own edit, and says it lacks the newer changes", async () => {
+			const user = userEvent.setup();
+			const onApprove = jest.fn();
+			const { rerender } = render(
+				<KsesReviewDialogBody
+					sequestration={ KSES_NEW }
+					onApprove={ onApprove }
+					onRemove={ noop }
+				/>
+			);
+			await user.click( screen.getByRole( 'button', { name: 'Edit' } ) );
+			const textarea = screen.getByRole( 'textbox', {
+				name: 'Proposed block HTML',
+			} );
+			await user.clear( textarea );
+			await user.type( textarea, '<p>safe</p>' );
+
+			rerender(
+				<KsesReviewDialogBody
+					sequestration={ newer }
+					onApprove={ onApprove }
+					onRemove={ noop }
+				/>
+			);
+
+			expect(
+				screen.getByText( /Your edit was kept/, NOTICE )
+			).toBeVisible();
+			await user.click(
+				screen.getByRole( 'button', { name: 'Approve' } )
+			);
+			expect( onApprove ).toHaveBeenCalledWith( '<p>safe</p>' );
+		} );
+
+		it( 'shows no notice when the record is published again unchanged', () => {
+			const { rerender } = render(
+				<KsesReviewDialogBody
+					sequestration={ KSES_NEW }
+					onApprove={ noop }
+					onRemove={ noop }
+				/>
+			);
+
+			rerender(
+				<KsesReviewDialogBody
+					sequestration={ { ...KSES_NEW } }
+					onApprove={ noop }
+					onRemove={ noop }
+				/>
+			);
+
+			expect(
+				screen.queryByText( /while you were reviewing it/, NOTICE )
+			).not.toBeInTheDocument();
+		} );
+	} );
 } );

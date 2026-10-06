@@ -185,6 +185,52 @@ class Tests_Collaboration_WpDeRtcReviewController extends WP_UnitTestCase {
 		$this->assertSame( 'accepted', $resolved[0]['resolution'] );
 	}
 
+	public function test_accepted_against_a_version_whose_block_changed_since_is_a_conflict() {
+		$this->escalate_conflict();
+		// The reviewer saw this version: the newest one the room announces.
+		$seen = array(
+			'version' => 'v0',
+			'content' => (string) $this->engine()->materialize( $this->room() ),
+		);
+		foreach ( $this->engine()->get_updates_since( $this->room(), 3, 0, array() )['updates'] as $update ) {
+			$version = json_decode( $update['data'], true )['version'] ?? null;
+			if ( is_string( $version ) && (int) ltrim( $version, 'v' ) > (int) ltrim( $seen['version'], 'v' ) ) {
+				$seen['version'] = $version;
+			}
+		}
+
+		// A peer edits the block under review.
+		$proposed = str_replace( 'Alpha block A-REWRITE text', 'Alpha block A-REWRITE text, and a later thought', $seen['content'] );
+		$this->assertNotSame( $seen['content'], $proposed );
+		$peer = $this->engine()->handle_updates(
+			$this->room(),
+			1,
+			0,
+			array( $this->proposal( 'p-a2', $seen['version'], $seen['content'], $proposed ) ),
+			array()
+		);
+		$this->assertSame( 'applied', $peer['dispositions'][0]['status'] );
+		$before = $this->engine()->materialize( $this->room() );
+		$this->assertStringContainsString( 'and a later thought', $before );
+
+		$response = $this->dispatch_resolve(
+			array(
+				'room'        => $this->room(),
+				'proposalId'  => 'p-b',
+				'resolution'  => 'accepted',
+				'client_id'   => 2,
+				'content'     => "<!-- wp:paragraph -->\n<p>Alpha block REVIEWED text.</p>\n<!-- /wp:paragraph -->",
+				'seenVersion' => $seen['version'],
+			)
+		);
+
+		$this->assertSame( 409, $response->get_status() );
+		$this->assertSame( 'review_stale', $response->get_data()['code'] );
+		$this->assertSame( $before, $this->engine()->materialize( $this->room() ) );
+		$room_read = $this->engine()->get_updates_since( $this->room(), 3, 0, array() );
+		$this->assertCount( 0, $this->rows_of_type( $room_read, WP_De_RTC_Engine::UPDATE_TYPE_RESOLVED ) );
+	}
+
 	public function test_accepted_without_content_is_a_bad_request() {
 		$this->escalate_conflict();
 		$response = $this->dispatch_resolve(

@@ -8,9 +8,13 @@ import {
 	PluginDocumentSettingPanel,
 	store as editorStore,
 } from '@wordpress/editor';
-import { useOpenConflicts, useResolveConflict } from '../conflicts';
+import { useOpenConflicts } from '../conflicts';
 import { plainText } from './conflict-block';
-import { canApproveUnfilteredHtml, useCurrentPost } from './review-data';
+import {
+	canApproveUnfilteredHtml,
+	useCurrentPost,
+	useDecideConflict,
+} from './review-data';
 
 const EMPTY_CONFLICTS = [];
 
@@ -121,7 +125,8 @@ function headingOf( conflict ) {
  * @param {Array}    props.conflicts  The records.
  * @param {boolean}  props.canApprove Whether the user may approve content
  *                                    held for unfiltered-HTML review.
- * @param {Function} props.onDecide   ( conflictId, decision ) => void.
+ * @param {Function} props.onDecide   ( conflict, decision ) => void, with
+ *                                    the record as it is shown.
  */
 export function UnanchoredConflictsBody( { conflicts, canApprove, onDecide } ) {
 	return (
@@ -170,7 +175,7 @@ export function UnanchoredConflictsBody( { conflicts, canApprove, onDecide } ) {
 									size="compact"
 									variant="primary"
 									onClick={ () =>
-										onDecide( conflict.id, {
+										onDecide( conflict, {
 											action: 'accept',
 											content: conflict.proposed,
 										} )
@@ -184,7 +189,7 @@ export function UnanchoredConflictsBody( { conflicts, canApprove, onDecide } ) {
 								size="compact"
 								variant="secondary"
 								onClick={ () =>
-									onDecide( conflict.id, {
+									onDecide( conflict, {
 										action: 'dismiss',
 									} )
 								}
@@ -213,9 +218,8 @@ export function UnanchoredConflictsBody( { conflicts, canApprove, onDecide } ) {
  * none, which is nearly always.
  */
 export default function UnanchoredConflictsPanel() {
-	const { postType, postId } = useCurrentPost();
 	const conflicts = useUnanchoredConflicts();
-	const resolve = useResolveConflict( postType, postId );
+	const decide = useDecideConflict();
 	const hasConflicts = conflicts.length > 0;
 	const isOpened = useSelect(
 		( select ) => select( editorStore ).isEditorPanelOpened( PANEL_KEY ),
@@ -246,7 +250,7 @@ export default function UnanchoredConflictsPanel() {
 			<UnanchoredConflictsBody
 				conflicts={ conflicts }
 				canApprove={ canApproveUnfilteredHtml() }
-				onDecide={ resolve }
+				onDecide={ decide }
 			/>
 		</PluginDocumentSettingPanel>
 	);

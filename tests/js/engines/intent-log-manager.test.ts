@@ -2478,6 +2478,185 @@ describe( 'intent-log manager', () => {
 		expect( textOf( conflict.current ) ).toEqual( [ 'Hello there' ] );
 	} );
 
+	it( "publishes a record again when a collaborator's edit changes its current side, and refuses a decision made against the older one", async () => {
+		const { transport } = await loadManagedEntity();
+
+		transport.captured.session!.receiveUpdate(
+			snapshotRow( [
+				{ syncId: 'p1', blockType: 'core/paragraph', text: 'Hello' },
+			] )
+		);
+		transport.captured.session!.receiveUpdate( {
+			data: JSON.stringify( {
+				intent: {
+					intentId: 'parked-1',
+					actorId: 'u8c8',
+					baseSeq: 0,
+					txnId: null,
+					type: 'insert_text',
+					payload: {
+						syncId: 'p1',
+						field: 'content',
+						offset: 5,
+						text: ' friend',
+					},
+				},
+				actorId: 'u8c8',
+				reason: 'frame-conflict',
+			} ),
+			type: INTENT_LOG_UPDATE_TYPES.PARKED,
+		} );
+		await Promise.resolve();
+
+		const changed = jest.fn();
+		intentLogConflictSource.subscribe( 'postType/post', '1', changed );
+		const textOf = ( side: string | null ) =>
+			JSON.parse( side ?? '[]' ).map(
+				( block: { attributes: { content: string } } ) =>
+					block.attributes.content
+			);
+		// The reviewer opens the dialog on this record.
+		const [ seen ] = intentLogConflictSource.getOpenConflicts(
+			'postType/post',
+			'1'
+		);
+		expect( textOf( seen.current ) ).toEqual( [ 'Hello' ] );
+
+		// A collaborator edits the block while the dialog is open. No
+		// proposal opens or closes.
+		transport.captured.session!.receiveUpdate( {
+			data: JSON.stringify( {
+				intentId: 'remote-1',
+				actorId: 'u9c9',
+				baseSeq: 0,
+				txnId: null,
+				type: 'insert_text',
+				payload: {
+					syncId: 'p1',
+					field: 'content',
+					offset: 5,
+					text: ' there',
+				},
+			} ),
+			type: INTENT_LOG_UPDATE_TYPES.INTENT,
+		} );
+		await Promise.resolve();
+
+		// The listeners hear about it, and the record shows the edit.
+		expect( changed ).toHaveBeenCalledTimes( 1 );
+		const [ fresh ] = intentLogConflictSource.getOpenConflicts(
+			'postType/post',
+			'1'
+		);
+		expect( textOf( fresh.current ) ).toEqual( [ 'Hello there' ] );
+
+		// A decision made against the older current side is refused:
+		// nothing is sent, and the record stays open.
+		transport.captured.sent.length = 0;
+		const replacement = JSON.stringify( [
+			{
+				name: 'core/paragraph',
+				attributes: {
+					content: 'Hello friend',
+					metadata: { syncId: 'p1' },
+				},
+				innerBlocks: [],
+			},
+		] );
+		expect(
+			intentLogConflictSource.resolveConflict(
+				'postType/post',
+				'1',
+				seen.id,
+				{
+					action: 'accept',
+					content: replacement,
+					current: seen.current,
+				}
+			)
+		).toBe( 'stale' );
+		expect( transport.captured.sent ).toEqual( [] );
+		expect(
+			intentLogConflictSource.getOpenConflicts( 'postType/post', '1' )
+		).toHaveLength( 1 );
+
+		// The same decision against the current side as it is now goes
+		// through.
+		expect(
+			intentLogConflictSource.resolveConflict(
+				'postType/post',
+				'1',
+				fresh.id,
+				{
+					action: 'accept',
+					content: replacement,
+					current: fresh.current,
+				}
+			)
+		).toBe( 'resolved' );
+		expect(
+			transport.captured.sent.some(
+				( update ) => INTENT_LOG_UPDATE_TYPES.RESOLVED === update.type
+			)
+		).toBe( true );
+	} );
+
+	it( 'says nothing when a document change leaves every record as it was', async () => {
+		const { transport } = await loadManagedEntity();
+
+		transport.captured.session!.receiveUpdate(
+			snapshotRow( [
+				{ syncId: 'p1', blockType: 'core/paragraph', text: 'Hello' },
+				{ syncId: 'p2', blockType: 'core/paragraph', text: 'Other' },
+			] )
+		);
+		transport.captured.session!.receiveUpdate( {
+			data: JSON.stringify( {
+				intent: {
+					intentId: 'parked-1',
+					actorId: 'u8c8',
+					baseSeq: 0,
+					txnId: null,
+					type: 'insert_text',
+					payload: {
+						syncId: 'p1',
+						field: 'content',
+						offset: 5,
+						text: ' friend',
+					},
+				},
+				actorId: 'u8c8',
+				reason: 'frame-conflict',
+			} ),
+			type: INTENT_LOG_UPDATE_TYPES.PARKED,
+		} );
+		await Promise.resolve();
+		const changed = jest.fn();
+		intentLogConflictSource.subscribe( 'postType/post', '1', changed );
+		intentLogConflictSource.getOpenConflicts( 'postType/post', '1' );
+
+		// An edit to ANOTHER block: the record reads the same.
+		transport.captured.session!.receiveUpdate( {
+			data: JSON.stringify( {
+				intentId: 'remote-1',
+				actorId: 'u9c9',
+				baseSeq: 0,
+				txnId: null,
+				type: 'insert_text',
+				payload: {
+					syncId: 'p2',
+					field: 'content',
+					offset: 5,
+					text: ' words',
+				},
+			} ),
+			type: INTENT_LOG_UPDATE_TYPES.INTENT,
+		} );
+		await Promise.resolve();
+
+		expect( changed ).not.toHaveBeenCalled();
+	} );
+
 	it( 'accept authors the replacement as ordinary intents, then closes every member, in that order', async () => {
 		const { transport } = await loadManagedEntity();
 

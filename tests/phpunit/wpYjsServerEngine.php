@@ -1444,6 +1444,112 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 		$this->assertStringNotContainsString( 'alert', $materialized, 'the content replaces the sanitized block' );
 	}
 
+	/**
+	 * A peer who may publish unfiltered HTML edits the first block, which
+	 * is the sanitized block of the open hold.
+	 *
+	 * @param string $text The text the peer puts at the start of the block.
+	 * @return void
+	 */
+	private function peer_edits_the_held_block( string $text ): void {
+		wp_set_current_user( self::$editor_id );
+		$response = $this->engine()->get_updates_since( $this->room(), 202, 0, array() );
+		$doc      = $this->client_doc_from_response( $response );
+		$update   = $this->encode_edit(
+			$doc,
+			function ( $doc ) use ( $text ) {
+				$this->first_block_content( $doc )->insert( 0, $text );
+			}
+		);
+		$this->engine()->handle_updates(
+			$this->room(),
+			202,
+			(int) $response['end_cursor'],
+			array(
+				array(
+					'type' => 'update',
+					'data' => $update,
+				),
+			),
+			array()
+		);
+	}
+
+	public function test_accepting_a_hold_is_refused_when_the_block_changed_after_the_reviewer_saw_it() {
+		$hold = $this->raise_hold();
+
+		// The reviewer has the dialog open. A peer edits the sanitized block.
+		$this->peer_edits_the_held_block( 'PEER EDIT ' );
+		$before = (string) $this->engine()->materialize( $this->room() );
+		$this->assertStringContainsString( 'PEER EDIT', $before );
+
+		// The reviewer approves what they saw: the block before the peer's edit.
+		$refused = $this->engine()->resolve_hold( $this->room(), $hold['holdId'], 'accepted', null, $hold['sanitized'] );
+		$this->assertWPError( $refused );
+		$this->assertSame( 'review_stale', $refused->get_error_code() );
+		$this->assertSame( 409, $refused->get_error_data()['status'] );
+
+		// Nothing was written: the peer's edit is still there, the held
+		// markup is not, and the hold is still open.
+		$this->assertSame( $before, (string) $this->engine()->materialize( $this->room() ) );
+		$holds = $this->engine()->get_open_holds( $this->room() );
+		$this->assertCount( 1, $holds );
+
+		// The hold now records the block as it reads, the refusal carries
+		// it, and every client hears about it.
+		$fresh = $holds[ $hold['holdId'] ];
+		$this->assertStringContainsString( 'PEER EDIT', $fresh['sanitized'] );
+		$this->assertSame( $fresh['sanitized'], $refused->get_error_data()['hold']['sanitized'] );
+		$read = $this->engine()->get_updates_since( $this->room(), 303, 0, array() );
+		$held = $this->rows_of_type( $read, WP_Yjs_Server_Engine::UPDATE_TYPE_HELD );
+		$this->assertCount( 2, $held, 'the hold is announced again' );
+		$this->assertSame( $hold['holdId'], $held[1]['holdId'] );
+		$this->assertSame( $fresh['sanitized'], $held[1]['sanitized'] );
+		$this->assertCount( 0, $this->rows_of_type( $read, WP_Yjs_Server_Engine::UPDATE_TYPE_HELD_RESOLVED ) );
+
+		// The reviewer looks again and approves against the block as it reads now.
+		$edited      = "<!-- wp:paragraph -->\n<p>PEER EDIT Hello world, <em>reviewed</em></p>\n<!-- /wp:paragraph -->";
+		$disposition = $this->engine()->resolve_hold( $this->room(), $hold['holdId'], 'accepted', $edited, $fresh['sanitized'] );
+		$this->assertIsArray( $disposition );
+		$this->assertTrue( $disposition['applied'] );
+		$this->assertStringContainsString( '<em>reviewed</em>', (string) $this->engine()->materialize( $this->room() ) );
+		$this->assertSame( array(), $this->engine()->get_open_holds( $this->room() ) );
+	}
+
+	public function test_accepting_a_hold_without_naming_the_block_checks_it_against_the_hold() {
+		$hold = $this->raise_hold();
+		$this->peer_edits_the_held_block( 'PEER EDIT ' );
+		$before = (string) $this->engine()->materialize( $this->room() );
+
+		// A caller that does not say what it saw is held to the hold as recorded.
+		$refused = $this->engine()->resolve_hold( $this->room(), $hold['holdId'], 'accepted' );
+		$this->assertWPError( $refused );
+		$this->assertSame( 'review_stale', $refused->get_error_code() );
+		$this->assertSame( $before, (string) $this->engine()->materialize( $this->room() ) );
+	}
+
+	public function test_a_hold_records_the_block_the_way_an_approval_reads_it_back() {
+		$hold = $this->raise_hold();
+
+		// Nobody touched the block: approving against the hold goes through.
+		wp_set_current_user( self::$editor_id );
+		$disposition = $this->engine()->resolve_hold( $this->room(), $hold['holdId'], 'accepted', null, $hold['sanitized'] );
+		$this->assertIsArray( $disposition );
+		$this->assertTrue( $disposition['applied'] );
+	}
+
+	public function test_dismissing_a_hold_is_never_stale() {
+		$hold = $this->raise_hold();
+		$this->peer_edits_the_held_block( 'PEER EDIT ' );
+		$before = (string) $this->engine()->materialize( $this->room() );
+
+		// Dismissing keeps the document as it is, whatever it is now.
+		$disposition = $this->engine()->resolve_hold( $this->room(), $hold['holdId'], 'dismissed', null, $hold['sanitized'] );
+		$this->assertIsArray( $disposition );
+		$this->assertSame( array(), $this->engine()->get_open_holds( $this->room() ) );
+		$this->assertSame( $before, (string) $this->engine()->materialize( $this->room() ) );
+	}
+
 	public function test_accepting_a_hold_needs_unfiltered_html() {
 		$hold = $this->raise_hold();
 
@@ -1591,6 +1697,30 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 		$this->assertSame( 200, $accepted->get_status() );
 		$this->assertSame( 'resolved', $accepted->get_data()['disposition']['status'] );
 		$this->assertStringContainsString( '<script>alert(1)</script>', (string) $this->engine()->materialize( $this->room() ) );
+	}
+
+	public function test_the_review_lane_answers_a_stale_approval_with_a_conflict() {
+		$hold = $this->raise_hold();
+		$this->peer_edits_the_held_block( 'PEER EDIT ' );
+
+		$response = $this->dispatch_resolve(
+			array(
+				'room'       => $this->room(),
+				'holdId'     => $hold['holdId'],
+				'resolution' => 'accepted',
+				'content'    => $hold['held'],
+				// The sanitized block the reviewer saw.
+				'current'    => $hold['sanitized'],
+			)
+		);
+
+		$this->assertSame( 409, $response->get_status() );
+		$data = $response->get_data();
+		$this->assertSame( 'review_stale', $data['code'] );
+		// The answer carries the hold with the block as it reads now.
+		$this->assertSame( $hold['holdId'], $data['data']['hold']['holdId'] );
+		$this->assertStringContainsString( 'PEER EDIT', $data['data']['hold']['sanitized'] );
+		$this->assertStringNotContainsString( '<script>', (string) $this->engine()->materialize( $this->room() ) );
 	}
 
 	public function test_the_review_lane_refuses_a_user_who_cannot_edit_the_rooms_post() {

@@ -125,14 +125,34 @@ export function createYjsServerEngine(): SyncEngine & {
 		},
 		resolveConflict: ( objectType, objectId, conflictId, decision ) => {
 			const holds = entityHolds.get( holdsKey( objectType, objectId ) );
+			if ( ! holds ) {
+				return 'resolved';
+			}
 			if ( 'accept' === decision.action ) {
+				const hold = holds
+					.getOpen()
+					.find( ( candidate ) => candidate.holdId === conflictId );
+				// The reviewer decided against a sanitized block this
+				// hold no longer shows: nothing is sent.
+				if (
+					hold &&
+					undefined !== decision.current &&
+					decision.current !== hold.sanitized
+				) {
+					return 'stale';
+				}
 				// The server lands the content in place of the sanitized
 				// block, under the reviewer's capability, and closes the
-				// hold in the same request.
-				holds?.resolve( conflictId, 'accepted', decision.content );
-				return;
+				// hold in the same request. It refuses when the block no
+				// longer reads the way the reviewer saw it.
+				return holds.resolve(
+					conflictId,
+					'accepted',
+					decision.content,
+					decision.current ?? hold?.sanitized
+				);
 			}
-			holds?.resolve( conflictId, 'dismissed' );
+			return holds.resolve( conflictId, 'dismissed' );
 		},
 	};
 
@@ -149,12 +169,13 @@ export function createYjsServerEngine(): SyncEngine & {
 			const entityKey = holdsKey( objectType, objectId );
 			entityHolds.set( entityKey, holds );
 			holds.onChange( () => notifyKey( entityKey ) );
-			holds.setRestResolver( ( holdId, resolution, content ) =>
+			holds.setRestResolver( ( holdId, resolution, content, seen ) =>
 				apiFetch( {
 					data: {
 						holdId,
 						resolution,
 						...( undefined !== content ? { content } : {} ),
+						...( undefined !== seen ? { current: seen } : {} ),
 						room: objectId
 							? `${ objectType }:${ objectId }`
 							: objectType,

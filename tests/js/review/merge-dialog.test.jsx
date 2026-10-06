@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { getBlockTypes, unregisterBlockType } from '@wordpress/blocks';
 import { registerCoreBlocks } from '@wordpress/block-library';
 import { MergeDialogBody } from '../../../src/review/components/merge-dialog';
-import { PARAGRAPH_CONFLICT, SECTION_CONFLICT } from './fixtures';
+import { PARAGRAPH_CONFLICT, SECTION_CONFLICT, paragraph } from './fixtures';
 
 // The panes and the merged result render real blocks, so the block types
 // must be registered.
@@ -132,6 +132,52 @@ describe( 'MergeDialogBody, one block', () => {
 		expect( mergedParagraphs()[ 0 ] ).toHaveTextContent(
 			'This is my paragraph.'
 		);
+	} );
+
+	it( 'the merged editor follows the current version each time it changes, until the reviewer edits it', async () => {
+		const user = userEvent.setup();
+		const onAccept = jest.fn();
+		const body = ( current ) => (
+			<MergeDialogBody
+				base={ conflict.base }
+				proposed={ conflict.proposed }
+				current={ current }
+				onAccept={ onAccept }
+				onCancel={ () => {} }
+			/>
+		);
+		const { rerender } = render( body( conflict.current ) );
+		await act( async () => {} );
+
+		// A collaborator edits the block while the dialog is open.
+		rerender(
+			body( paragraph( 'This is my paragraph, first peer edit.' ) )
+		);
+		await act( async () => {} );
+		expect( mergedParagraphs()[ 0 ] ).toHaveTextContent(
+			'first peer edit'
+		);
+		expect(
+			screen.getByText(
+				/The merged result now starts from the newer version/,
+				// A notice also announces its text to screen readers,
+				// in a second element.
+				{ selector: '.components-notice__content' }
+			)
+		).toBeVisible();
+
+		// Taking the new content in must not count as an edit by the
+		// reviewer: a second change is followed too.
+		rerender(
+			body( paragraph( 'This is my paragraph, second peer edit.' ) )
+		);
+		await act( async () => {} );
+		expect( mergedParagraphs()[ 0 ] ).toHaveTextContent(
+			'second peer edit'
+		);
+
+		await user.click( screen.getByRole( 'button', { name: 'Accept' } ) );
+		expect( onAccept.mock.calls[ 0 ][ 0 ] ).toContain( 'second peer edit' );
 	} );
 
 	it( 'Accept hands back the merged result as serialized blocks', async () => {
