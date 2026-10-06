@@ -172,9 +172,7 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 		const UPDATE_TYPE_HELD = 'held';
 
 		/**
-		 * Update type closing a security hold (accepted, dismissed,
-		 * superseded by a newer hold over the same block, or
-		 * block-removed when the block was taken out of the document).
+		 * Update type closing a security hold (see store_hold_closure()).
 		 * Server-emitted only.
 		 *
 		 * @since n.e.x.t
@@ -591,7 +589,7 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 			$before_doc  = self::rebuild_doc( $before_bytes, array() );
 			$before_list = self::materialize_blocks( $before_doc, $wrappers );
 			$before_set  = array_fill_keys( $before_list, true );
-			$before_ids  = self::top_level_block_ids( $before_doc );
+			$before_ids  = self::all_block_ids( $before_doc );
 			foreach ( $dirty as $index => $serialized ) {
 				if ( isset( $before_set[ $serialized ] ) ) {
 					unset( $dirty[ $index ] );
@@ -618,14 +616,7 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 			$holds           = array();
 			foreach ( $dirty as $index => $serialized ) {
 				$sanitized = wp_kses_post( $serialized );
-				$parsed    = array_values(
-					array_filter(
-						parse_blocks( $sanitized ),
-						static function ( $block ) {
-							return ! empty( $block['blockName'] ) || '' !== trim( (string) implode( '', $block['innerContent'] ?? array() ) );
-						}
-					)
-				);
+				$parsed    = self::parse_content_blocks( $sanitized );
 				// The id of the block the author wrote into. The sanitized
 				// form keeps it, so every open hold over this block, by
 				// this author or another, still names the block (see
@@ -723,15 +714,10 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 		 * not one per typing burst. The block is followed by its id, not
 		 * by its position (see is_hold_over_same_block()).
 		 *
-		 * The row: holdId, blockId (the block's id in the canonical
-		 * document, which the sanitized form keeps, null when nothing of
-		 * the block survived),
-		 * index, held (the block as the author wrote it), sanitized (the
-		 * block as the canonical document has it), base (the block before
-		 * the author's first held batch, '' for a new block), author,
-		 * authorClientId, at. A hold with no block also has afterId: the
-		 * id of the block that was before it ('' at the start of the
-		 * document), which is where an approval puts the markup back.
+		 * A hold whose block did not survive sanitizing (blockId null)
+		 * records afterId instead: the id of the block that was before it
+		 * ('' at the start of the document), which is where an approval
+		 * puts the markup back.
 		 *
 		 * @since n.e.x.t
 		 *
@@ -762,23 +748,9 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 				// The reviewer compares against what the block was before
 				// the author's FIRST held batch: carry that base over.
 				$hold['base'] = is_string( $open['base'] ?? null ) ? $open['base'] : $hold['base'];
-				// The row first, the ledger second, as in resolve_hold(): a
-				// hold whose closing row was not stored stays open beside
-				// the new one (the author's next batch supersedes it
-				// again), so no tab shows a card the server has forgotten.
-				$stored = $this->add_row(
-					$room,
-					self::GENESIS_CLIENT_ID,
-					self::UPDATE_TYPE_HELD_RESOLVED,
-					(string) wp_json_encode(
-						array(
-							'holdId'     => (string) $open_id,
-							'resolution' => 'superseded',
-							'time'       => time(),
-						)
-					)
-				);
-				if ( $stored ) {
+				// A hold whose closing row was not stored stays open beside
+				// the new one; the author's next batch supersedes it again.
+				if ( $this->store_hold_closure( $room, (string) $open_id, 'superseded' ) ) {
 					unset( $ledger[ $open_id ] );
 				}
 			}
@@ -849,21 +821,7 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 					continue;
 				}
 
-				// The row first, the ledger second, as in resolve_hold():
-				// a hold whose closing row was not stored stays open.
-				$stored = $this->add_row(
-					$room,
-					self::GENESIS_CLIENT_ID,
-					self::UPDATE_TYPE_HELD_RESOLVED,
-					(string) wp_json_encode(
-						array(
-							'holdId'     => (string) $hold_id,
-							'resolution' => 'block-removed',
-							'time'       => time(),
-						)
-					)
-				);
-				if ( $stored ) {
+				if ( $this->store_hold_closure( $room, (string) $hold_id, 'block-removed' ) ) {
 					unset( $ledger[ $hold_id ] );
 					$closed = true;
 				}
@@ -874,6 +832,42 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 				// phpcs:ignore WordPress.NamingConventions.ValidHookName.UseUnderscores, WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- Query Monitor's debug hook.
 				do_action( 'qm/debug', "wp-sync: yjs-server closed a hold whose block was removed from {$room}" );
 			}
+		}
+
+		/**
+		 * Stores the row that closes a security hold for every client.
+		 *
+		 * The row first, the ledger second, at every call site: the row is
+		 * what tells every client the hold is closed. If it cannot be
+		 * stored the ledger must still have the hold, or the server would
+		 * take the next decision as "already closed" and do nothing with
+		 * it. A caller forgets the hold only when this returns true.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param string $room       Room identifier.
+		 * @param string $hold_id    The hold.
+		 * @param string $resolution accepted, dismissed, superseded, or
+		 *                           block-removed.
+		 * @param array  $extra      More fields for the row (resolvedBy).
+		 * @return bool Whether the row was stored.
+		 */
+		private function store_hold_closure( string $room, string $hold_id, string $resolution, array $extra = array() ): bool {
+			return $this->add_row(
+				$room,
+				self::GENESIS_CLIENT_ID,
+				self::UPDATE_TYPE_HELD_RESOLVED,
+				(string) wp_json_encode(
+					array_merge(
+						array(
+							'holdId'     => $hold_id,
+							'resolution' => $resolution,
+						),
+						$extra,
+						array( 'time' => time() )
+					)
+				)
+			);
 		}
 
 		/**
@@ -919,10 +913,8 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 		 * changing anything.
 		 *
 		 * An approval replaces the sanitized block wholly, so it must not
-		 * land on a block the reviewer never saw. When the block no longer
-		 * reads the way the reviewer saw it (`$seen`), the answer is a 409
-		 * `review_stale`: nothing is written, the hold stays open, and it
-		 * is announced again with the block as it reads now.
+		 * land on a block the reviewer never saw (`$seen`; see
+		 * refuse_stale_hold()).
 		 *
 		 * @since n.e.x.t
 		 *
@@ -970,27 +962,7 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 				$disposition['applied'] = $applied;
 			}
 
-			/*
-			 * The closing row first, the ledger second. The row is what
-			 * tells every client the hold is closed. If it cannot be
-			 * stored, the caller gets an error and shows the hold again,
-			 * so the ledger must still have it: a hold the server forgot
-			 * would take the next decision as "already closed" and do
-			 * nothing with it.
-			 */
-			$stored = $this->add_row(
-				$room,
-				self::GENESIS_CLIENT_ID,
-				self::UPDATE_TYPE_HELD_RESOLVED,
-				(string) wp_json_encode(
-					array(
-						'holdId'     => $hold_id,
-						'resolution' => $resolution,
-						'resolvedBy' => get_current_user_id(),
-						'time'       => time(),
-					)
-				)
-			);
+			$stored = $this->store_hold_closure( $room, $hold_id, $resolution, array( 'resolvedBy' => get_current_user_id() ) );
 			if ( ! $stored ) {
 				return new WP_Error(
 					'rest_sync_storage_error',
@@ -1066,14 +1038,7 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 			}
 			$parsed = array();
 			if ( '' !== trim( $content ) ) {
-				$parsed = array_values(
-					array_filter(
-						parse_blocks( $content ),
-						static function ( $block ) {
-							return ! empty( $block['blockName'] ) || '' !== trim( (string) implode( '', $block['innerContent'] ?? array() ) );
-						}
-					)
-				);
+				$parsed = self::parse_content_blocks( $content );
 			}
 			// The first block of the content takes the place of the held
 			// block and keeps its id, so another author's open hold over
@@ -1343,29 +1308,23 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 		}
 
 		/**
-		 * The ids of a document's top-level blocks, as array keys.
+		 * Serialized content as parsed blocks, without the empty freeform
+		 * blocks the parser makes of the whitespace between blocks.
 		 *
 		 * @since n.e.x.t
 		 *
-		 * @param \Yjs\Utils\Doc $doc The document.
-		 * @return array<string, true> Block id => true.
+		 * @param string $content Serialized blocks.
+		 * @return array Parsed blocks (parse_blocks shape).
 		 */
-		private static function top_level_block_ids( \Yjs\Utils\Doc $doc ): array {
-			$blocks = $doc->getMap( 'document' )->get( 'blocks' );
-			if ( ! ( $blocks instanceof \Yjs\Types\YArray ) ) {
-				return array();
-			}
-
-			$ids    = array();
-			$length = $blocks->length;
-			for ( $i = 0; $i < $length; $i++ ) {
-				$block = $blocks->get( $i );
-				if ( $block instanceof \Yjs\Types\YMap && is_string( $block->get( 'clientId' ) ) ) {
-					$ids[ $block->get( 'clientId' ) ] = true;
-				}
-			}
-
-			return $ids;
+		private static function parse_content_blocks( string $content ): array {
+			return array_values(
+				array_filter(
+					parse_blocks( $content ),
+					static function ( $block ) {
+						return ! empty( $block['blockName'] ) || '' !== trim( (string) implode( '', $block['innerContent'] ?? array() ) );
+					}
+				)
+			);
 		}
 
 		/**

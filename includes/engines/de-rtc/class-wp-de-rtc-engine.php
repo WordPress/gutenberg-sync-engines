@@ -1216,23 +1216,15 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 			// The new row first, then the closures: a client that reads
 			// them in order never sees the block without a record.
 			foreach ( $replaced as $replaced_id ) {
-				$closed = $this->add_row(
+				$this->apply_resolution(
 					$room,
+					array(
+						'proposalId' => $replaced_id,
+						'resolution' => 'superseded',
+					),
 					$client_id,
-					self::UPDATE_TYPE_RESOLVED,
-					wp_json_encode(
-						array(
-							'proposalId'   => $replaced_id,
-							'resolution'   => 'superseded',
-							'supersededBy' => $parked_id,
-							'resolvedBy'   => get_current_user_id(),
-							'time'         => time(),
-						)
-					)
+					$review
 				);
-				if ( $closed ) {
-					$review['resolved'][ $replaced_id ] = true;
-				}
 			}
 		}
 
@@ -1582,8 +1574,8 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 		 * Applies one proposal resolution against the room's review ledger:
 		 * an OPEN, un-resolved proposal gets a stamped `resolved` row (the
 		 * broadcastable advisory peers and late joiners replay); anything
-		 * else acks idempotently. Reached only through resolve_proposal()
-		 * (the REST review lane).
+		 * else acks idempotently. Reached through resolve_proposal() (the
+		 * REST review lane) and, for `superseded`, park_changed_blocks().
 		 *
 		 * @since 0.3.0
 		 *
@@ -2080,19 +2072,18 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 		}
 
 		/**
-		 * A parked span as some content has it, located the way
-		 * replace_parked_span() locates it: the parked blocks by identity
-		 * when every one carries a syncId (a block the content does not
-		 * hold reads as empty), else the covering top-level index run.
-		 * On freeform boundaries the span is the whole content.
+		 * How a parked row's blocks are found in some content: their
+		 * syncIds, their top-level indexes, and whether to go by identity
+		 * (every block carries a syncId) rather than by the covering index
+		 * run. parked_span_form() and replace_parked_span() must agree on
+		 * this, since a stale check reads the span the write replaces.
 		 *
 		 * @since n.e.x.t
 		 *
-		 * @param string $content        Serialized content.
-		 * @param array  $changed_blocks The parked row's changed blocks.
-		 * @return string The span's serialized form.
+		 * @param array $changed_blocks The parked row's changed blocks.
+		 * @return array{0: string[], 1: int[], 2: bool} ids, indexes, by identity.
 		 */
-		private static function parked_span_form( string $content, array $changed_blocks ): string {
+		private static function parked_block_locators( array $changed_blocks ): array {
 			$ids     = array();
 			$indexes = array();
 			foreach ( $changed_blocks as $block ) {
@@ -2107,7 +2098,24 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 				}
 			}
 
-			if ( array() !== $ids && count( $ids ) === count( $changed_blocks ) ) {
+			return array( $ids, $indexes, array() !== $ids && count( $ids ) === count( $changed_blocks ) );
+		}
+
+		/**
+		 * A parked span as some content has it (see parked_block_locators()):
+		 * by identity, a block the content does not hold reads as empty;
+		 * on freeform boundaries the span is the whole content.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param string $content        Serialized content.
+		 * @param array  $changed_blocks The parked row's changed blocks.
+		 * @return string The span's serialized form.
+		 */
+		private static function parked_span_form( string $content, array $changed_blocks ): string {
+			list( $ids, $indexes, $by_identity ) = self::parked_block_locators( $changed_blocks );
+
+			if ( $by_identity ) {
 				$by_id = array();
 				self::index_serialized_blocks_by_id( parse_blocks( $content ), $by_id );
 				$forms = array();
@@ -2150,23 +2158,11 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 		 *                     cannot be located.
 		 */
 		private function replace_parked_span( string $current, array $changed_blocks, string $replacement ): ?string {
-			$ids     = array();
-			$indexes = array();
-			foreach ( $changed_blocks as $block ) {
-				if ( ! is_array( $block ) ) {
-					continue;
-				}
-				if ( is_string( $block['syncId'] ?? null ) && '' !== $block['syncId'] ) {
-					$ids[] = $block['syncId'];
-				}
-				if ( isset( $block['index'] ) ) {
-					$indexes[] = (int) $block['index'];
-				}
-			}
+			list( $ids, $indexes, $by_identity ) = self::parked_block_locators( $changed_blocks );
 
 			$records = wp_de_rtc_get_top_level_serialized_block_records( $current );
 
-			if ( array() !== $ids && count( $ids ) === count( $changed_blocks ) ) {
+			if ( $by_identity ) {
 				$by_identity = self::replace_blocks_by_id( $current, $ids, $replacement );
 				if ( null !== $by_identity ) {
 					return $by_identity;
