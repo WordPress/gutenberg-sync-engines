@@ -59,15 +59,18 @@ if ( ! class_exists( 'WP_Yjs_Server_Review_Controller' ) ) {
 		}
 
 		/**
-		 * Whether the user may decide holds at all. Accepting one needs
-		 * the unfiltered_html capability on top; the engine enforces it.
+		 * Whether the user may decide holds in this room at all: they must
+		 * be able to edit the post the room belongs to, as the sync
+		 * transports require. Accepting a hold needs the unfiltered_html
+		 * capability on top; the engine enforces it.
 		 *
 		 * @since n.e.x.t
 		 *
-		 * @return bool Whether the request may proceed.
+		 * @param WP_REST_Request $request The request.
+		 * @return true|WP_Error True when the request may proceed.
 		 */
-		public function check_permissions(): bool {
-			return current_user_can( 'edit_posts' );
+		public function check_permissions( WP_REST_Request $request ) {
+			return WP_Sync_Review_Permissions::check_room( (string) $request['room'] );
 		}
 
 		/**

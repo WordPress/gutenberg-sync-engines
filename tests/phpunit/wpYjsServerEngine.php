@@ -32,10 +32,18 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 	 */
 	protected static $author_id;
 
+	/**
+	 * Contributor user ID (can edit_posts, but only their own posts).
+	 *
+	 * @var int
+	 */
+	protected static $contributor_id;
+
 	public static function wpSetUpBeforeClass( WP_UnitTest_Factory $factory ) {
-		self::$editor_id = $factory->user->create( array( 'role' => 'editor' ) );
-		self::$author_id = $factory->user->create( array( 'role' => 'author' ) );
-		self::$post_id   = $factory->post->create(
+		self::$editor_id      = $factory->user->create( array( 'role' => 'editor' ) );
+		self::$author_id      = $factory->user->create( array( 'role' => 'author' ) );
+		self::$contributor_id = $factory->user->create( array( 'role' => 'contributor' ) );
+		self::$post_id        = $factory->post->create(
 			array(
 				'post_author'  => self::$editor_id,
 				'post_title'   => 'Yjs server test post',
@@ -47,6 +55,7 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 	public static function wpTearDownAfterClass() {
 		self::delete_user( self::$editor_id );
 		self::delete_user( self::$author_id );
+		self::delete_user( self::$contributor_id );
 		wp_delete_post( self::$post_id, true );
 	}
 
@@ -1529,18 +1538,38 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 		$this->assertSame( array(), $this->engine()->get_open_holds( $this->room() ) );
 	}
 
+	/**
+	 * Dispatches a resolve POST as the client's REST review lane does.
+	 *
+	 * @param array $params Request body params.
+	 * @return WP_REST_Response Response.
+	 */
+	private function dispatch_resolve( array $params ): WP_REST_Response {
+		$request = new WP_REST_Request( 'POST', '/wp-sync/v1/yjs-server/resolve' );
+		$request->set_body_params( $params );
+		return rest_get_server()->dispatch( $request );
+	}
+
+	/**
+	 * Makes the filtered author the owner of the test post, so they may
+	 * edit it (an Author can only edit their own posts). The test's
+	 * transaction rolls the change back.
+	 *
+	 * @return void
+	 */
+	private function give_the_post_to_the_author(): void {
+		global $wpdb;
+		$wpdb->update( $wpdb->posts, array( 'post_author' => self::$author_id ), array( 'ID' => self::$post_id ) );
+		clean_post_cache( self::$post_id );
+	}
+
 	public function test_hold_decisions_travel_over_the_rest_review_lane() {
+		$this->give_the_post_to_the_author();
 		$hold = $this->raise_hold();
 		$this->assertArrayHasKey( '/wp-sync/v1/yjs-server/resolve', rest_get_server()->get_routes() );
 
-		$dispatch = function ( array $params ) {
-			$request = new WP_REST_Request( 'POST', '/wp-sync/v1/yjs-server/resolve' );
-			$request->set_body_params( $params );
-			return rest_get_server()->dispatch( $request );
-		};
-
-		// The filtered author cannot approve.
-		$forbidden = $dispatch(
+		// The filtered author may edit the post, but cannot approve.
+		$forbidden = $this->dispatch_resolve(
 			array(
 				'room'       => $this->room(),
 				'holdId'     => $hold['holdId'],
@@ -1548,9 +1577,10 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 			)
 		);
 		$this->assertSame( 403, $forbidden->get_status() );
+		$this->assertSame( 'rest_sync_forbidden', $forbidden->get_data()['code'] );
 
 		wp_set_current_user( self::$editor_id );
-		$accepted = $dispatch(
+		$accepted = $this->dispatch_resolve(
 			array(
 				'room'       => $this->room(),
 				'holdId'     => $hold['holdId'],
@@ -1561,6 +1591,41 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 		$this->assertSame( 200, $accepted->get_status() );
 		$this->assertSame( 'resolved', $accepted->get_data()['disposition']['status'] );
 		$this->assertStringContainsString( '<script>alert(1)</script>', (string) $this->engine()->materialize( $this->room() ) );
+	}
+
+	public function test_the_review_lane_refuses_a_user_who_cannot_edit_the_rooms_post() {
+		$hold   = $this->raise_hold();
+		$before = (string) $this->engine()->materialize( $this->room() );
+
+		// A Contributor has edit_posts, but not edit_post on the Editor's post.
+		wp_set_current_user( self::$contributor_id );
+		foreach ( array( 'dismissed', 'accepted' ) as $resolution ) {
+			$response = $this->dispatch_resolve(
+				array(
+					'room'       => $this->room(),
+					'holdId'     => $hold['holdId'],
+					'resolution' => $resolution,
+					'content'    => $hold['held'],
+				)
+			);
+			$this->assertSame( 403, $response->get_status(), $resolution );
+			$this->assertSame( 'rest_cannot_edit', $response->get_data()['code'], $resolution );
+		}
+
+		// The hold is still open and the block is unchanged.
+		$this->assertCount( 1, $this->engine()->get_open_holds( $this->room() ) );
+		$this->assertSame( $before, (string) $this->engine()->materialize( $this->room() ) );
+
+		// A room name that does not parse is a bad request.
+		wp_set_current_user( self::$editor_id );
+		$unparseable = $this->dispatch_resolve(
+			array(
+				'room'       => 'not-a-room',
+				'holdId'     => $hold['holdId'],
+				'resolution' => 'dismissed',
+			)
+		);
+		$this->assertSame( 400, $unparseable->get_status() );
 	}
 
 	public function test_kses_lane_leaves_untouched_privileged_blocks_alone() {

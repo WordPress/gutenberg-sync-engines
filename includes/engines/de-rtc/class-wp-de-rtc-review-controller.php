@@ -60,14 +60,18 @@ if ( ! class_exists( 'WP_De_RTC_Review_Controller' ) ) {
 		}
 
 		/**
-		 * Mirrors the sync transports' capability gate.
+		 * Mirrors the sync transports' gate: the user must be able to edit
+		 * the post the room belongs to, not just posts in general. An
+		 * accepted resolution writes content into that post's room.
 		 *
 		 * @since 0.3.0
+		 * @since n.e.x.t Checks the room's post, as the transports do.
 		 *
-		 * @return bool Whether the current user may resolve review items.
+		 * @param WP_REST_Request $request Request.
+		 * @return true|WP_Error True when the current user may resolve review items in the room.
 		 */
-		public function check_permissions(): bool {
-			return current_user_can( 'edit_posts' );
+		public function check_permissions( WP_REST_Request $request ) {
+			return WP_Sync_Review_Permissions::check_room( (string) $request['room'] );
 		}
 
 		/**

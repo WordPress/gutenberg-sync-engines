@@ -24,6 +24,13 @@ class Tests_Collaboration_WpDeRtcReviewController extends WP_UnitTestCase {
 	protected static $subscriber_id;
 
 	/**
+	 * Contributor user ID (can edit_posts, but only their own posts).
+	 *
+	 * @var int
+	 */
+	protected static $contributor_id;
+
+	/**
 	 * Post ID used for room targets.
 	 *
 	 * @var int
@@ -33,11 +40,13 @@ class Tests_Collaboration_WpDeRtcReviewController extends WP_UnitTestCase {
 	const GENESIS_CONTENT = "<!-- wp:paragraph -->\n<p>Alpha block original text.</p>\n<!-- /wp:paragraph -->\n\n<!-- wp:paragraph -->\n<p>Beta block original text.</p>\n<!-- /wp:paragraph -->";
 
 	public static function wpSetUpBeforeClass( WP_UnitTest_Factory $factory ) {
-		self::$editor_id     = $factory->user->create( array( 'role' => 'editor' ) );
-		self::$subscriber_id = $factory->user->create( array( 'role' => 'subscriber' ) );
-		self::$post_id       = $factory->post->create(
+		self::$editor_id      = $factory->user->create( array( 'role' => 'editor' ) );
+		self::$subscriber_id  = $factory->user->create( array( 'role' => 'subscriber' ) );
+		self::$contributor_id = $factory->user->create( array( 'role' => 'contributor' ) );
+		self::$post_id        = $factory->post->create(
 			array(
 				'post_author'  => self::$editor_id,
+				'post_status'  => 'draft',
 				'post_title'   => 'DE-RTC review controller test post',
 				'post_content' => self::GENESIS_CONTENT,
 			)
@@ -47,6 +56,7 @@ class Tests_Collaboration_WpDeRtcReviewController extends WP_UnitTestCase {
 	public static function wpTearDownAfterClass() {
 		self::delete_user( self::$editor_id );
 		self::delete_user( self::$subscriber_id );
+		self::delete_user( self::$contributor_id );
 		wp_delete_post( self::$post_id, true );
 	}
 
@@ -268,6 +278,88 @@ class Tests_Collaboration_WpDeRtcReviewController extends WP_UnitTestCase {
 		$this->assertSame( 403, $response->get_status() );
 	}
 
+	public function test_a_contributor_cannot_decide_a_record_on_a_post_they_cannot_edit() {
+		$this->escalate_conflict();
+		$before = $this->engine()->materialize( $this->room() );
+
+		// A Contributor has edit_posts, but not edit_post on the Editor's draft.
+		wp_set_current_user( self::$contributor_id );
+		$dismissed = $this->dispatch_resolve(
+			array(
+				'room'       => $this->room(),
+				'proposalId' => 'p-b',
+				'resolution' => 'dismissed',
+				'client_id'  => 2,
+			)
+		);
+		$this->assertSame( 403, $dismissed->get_status() );
+		$this->assertSame( 'rest_cannot_edit', $dismissed->get_data()['code'] );
+
+		$accepted = $this->dispatch_resolve(
+			array(
+				'room'       => $this->room(),
+				'proposalId' => 'p-b',
+				'resolution' => 'accepted',
+				'client_id'  => 2,
+				'content'    => "<!-- wp:paragraph -->\n<p>Alpha block WRITTEN BY A CONTRIBUTOR.</p>\n<!-- /wp:paragraph -->",
+			)
+		);
+		$this->assertSame( 403, $accepted->get_status() );
+		$this->assertSame( 'rest_cannot_edit', $accepted->get_data()['code'] );
+
+		// Nothing was written and the record is still open.
+		wp_set_current_user( self::$editor_id );
+		$this->assertSame( $before, $this->engine()->materialize( $this->room() ) );
+		$room_read = $this->engine()->get_updates_since( $this->room(), 3, 0, array() );
+		$this->assertCount( 0, $this->rows_of_type( $room_read, WP_De_RTC_Engine::UPDATE_TYPE_RESOLVED ) );
+	}
+
+	public function test_a_contributor_can_decide_a_record_on_their_own_draft() {
+		$draft_id = self::factory()->post->create(
+			array(
+				'post_author'  => self::$contributor_id,
+				'post_status'  => 'draft',
+				'post_content' => self::GENESIS_CONTENT,
+			)
+		);
+		$room     = 'postType/post:' . $draft_id;
+		$this->engine()->get_updates_since( $room, 1, 0, array() );
+
+		wp_set_current_user( self::$contributor_id );
+		$response = $this->dispatch_resolve(
+			array(
+				'room'       => $room,
+				'proposalId' => 'p-never-parked',
+				'resolution' => 'dismissed',
+			)
+		);
+		$this->assertSame( 200, $response->get_status() );
+		$this->assertSame( 'resolved', $response->get_data()['disposition']['status'] );
+	}
+
+	public function test_rejects_a_room_name_that_does_not_parse() {
+		$response = $this->dispatch_resolve(
+			array(
+				'room'       => 'not-a-room',
+				'proposalId' => 'p-b',
+				'resolution' => 'dismissed',
+			)
+		);
+		$this->assertSame( 400, $response->get_status() );
+		$this->assertSame( 'rest_invalid_param', $response->get_data()['code'] );
+	}
+
+	public function test_rejects_a_room_that_names_the_post_under_another_type() {
+		$response = $this->dispatch_resolve(
+			array(
+				'room'       => 'postType/page:' . self::$post_id,
+				'proposalId' => 'p-b',
+				'resolution' => 'dismissed',
+			)
+		);
+		$this->assertSame( 403, $response->get_status() );
+	}
+
 	public function test_rejects_an_unknown_resolution_value() {
 		$response = $this->dispatch_resolve(
 			array(
@@ -280,7 +372,8 @@ class Tests_Collaboration_WpDeRtcReviewController extends WP_UnitTestCase {
 	}
 
 	public function test_fences_rooms_with_another_engine_lineage() {
-		$room    = 'postType/post:' . self::$post_id . ':foreign';
+		// A second post: the route only serves rooms of posts the user can edit.
+		$room    = 'postType/post:' . self::factory()->post->create( array( 'post_author' => self::$editor_id ) );
 		$storage = new WP_Sync_Table_Storage();
 		$this->assertTrue( $storage->set_room_engine( $room, 'intent-log' ) );
 
