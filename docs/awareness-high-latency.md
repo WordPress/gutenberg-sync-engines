@@ -109,10 +109,12 @@ framework's own cursor layer is on the page.
 
 ## Known limitations
 
-- The Heartbeat channel's presence records live in short-term storage
-  and are not protected against two people saving at the same instant.
-  When that happens, one person's entry can overwrite the other's for
-  one beat.
+- When the Presence API is not recording, the Heartbeat channel's
+  presence records live in short-term storage and are not protected
+  against two people saving at the same instant. When that happens, one
+  person's entry can overwrite the other's for one beat. With the
+  Presence API (the default), each tab has its own record and this
+  cannot happen.
 - Under the Heartbeat channel, a peer whose tab crashed (no leave notice
   reached the server) can stay marked until their presence record
   expires, up to five minutes.
