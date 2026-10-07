@@ -62,4 +62,21 @@ if ( isset( $_GET['_rtcdbio'] ) ) {
 	exit;
 }
 
+
+// Clock probe bypasses capture and works while the plugin is deactivated.
+// The caller brackets this timestamp with its own send/receive times.
+// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Diagnostics-only clock calibration.
+if ( isset( $_GET['_rtcclock'] ) ) {
+	header( 'Content-Type: application/json' );
+	header( 'Cache-Control: no-store' );
+	echo wp_json_encode(
+		array(
+			'at_ms'            => microtime( true ) * 1000,
+			'clock_id'         => Gutenberg_Sync_Engines_Request_Log::clock_id(),
+			'timeline_version' => 1,
+		)
+	);
+	exit;
+}
+
 ( new Gutenberg_Sync_Engines_Request_Log() )->capture_whole_request();
