@@ -99,6 +99,39 @@ describe( 'intent-log bridge', () => {
 			expect( typeof spec.syncId ).toBe( 'string' );
 			expect( ( spec.syncId as string ).length ).toBeGreaterThan( 8 );
 		} );
+
+		it( 'serializes rich-text values nested inside array and object attributes', () => {
+			// A table keeps its cells as body[].cells[].content, each a
+			// rich-text value after a parse. The engine document holds
+			// plain JSON only.
+			const spec = blockToEngineSpec(
+				{
+					name: 'core/table',
+					attributes: {
+						metadata: { syncId: 't1' },
+						body: [
+							{
+								cells: [
+									{
+										content: { toHTMLString: () => 'A' },
+										tag: 'td',
+									},
+								],
+							},
+						],
+						caption: { toHTMLString: () => 'Cap' },
+					},
+					innerBlocks: [],
+				},
+				() => [ 'caption' ]
+			);
+			expect( spec.attrs ).toEqual( {
+				body: [ { cells: [ { content: 'A', tag: 'td' } ] } ],
+			} );
+			expect( spec.fields ).toEqual( {
+				caption: { text: 'Cap', formats: [] },
+			} );
+		} );
 	} );
 
 	describe( 'deriveIntents', () => {
@@ -708,5 +741,122 @@ describe( 'rich-text coordinate capture', () => {
 		)!;
 		const types = derived.intents.map( ( intent ) => intent.type );
 		expect( types ).toEqual( [ 'set_attr' ] );
+	} );
+} );
+
+describe( 'table capture (nested rich-text attributes)', () => {
+	/**
+	 * The shape of the editor's rich-text value (RichTextData): the HTML
+	 * lives in a private field, so a plain key copy yields `{}`, while
+	 * JSON serialization yields the HTML string.
+	 */
+	class RichTextLike {
+		#html: string;
+		constructor( html: string ) {
+			this.#html = html;
+		}
+		toHTMLString(): string {
+			return this.#html;
+		}
+		toJSON(): string {
+			return this.#html;
+		}
+	}
+	type Cell = { content: string | RichTextLike; tag: string };
+	type Row = { cells: Cell[] };
+	const html = ( value: string | RichTextLike ): string =>
+		'string' === typeof value ? value : value.toHTMLString();
+	// A table's rich-text attribute is its caption; the cells live inside
+	// the body rows, which the resolver cannot name.
+	const resolver = ( name: string ): string[] =>
+		'core/table' === name ? [ 'caption' ] : [ 'content' ];
+	const save = ( block: BridgeBlock ): string | null => {
+		if ( 'core/table' !== block.name ) {
+			return null;
+		}
+		const rows = ( block.attributes.body as Row[] )
+			.map(
+				( row ) =>
+					`<tr>${ row.cells
+						.map(
+							( cell ) =>
+								`<${ cell.tag }>${ html( cell.content ) }</${
+									cell.tag
+								}>`
+						)
+						.join( '' ) }</tr>`
+			)
+			.join( '' );
+		return `<figure class="wp-block-table"><table><tbody>${ rows }</tbody></table></figure>`;
+	};
+	const table = (
+		cells: ( string | RichTextLike )[][],
+		caption: string | RichTextLike = ''
+	): BridgeBlock => ( {
+		name: 'core/table',
+		attributes: {
+			metadata: { syncId: 't1' },
+			caption,
+			body: cells.map( ( row ) => ( {
+				cells: row.map( ( content ) => ( { content, tag: 'td' } ) ),
+			} ) ),
+		},
+		innerBlocks: [],
+	} );
+
+	it( 'derives a cell change from a parsed table (the accepted merge of a table conflict)', () => {
+		// The document as the session holds it: plain JSON, as it came
+		// over the wire.
+		const doc: EngineDocument = JSON.parse(
+			JSON.stringify(
+				createDocument( [
+					blockToEngineSpec(
+						table( [
+							[ 'a', 'b' ],
+							[ '', '' ],
+						] ),
+						resolver,
+						undefined,
+						undefined,
+						undefined,
+						save
+					),
+				] )
+			)
+		);
+		// The accepted merge arrives parsed from serialized blocks, so
+		// every cell's content is a rich-text object.
+		const rt = ( text: string ) => new RichTextLike( text );
+		const target = table(
+			[
+				[ rt( 'a' ), rt( 'b' ) ],
+				[ rt( 'A' ), rt( 'B' ) ],
+			],
+			rt( '' )
+		);
+		const derived = deriveIntents( doc, [ target ], {
+			richTextFields: resolver,
+			saveMarkup: save,
+		} );
+		expect( derived ).not.toBeNull();
+		expect( derived!.coarseBlockCount ).toBe( 0 );
+		const body = derived!.intents.find(
+			( intent ) =>
+				'set_attr' === intent.type && 'body' === intent.payload.key
+		);
+		expect( body?.payload.value ).toEqual( [
+			{
+				cells: [
+					{ content: 'a', tag: 'td' },
+					{ content: 'b', tag: 'td' },
+				],
+			},
+			{
+				cells: [
+					{ content: 'A', tag: 'td' },
+					{ content: 'B', tag: 'td' },
+				],
+			},
+		] );
 	} );
 } );
