@@ -169,6 +169,10 @@ npm run test:e2e          # Playwright — two-browser collaboration against the
 
 ### Benchmarks and tools
 
+- [Host and session-size benchmark](tests/benchmarks/README.md)—run
+  `npm run bench -- --peers=5 --p95-ms=2000` to measure server costs and
+  edit delivery with a chosen number of peers. Checks for missing edits
+  and reports whether delivery meets your delay limit.
 - `tests/benchmarks/` — a server-side engine benchmark harness: it drives any
   registered engine through the production ingest/read seam and reports
   service-time percentiles, payload and storage growth, and (for intent-log)
