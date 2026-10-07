@@ -1389,6 +1389,27 @@ describe( 'crdt-blocks', () => {
 				'<div class="b">One</div>'
 			);
 		} );
+
+		it( 'keeps the saved HTML of a container when a block inside it changes', () => {
+			const container = ( text: string ): Block => ( {
+				name,
+				attributes: { className: 'group' },
+				innerBlocks: [
+					{
+						name: 'core/paragraph',
+						attributes: { content: text },
+						innerBlocks: [],
+					},
+				],
+			} );
+
+			mergeCrdtBlocks( yblocks, [ container( 'One' ) ], null );
+			mergeCrdtBlocks( yblocks, [ container( 'Two' ) ], null );
+
+			expect( yblocks.get( 0 ).get( CRDT_BLOCK_SAVE_KEY ) ).toBe(
+				'<div class="group"></div>'
+			);
+		} );
 	} );
 
 	describe( 'table block', () => {
