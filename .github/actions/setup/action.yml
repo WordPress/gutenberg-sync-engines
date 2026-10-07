@@ -1,8 +1,5 @@
 name: Set up the plugin and the built Gutenberg copy
-description: >
-  Installs the plugin's npm dependencies and the built Gutenberg subtree,
-  restoring each from the cache when nothing it depends on has changed.
-  Optionally installs the Playwright browser the same way.
+description: Restores or installs npm dependencies, the Gutenberg build, and optionally Chromium.
 
 inputs:
   playwright:
@@ -16,8 +13,7 @@ runs:
       with:
         node-version-file: .nvmrc
 
-    # The whole node_modules folder, not npm's download cache: a hit skips
-    # `npm ci` entirely.
+    # A hit skips `npm ci`.
     - name: Restore plugin dependencies
       id: plugin-deps
       uses: actions/cache@v4
@@ -30,11 +26,8 @@ runs:
       shell: bash
       run: npm ci
 
-    # The subtree's git tree ID changes exactly when its source does, so it
-    # keys the build outputs. Only the built files are cached, not the
-    # subtree's node_modules: PHP and the browser need nothing else, and
-    # without that folder the e2e fixtures resolve @playwright/test and
-    # @wordpress/e2e-test-utils-playwright from the plugin's own copies.
+    # Built files only. Without the subtree's node_modules, the e2e
+    # fixtures load Playwright from the plugin's node_modules.
     - name: Read the Gutenberg subtree's tree ID
       id: subtree
       shell: bash
@@ -51,8 +44,7 @@ runs:
           gutenberg/packages/*/build-style
         key: gutenberg-build-${{ runner.os }}-${{ hashFiles('.nvmrc') }}-${{ steps.subtree.outputs.tree }}
 
-    # --ignore-scripts skips the subtree's husky prepare hook (it errors
-    # outside a git root); `npm run build` regenerates what it also skips.
+    # --ignore-scripts skips a husky hook that fails outside a git root.
     - name: Install and build the vendored Gutenberg subtree
       if: steps.subtree-build.outputs.cache-hit != 'true'
       shell: bash
@@ -75,9 +67,8 @@ runs:
         path: ~/.cache/ms-playwright
         key: playwright-chromium-${{ runner.os }}-${{ steps.playwright.outputs.version }}
 
-    # No --with-deps: the runner image already has the libraries Chromium
-    # needs, and the apt step that flag adds (mostly fonts) once took ten
-    # minutes on a slow mirror.
+    # No --with-deps: the runner already has Chromium's libraries, and
+    # that flag's apt step once took ten minutes.
     - name: Install Playwright browser
       if: inputs.playwright == 'true' && steps.playwright-browser.outputs.cache-hit != 'true'
       shell: bash
