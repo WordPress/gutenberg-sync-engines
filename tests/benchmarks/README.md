@@ -1,5 +1,55 @@
 # Benchmarks
 
+The host report includes session-size measurements. Set the total peer count:
+
+```bash
+WP_BASE_URL=http://localhost:8889 npm run bench -- --peers=5 --p95-ms=2000 \
+  --json=bench-results/host-5.json
+```
+
+`--peers=N` takes one positive integer (default 2). `--windows=N` remains an
+alias. Each peer writes its own paragraph. Each has a separate browser
+connection pool, so large runs do not share one browser's HTTP connection
+limit. All browsers run on one machine and share its clock and CPU. The benchmark overrides the normal five-peer join limit only in its
+own browsers; the site's limit stays unchanged.
+
+The same run reports server costs and edit delivery times (p50, p95, p99).
+Delivery time starts at the browser's input event and ends when the marker
+first appears in another editor's data. It includes time spent waiting to
+send, server work, and remote processing; it does not measure screen paint.
+Each edit-to-other-peer pair is one sample. Missing or invalid samples are
+counted separately and always fail the run. One peer has no remote delivery
+samples, so its delay columns show a dash.
+
+`--p95-ms=2000` fails the run when p95 exceeds two seconds. Without this
+option, delays are reported without a pass limit. `--max-lag-ms=1000` sets
+the largest allowed delay in issuing a scheduled input (default one second).
+A slow test browser must not make an overloaded run appear successful by
+typing less often. The report also checks the complete final document and
+counts missing markers, duplicates, and edits that appeared then vanished.
+A content failure during collaboration suppresses the cost comparison and saves the delivery
+evidence to `--json`, when supplied. A delivery or typing-delay failure
+retains the cost report and exits with a nonzero status.
+
+To compare sizes and repeat runs, run the same command for each count:
+
+```bash
+for peers in 2 4 5 8 16; do
+  for repeat in 1 2 3; do
+    WP_BASE_URL=http://localhost:8889 npm run bench -- --peers="$peers" \
+      --p95-ms=2000 --json="bench-results/host-${peers}-${repeat}.json"
+  done
+done
+```
+
+Each run includes a serial baseline, so larger counts take longer. Keep the
+engine, transport, durations, polling setting, and host unchanged when
+comparing results. The initial document has one paragraph per peer, so its
+size also grows with the count. These measurements do not establish a
+production capacity guarantee. The JSON records advisory-channel state
+before and after editing; an exceeded WebRTC peer limit causes timer-based
+polling and is also noted in the printed report.
+
 One command runs everything here:
 
 ```bash
@@ -58,21 +108,96 @@ and WebSocket frames have separate rows. Socket payload bytes include
 advisory messages, but only content-sync frames establish that the content
 transport is WebSocket.
 
-Server totals are **unavailable**, not zero, when the baseline was not
-measured, an SSE stream was used, or a WebSocket was used (including an
-advisory socket). SSE shutdown logs cannot divide a request's CPU, queries,
-or occupied worker time between phases; persistent socket servers run
-outside those logs. Raw request rows are retained for inspection, but the
-report suppresses server comparisons, whole-job CPU totals, and capacity
-estimates in these cases. Database I/O counters remain separate server-
-global measurements; they are not attributed request-log costs. They also
-include the measurement logger's own database writes. Use an isolated
-database and keep the same measurement setup in both phases.
+The host suite finds this checkout’s running wp-env test site automatically.
+`WP_BASE_URL` overrides that choice for another site. The runner prints the
+target URL and checks measurement support before login or site changes. If
+the test site is stopped, run `npm run env:tests start`. It never falls back
+to a shared localhost port.
 
-The JSON report (`schemaVersion: 2`) records content verification, coverage
-limits, delivery choice, and polling setting alongside the raw data. Compare
-runs only across identical environments. The report measures ONE engine per
-run (`engine=`); comparing engines is the engines suite's job.
+Server measurements use request timelines, including streams opened during
+setup that remain active during editing or idle. Each tagged PHP request
+gets an ID, cumulative CPU and query samples, and a final shutdown record.
+The SSE loop samples before and after each wait and when the stream ends.
+Sampling makes no database calls and sends no extra stream frames. Timelines
+are kept in memory and written with the existing shutdown log row.
+
+**Ranges describe measurement uncertainty, not statistical confidence.**
+Occupied PHP worker time is the overlap between each request's lifetime and
+the measurement period. CPU and query work entirely inside a period is
+counted exactly. Work between two samples that straddle a boundary is
+included only in the upper bound. It is never divided in proportion to time:
+a 40 ms CPU burst across a boundary contributes 0–40 ms, not an assumed 20 ms.
+Clock-calibration uncertainty also widens the bounds. Difference columns use
+the full bounds of both runs; percentage changes are omitted for ranges.
+
+The runner calibrates the PHP clock before and after each session using a
+probe that works with the plugin deactivated. It bounds the clock offset by
+the probe's send and receive times; it does not assume equal network delays.
+The same server must handle the probes and measured requests. Requests with
+clock jumps, counters that move backwards, missing shutdown records, or
+samples that disagree with whole-request totals make server results
+unavailable. After closing the editor windows, collection waits up to 20
+seconds for shutdown records. This includes disconnected streams that hold
+a worker until PHP notices the disconnect. A killed worker that cannot log
+its final counters does not silently count as zero cost.
+
+These samples still have a cost: CPU includes sampling overhead, and PHP
+memory includes the bounded sample buffer (at most 4,096 checkpoints plus
+the final sample per request). A capped trace keeps its final counters and
+produces wider bounds for its remaining duration. The memory row is the
+peak of requests that overlap the period, not a per-period allocation.
+CPU and query capture stops before log preparation and insertion; worker
+time stops at the logger's shutdown callback. The whole-request rows and
+samples remain in the JSON for independent inspection.
+
+WebSocket processes run outside the request logger. To measure the supplied
+PHP daemon or the example Node advisory relay, start each selected process
+with `GSE_BENCH_METRICS=1`. This explicitly enables a read-only
+`GET /bench-metrics` endpoint on its existing listening port. Leave the flag
+off for normal use; the endpoint has no authentication, so enable it only
+on an isolated benchmark server or behind access controls.
+
+Pass every process you want to inspect to the host runner, for example:
+
+```sh
+npm run bench -- --transport=websocket --websocket-metrics=http://localhost:8787/bench-metrics --json=/tmp/websocket-costs.json
+```
+
+Use a comma-separated list when a separate advisory relay also runs. The
+runner checks all listed endpoints before site changes. It records process
+CPU milliseconds and database query counts between samples, plus memory at
+both sample boundaries. PHP reports allocated PHP memory; Node reports
+resident process memory (RSS). These are different measures and are not
+added together. Neither memory value is a peak. The example relay makes no
+database calls and reports zero queries.
+
+These are **whole-process measurements**. Their sample periods bracket the
+editing and idle periods and include probe overhead and any unrelated
+clients. The daemon remains running during the baseline. Results are not
+divided by editor count or added to PHP request costs. An open socket is not
+an occupied PHP web worker. Missing samples, a restarted process, or counters
+that move backwards make that process result unavailable. Raw samples and
+separate results are retained in each session's `socketProcesses` JSON field.
+
+Selecting an endpoint does not prove that it serves the measured browsers,
+or that it covers every worker behind a load balancer. Thus **combined server
+totals remain unavailable** when sockets are used. Use dedicated processes
+for comparisons. Other relays need an equivalent measurement endpoint; the
+PHP daemon and example relay show the version 1 response format. Database I/O counters remain separate
+server-global measurements and include the logger's own writes. Use an
+isolated database and keep the same measurement setup in both phases.
+
+The JSON report (`schemaVersion: 3`) stores server rates and job CPU totals
+as `{ min, max }` bounds. Per-period `serverTotals` and `baseServerTotals`
+retain CPU milliseconds, occupied worker milliseconds, queries, and option
+writes before rate conversion. `measurement.timeline` records clock bounds,
+request/sample counts, and capped traces; `serverRows` holds the original
+request timelines. Content checks, coverage limits, and configuration are
+also retained. Compare runs only across identical environments. The report
+measures one engine per run (`engine=`).
+
+The `session` object contains delivery distributions, final-content checks,
+per-editor input and arrival timestamps, and the pass/fail reasons.
 
 Fleet planning must use measured rates for the current configuration. The
 advisory channel can stop scheduled polling when an editor is alone and
@@ -81,7 +206,7 @@ the configured polling interval instead. The site default is 5 seconds; the
 e2e test setup sets 1 second. Do not project daily traffic from the old
 fixed 4-second solo / 1-second collaborative cadence.
 
-Run `windows=1` to measure solo editing and idle cost, then measure several
+Run `--peers=1` to measure solo editing and idle cost, then measure several
 collaborators. Record the delivery choice and configured polling setting from
 the JSON report. Multiply each scenario's measured rate by the time and
 open-tab count for that scenario across your platform. The host runner does
@@ -92,7 +217,7 @@ env:tests start`). The **baseline** is the same number of people producing
 the same document the old way — editing in series with the plugin
 deactivated: each person completes a fixed typing script, saves, and hands
 off (the post lock forces exactly this turn-taking today). Then the **sync**
-phase: the plugin active and the same `windows=` people collaborating live
+phase: the plugin active and the same `--peers=` people collaborating live
 on the chosen engine, typing the same scripts — so both phases must finish
 with the same paragraph text. The script is built before typing: a slower
 browser takes longer rather than producing fewer edits. Before each save,
@@ -106,7 +231,7 @@ followed by the summary stats (room storage, derived capacity). The run
 opens by stating the configuration it resolved (engine, transport,
 durations, polling), marking defaults. Arguments target what you need:
 `--engine=` (one per run — comparing engines is `--suite=engines`),
-`--transport=`, `--windows=`, `--edit-seconds=`/`--idle-seconds=`,
+`--transport=`, `--peers=`, `--edit-seconds=`/`--idle-seconds=`,
 `--polling-interval=` to override the HTTP short-polling interval for the
 run (restored afterwards), `--metrics=` to print only some rows, `--json=`
 for the full data — `npm run bench -- --help` prints the complete list. The
@@ -789,9 +914,9 @@ The comparison the decision turns on:
   this: its CPU/request totals are exact for the session it measured, but
   under real concurrency the lock-holding engines (intent-log, de-rtc)
   additionally queue on the per-room lock, which the card cannot see. A
-  browser-driven multi-client soak (extending
-  `tests/benchmarks/transport/` beyond two windows) validating the card's
-  projections end-to-end is the known remaining verification gap.
+  browser-driven host report (`npm run bench -- --peers=N`) measures
+  delivery delay and whole-request server costs under growing peer counts;
+  these are separate from this engine model.
 - **Opaque-relay quality is unmeasured here** by construction (a
   client-merging engine's merge runs in browser clients, outside the
   harness), not by omission. This limitation does not apply to yjs-server:

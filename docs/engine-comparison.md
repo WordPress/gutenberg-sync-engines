@@ -368,6 +368,15 @@ their own (open work lives in GitHub Issues), grouped by engine.
     problem, not a correctness one, and the escalation-criteria fixture
     polices it. AGENTS.md lists the rest of the residuals.
 
+-   **Recovery after history removal depends on the client's retained
+    history.** When a connected client has that history, it retries only
+    the local changes rejected as `stale-base`, while keeping remote
+    changes. Conflicts found during this recovery appear in the review
+    panel of that tab. These recovery proposals are not stored on the
+    server and do not survive a reload. Restoring one sends an ordinary
+    edit. A client missing the history uses the separate checkpoint-reset
+    path.
+
 ### yjs-server
 
 -   **Under heavy write concurrency the server can ask a client to

@@ -201,11 +201,9 @@ interface EntityState {
 	 */
 	lastEditorEditAt: number;
 	/**
-	 * Whether a stale-base void recovery is already scheduled (a whole
-	 * authoring ladder voids together — one re-capture per burst; see
-	 * the onDisposition handler).
+	 * Whether the reset has already scheduled an editor-tree recapture.
 	 */
-	staleVoidRecapturePending: boolean;
+	treeRecaptureScheduled: boolean;
 	/**
 	 * Whether the next bootstrap change event follows a mid-session
 	 * horizon reset WITH local work on the canvas — it must recapture
@@ -215,7 +213,7 @@ interface EntityState {
 	resetRecapturePending: boolean;
 	/**
 	 * The latest block tree the editor handed to update() — the
-	 * known-good capture shape the stale-void recovery re-derives from.
+	 * known-good capture shape the reset recovery re-derives from.
 	 * (core-data's getEditedRecord() returns blocks in a shape the
 	 * bridge's derive/verify rejects wholesale — observed as derive
 	 * returning null — so recovery must reuse the feed's own trees.)
@@ -1155,7 +1153,7 @@ export function createIntentLogManager( debug = false ): SyncManager {
 			pendingPushes: [],
 			preInitTree: null,
 			lastEditorEditAt: 0,
-			staleVoidRecapturePending: false,
+			treeRecaptureScheduled: false,
 			resetRecapturePending: false,
 			lastEditorTree: null,
 			capturing: false,
@@ -1452,8 +1450,7 @@ export function createIntentLogManager( debug = false ): SyncManager {
 
 		/**
 		 * Re-derives local work from the last editor-fed tree against the
-		 * CURRENT document at the CURRENT seq — the shared recovery for
-		 * both horizon-reset and stale-base-void paths (deferred past the
+		 * CURRENT document at the CURRENT seq after a reset (deferred past the
 		 * settle/replan/bootstrap that scheduled it). The tree reference
 		 * comes from the ordinary update() feed: core-data's
 		 * getEditedRecord() returns blocks whose attribute values the
@@ -1462,12 +1459,12 @@ export function createIntentLogManager( debug = false ): SyncManager {
 		 * @param origin Capture origin tag for the re-derived batch.
 		 */
 		const scheduleTreeRecapture = ( origin: string ): void => {
-			if ( state.staleVoidRecapturePending ) {
+			if ( state.treeRecaptureScheduled ) {
 				return;
 			}
-			state.staleVoidRecapturePending = true;
+			state.treeRecaptureScheduled = true;
 			setTimeout( () => {
-				state.staleVoidRecapturePending = false;
+				state.treeRecaptureScheduled = false;
 				if ( state.unloaded || ! state.session.isInitialized() ) {
 					return;
 				}
@@ -1493,44 +1490,36 @@ export function createIntentLogManager( debug = false ): SyncManager {
 			}, 0 );
 		};
 
-		session.onDisposition( ( settled ) => {
-			/*
-			 * Stale-base voids: the server compacted the room past the seq
-			 * these intents were authored at (their priors are gone, so a
-			 * one-sided transform is impossible) and voided them without
-			 * planning. The engine's contract expects the CLIENT to
-			 * re-derive the work — but the snapshot-reset path (onReset
-			 * above) only fires when the client's CURSOR fell below the
-			 * horizon. A live, connected client whose cursor is current
-			 * gets only the voids: the replan then drops the optimistic
-			 * effect and the next editor sync pushes the REVERTED document
-			 * over the canvas — the user watches their own typing vanish
-			 * (found by A2's retry-free e2e runs: a table-cell edit burst
-			 * landed right after its author's earlier burst pushed the room
-			 * past the checkpoint trim). Recover by re-capturing the CURRENT
-			 * editor tree against the current document, at the current seq:
-			 * the tree still holds the voided work until the revert push
-			 * lands, and the deferred recapture below runs first (the revert
-			 * waits out CAPTURE_SYNC_DELAY).
-			 */
-			if (
-				'voided' !== settled.status ||
-				'stale-base' !== settled.reason
-			) {
+		session.onStaleBaseRecovery( ( { base, target, seq } ) => {
+			if ( state.unloaded ) {
 				return;
 			}
-			if ( state.session.hasDeferredReset() ) {
-				/*
-				 * A horizon reset is queued behind this burst: these voids
-				 * are the coherent old-frame remainder, and the reset's own
-				 * recapture re-derives everything at the new frame once the
-				 * outbox drains. Recapturing now would author more
-				 * old-frame intents and starve the release.
-				 */
+			const derived = deriveIntents(
+				base,
+				documentBlocks( state, target ),
+				{
+					richTextFields: state.fieldsResolver,
+					rawContent: state.rawContent,
+					saveMarkup: saveMarkupAdapter,
+				}
+			);
+			if ( ! derived ) {
 				return;
 			}
-			// A whole authoring ladder voids together: one recovery per burst.
-			scheduleTreeRecapture( 'stale-void-recapture' );
+			// Retry only the lost local effect, expressed at the current
+			// cursor. The editor still displays its old observed baseline;
+			// advancing that baseline here would make the next keystroke
+			// delete remote text that the editor has not displayed yet.
+			state.capturing = true;
+			try {
+				const envelopes = session.authorBatch( derived.intents, {
+					baseSeq: seq,
+					observe: false,
+				} );
+				undoManager?.noteAuthored( session, envelopes );
+			} finally {
+				state.capturing = false;
+			}
 		} );
 
 		session.onDiscard( ( updates ) => {
@@ -2043,8 +2032,7 @@ export function createIntentLogManager( debug = false ): SyncManager {
 			// This tree supersedes any buffered pre-init testimony.
 			state.preInitTree = null;
 			state.lastEditorEditAt = Date.now();
-			// The stale-void recovery re-derives from this tree (see the
-			// onDisposition handler in loadEntity).
+			// A room reset re-derives from this tree (see onReset).
 			state.lastEditorTree = blocks;
 
 			/*
