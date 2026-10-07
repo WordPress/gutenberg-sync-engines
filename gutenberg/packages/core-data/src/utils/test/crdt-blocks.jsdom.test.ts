@@ -1360,6 +1360,35 @@ describe( 'crdt-blocks', () => {
 				'<div class="a">Two</div>'
 			);
 		} );
+
+		it( 'refreshes the saved HTML when an attribute changes', () => {
+			mergeCrdtBlocks(
+				yblocks,
+				[
+					{
+						name,
+						attributes: { content: 'One', className: 'a' },
+						innerBlocks: [],
+					},
+				],
+				null
+			);
+
+			mergeCrdtBlocks(
+				yblocks,
+				[
+					{
+						name,
+						attributes: { content: 'One', className: 'b' },
+						innerBlocks: [],
+					},
+				],
+				null
+			);
+			expect( yblocks.get( 0 ).get( CRDT_BLOCK_SAVE_KEY ) ).toBe(
+				'<div class="b">One</div>'
+			);
+		} );
 	} );
 
 	describe( 'table block', () => {
