@@ -429,7 +429,8 @@ if ( ! class_exists( 'WP_Intent_Log_Planner' ) ) {
 		 *                                   array( state, atSeq? ), 'broken' => id => atSeq ).
 		 * @param array    $intent           Intent (ORIGINAL payload).
 		 * @param callable $first_remote_seq fn( string $frame_key ): ?int.
-		 * @return array|null array( 'reason', 'atSeq' ), or null.
+		 * @return array|null array( 'reason', 'atSeq' ), or null; a rule-5 clash
+		 *                    also names the frame 'key' it was found on.
 		 */
 		private static function frame_escalation( array $frame, array $intent, callable $first_remote_seq ): ?array {
 			foreach ( self::required_targets( $intent ) as $id ) {
@@ -465,6 +466,7 @@ if ( ! class_exists( 'WP_Intent_Log_Planner' ) ) {
 						return array(
 							'reason' => 'frame-conflict',
 							'atSeq'  => $remote_at,
+							'key'    => $key,
 						);
 					}
 				}
@@ -1043,6 +1045,12 @@ if ( ! class_exists( 'WP_Intent_Log_Planner' ) ) {
 		 * Plans one client's batch against a log — the shared deterministic
 		 * core. Mirrors planBatch() in the JS twin exactly.
 		 *
+		 * A rule-5 clash sets aside the burst it belongs to, not only the
+		 * keystroke it was found on: the plan runs again with the author's
+		 * accepted writes to that field from this batch set aside beside it
+		 * (same reason, same log position), until the set stops growing.
+		 * Writes accepted by an earlier request stay (see planBatch()).
+		 *
 		 * @since 7.2.0
 		 *
 		 * @param array    $units     Batch grouped into units (group_units).
@@ -1057,6 +1065,70 @@ if ( ! class_exists( 'WP_Intent_Log_Planner' ) ) {
 		 *               a proposal carries 'atSeq', the log index of the entry that settled it.
 		 */
 		public static function plan_batch( array $units, array $log, callable $doc_at, int $first_seq = 0, array $seed = array() ): array {
+			$set_aside = array();
+			$plan      = self::plan_units( $units, $log, $doc_at, $first_seq, $seed, $set_aside );
+			while ( self::widen_set_aside( $plan, $set_aside ) ) {
+				$plan = self::plan_units( $units, $log, $doc_at, $first_seq, $seed, $set_aside );
+			}
+			return array(
+				'rows'    => $plan['rows'],
+				'headDoc' => $plan['headDoc'],
+			);
+		}
+
+		/**
+		 * Adds to the set-aside group, for each rule-5 clash a pass found, the
+		 * author's accepted writes to that field from earlier in the batch.
+		 * Mirrors widenSetAside() in the JS twin exactly.
+		 *
+		 * @since 7.2.0
+		 *
+		 * @param array $plan      The pass: array( 'rows', 'triggers' ).
+		 * @param array $set_aside The group, intentId => array( 'reason', 'atSeq' )
+		 *                         (by reference, widened in place).
+		 * @return bool Whether the group grew.
+		 */
+		private static function widen_set_aside( array $plan, array &$set_aside ): bool {
+			$before = count( $set_aside );
+			foreach ( $plan['triggers'] as $trigger ) {
+				for ( $i = 0; $i < $trigger['index']; $i++ ) {
+					$row = $plan['rows'][ $i ];
+					if ( null === $row['accepted'] || isset( $set_aside[ $row['intent']['intentId'] ] ) ) {
+						continue;
+					}
+					foreach ( self::frame_write_targets( $row['intent'] ) as $written ) {
+						if ( self::frame_keys_overlap( $written, $trigger['key'] ) ) {
+							$set_aside[ $row['intent']['intentId'] ] = array(
+								'reason' => 'frame-conflict',
+								'atSeq'  => $trigger['atSeq'],
+							);
+							break;
+						}
+					}
+				}
+			}
+			return count( $set_aside ) > $before;
+		}
+
+		/**
+		 * One pass of plan_batch(): plans the units with the given intents set
+		 * aside up front, and reports every rule-5 clash found. Mirrors
+		 * planUnits() in the JS twin exactly.
+		 *
+		 * @since 7.2.0
+		 *
+		 * @param array    $units     See plan_batch().
+		 * @param array    $log       See plan_batch().
+		 * @param callable $doc_at    See plan_batch().
+		 * @param int      $first_seq See plan_batch().
+		 * @param array    $seed      See plan_batch().
+		 * @param array    $set_aside Intents to escalate before any check:
+		 *                            intentId => array( 'reason', 'atSeq' ).
+		 * @return array array( 'rows', 'headDoc', 'triggers' ); each trigger:
+		 *               array( 'index' => batch index of the intent the clash was
+		 *               found on, 'key' => frame key, 'atSeq' => settling position ).
+		 */
+		private static function plan_units( array $units, array $log, callable $doc_at, int $first_seq, array $seed, array $set_aside ): array {
 			// Frame state spans the whole batch: one client's sequential
 			// authoring, continued from the actor's earlier set-aside work
 			// when seeded (arrays copy by value, so the seed stays unchanged).
@@ -1065,6 +1137,7 @@ if ( ! class_exists( 'WP_Intent_Log_Planner' ) ) {
 				'broken'    => $seed['broken'] ?? array(),
 			);
 			$rows     = array();
+			$triggers = array();
 			$head_doc = $doc_at( $first_seq + count( $log ) );
 
 			foreach ( $units as $unit ) {
@@ -1090,12 +1163,29 @@ if ( ! class_exists( 'WP_Intent_Log_Planner' ) ) {
 						return null;
 					};
 
-					$frame_problem = self::frame_escalation( $frame, $intent, $first_remote_seq );
-					$conflict_seq  = null === $frame_problem
+					$aside         = $set_aside[ $intent['intentId'] ] ?? null;
+					$frame_problem = null === $aside
+						? self::frame_escalation( $frame, $intent, $first_remote_seq )
+						: null;
+					if ( isset( $frame_problem['key'] ) ) {
+						$triggers[] = array(
+							'index' => count( $rows ) + $j,
+							'key'   => $frame_problem['key'],
+							'atSeq' => $frame_problem['atSeq'],
+						);
+					}
+					$conflict_seq = null === $aside && null === $frame_problem
 						? self::intra_unit_conflict_seq( $unit, $j, $first_remote_seq )
 						: null;
 
-					if ( null !== $frame_problem ) {
+					if ( null !== $aside ) {
+						$result = array(
+							'outcome' => 'escalate',
+							'intent'  => $intent,
+							'reason'  => $aside['reason'],
+							'atSeq'   => $aside['atSeq'],
+						);
+					} elseif ( null !== $frame_problem ) {
 						$result = array(
 							'outcome' => 'escalate',
 							'intent'  => $intent,
@@ -1180,8 +1270,9 @@ if ( ! class_exists( 'WP_Intent_Log_Planner' ) ) {
 			}
 
 			return array(
-				'rows'    => $rows,
-				'headDoc' => $head_doc,
+				'rows'     => $rows,
+				'headDoc'  => $head_doc,
+				'triggers' => $triggers,
 			);
 		}
 

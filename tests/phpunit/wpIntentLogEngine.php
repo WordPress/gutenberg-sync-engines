@@ -344,11 +344,13 @@ class Tests_Collaboration_WpIntentLogEngine extends WP_Test_REST_TestCase {
 		// A peer inserts at the start too, unaware: log 2.
 		$this->poll( array( $typed( 'p-z', 0, 'Z', 0 ) ), array( 'client_id' => 202 ) );
 
-		// The typist has not seen the peer: "l" applies, "o" clashes.
+		// The typist has not seen the peer: "o" clashes and takes "l",
+		// accepted just before it in the same request, along to review.
 		$first = $this->poll( array( $typed( 't-l', 2, 'l', 2 ), $typed( 't-o', 3, 'o', 2 ) ) );
-		$this->assertSame( 'applied', $first['dispositions'][0]['status'] );
+		$this->assertSame( 'escalated', $first['dispositions'][0]['status'] );
+		$this->assertSame( 'frame-conflict', $first['dispositions'][0]['reason'] );
 		$this->assertSame( 'escalated', $first['dispositions'][1]['status'] );
-		$this->assertSame( 'frame-conflict', $first['dispositions'][1]['reason'] );
+		$this->assertSame( 'dependent-on-escalated', $first['dispositions'][1]['reason'] );
 
 		// The next request, same frame: a dependent of the set-aside "o".
 		$second = $this->poll( array( $typed( 't-space', 4, ' ', 2 ) ) );
@@ -363,12 +365,12 @@ class Tests_Collaboration_WpIntentLogEngine extends WP_Test_REST_TestCase {
 				$proposals[] = json_decode( $update['data'], true );
 			}
 		}
-		$this->assertCount( 2, $proposals );
-		$this->assertSame( array( 't-o', 't-space' ), array_column( array_column( $proposals, 'intent' ), 'intentId' ) );
-		$this->assertSame( array( 2, 2 ), array_column( $proposals, 'atSeq' ) );
+		$this->assertCount( 3, $proposals );
+		$this->assertSame( array( 't-l', 't-o', 't-space' ), array_column( array_column( $proposals, 'intent' ), 'intentId' ) );
+		$this->assertSame( array( 2, 2, 2 ), array_column( $proposals, 'atSeq' ) );
 
 		// A keystroke authored after the typist observed the clash is clean.
-		$head  = 4; // k, i, Z, l.
+		$head  = 3; // k, i, Z.
 		$third = $this->poll( array( $typed( 't-x', 0, 'x', $head ) ) );
 		$this->assertSame( 'applied', $third['dispositions'][0]['status'] );
 	}

@@ -403,13 +403,18 @@ describe( 'intent-log session codec', () => {
 		bob.author( 'insert_text', { syncId: 'p1', offset: 0, text: 'a' } );
 		bob.author( 'insert_text', { syncId: 'p1', offset: 1, text: 'b' } );
 		const first = bobLink.poll()!;
+		// "b" clashes and takes "a" with it: the burst parks whole.
 		expect( first.map( ( d ) => d.status ) ).toEqual( [
-			'applied',
+			'escalated',
 			'escalated',
 		] );
-		// The parked row carries the settling seq: Alice's entry at 0.
+		// The parked rows carry the settling seq: Alice's entry at 0.
 		expect( bob.getProposals()[ 0 ] ).toMatchObject( {
 			reason: 'frame-conflict',
+			atSeq: 0,
+		} );
+		expect( bob.getProposals()[ 1 ] ).toMatchObject( {
+			reason: 'dependent-on-escalated',
 			atSeq: 0,
 		} );
 
@@ -427,7 +432,7 @@ describe( 'intent-log session codec', () => {
 		expect( c.baseSeq ).toBe( 0 );
 		// Predicted as the dependent it will be: absent from Bob's canvas.
 		expect( bob.getDocument()!.root[ 0 ].fields.content.text ).toBe(
-			'aHello world '
+			'Hello world '
 		);
 		const second = bobLink.poll()!;
 		expect( second[ 0 ] ).toMatchObject( {
@@ -439,7 +444,7 @@ describe( 'intent-log session codec', () => {
 		expect( canonicalJson( bob.getDocument()! ) ).toBe( serverJson );
 		expect( canonicalJson( alice.getDocument()! ) ).toBe( serverJson );
 		expect( wire.doc().root[ 0 ].fields.content.text ).toBe(
-			'aHello world '
+			'Hello world '
 		);
 
 		// Authored after Bob observed the clash (at his cursor): clean.
@@ -447,7 +452,7 @@ describe( 'intent-log session codec', () => {
 		const third = bobLink.poll()!;
 		expect( third[ 0 ] ).toMatchObject( { status: 'applied' } );
 		expect( wire.doc().root[ 0 ].fields.content.text ).toBe(
-			'axHello world '
+			'Hxello world '
 		);
 	} );
 

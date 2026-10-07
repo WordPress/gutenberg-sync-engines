@@ -567,16 +567,18 @@ test( 'REGRESSION: later keystrokes after a set-aside letter are dependents acro
 	// A peer appends a space at the end: log 4.
 	serverIngestBatch( server, [ key( 'peer', ' ', 19, 0 ) ] );
 	// The typist has not seen the peer's space: every keystroke still
-	// carries baseSeq 4. " " is accepted, "l" clashes (rule 5).
+	// carries baseSeq 4. "l" clashes (rule 5) and takes the " " accepted
+	// just before it in the same request along to review.
 	const first = serverIngestBatch( server, [
 		key( 'typist', ' ', 4, 4 ),
 		key( 'typist', 'l', 5, 4 ),
 	] );
 	assert.deepEqual(
 		first.map( ( d ) => d.status ),
-		[ 'applied', 'escalated' ]
+		[ 'escalated', 'escalated' ]
 	);
 	assert.equal( server.proposals[ 0 ].reason, 'frame-conflict' );
+	assert.equal( server.proposals[ 1 ].reason, 'dependent-on-escalated' );
 	// The settling entry was the peer's space at log 4.
 	assert.equal( server.proposals[ 0 ].atSeq, 4 );
 
@@ -599,17 +601,17 @@ test( 'REGRESSION: later keystrokes after a set-aside letter are dependents acro
 	}
 	assert.equal(
 		getBlock( headDoc( server ), 'p1' ).fields.content.text,
-		'kilo Contested paragraph '
+		'kiloContested paragraph '
 	);
 
 	// A keystroke authored AFTER the typist observed the clash (its
-	// editor dropped the "l") is clean, exactly as within one request.
+	// editor dropped the " l") is clean, exactly as within one request.
 	const later = serverIngestBatch( server, [
-		key( 'typist', 'x', 5, server.log.length ),
+		key( 'typist', 'x', 4, server.log.length ),
 	] );
 	assert.equal( later[ 0 ].status, 'applied' );
 	assert.equal(
 		getBlock( headDoc( server ), 'p1' ).fields.content.text,
-		'kilo xContested paragraph '
+		'kiloxContested paragraph '
 	);
 } );

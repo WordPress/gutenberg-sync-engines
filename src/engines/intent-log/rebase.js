@@ -109,6 +109,13 @@ import { textSliceIntents, withTextSlices } from './text-slices.js';
  */
 
 /**
+ * A frame-rule escalation: the reason, the settling log position, and, for
+ * a rule-5 clash, the frame key it was found on.
+ *
+ * @typedef {{ reason: string, atSeq: number, key?: string }} FrameProblem
+ */
+
+/**
  * @param {Intent} intent Intent.
  * @return {CleanOutcome} Clean outcome.
  */
@@ -490,8 +497,8 @@ export function unitEscalation( outcomes, isEscalated ) {
  *                                        first overlapping other-actor
  *                                        frame write at or after
  *                                        intent.baseSeq, or null.
- * @return {{ reason: string, atSeq: number }|null} { reason, atSeq }, or
- *                                                   null.
+ * @return {FrameProblem|null} { reason, atSeq }, or null; a rule-5 clash
+ *                             also names the frame `key` it was found on.
  */
 export function frameEscalation( frame, intent, firstRemoteSeq ) {
 	for ( const id of requiredTargets( intent ) ) {
@@ -522,7 +529,7 @@ export function frameEscalation( frame, intent, firstRemoteSeq ) {
 		if ( hasApplied ) {
 			const remoteAt = firstRemoteSeq( key );
 			if ( remoteAt !== null ) {
-				return { reason: 'frame-conflict', atSeq: remoteAt };
+				return { reason: 'frame-conflict', atSeq: remoteAt, key };
 			}
 		}
 	}
@@ -1135,6 +1142,16 @@ export function groupUnits( intents ) {
  * (lowest-trigger) escalation; surviving intents apply in order to the head
  * document.
  *
+ * A rule-5 clash sets aside the burst it belongs to, not only the keystroke
+ * it was found on. The rule needs an EARLIER accepted write of the author's
+ * to the same field, so checked one intent at a time it lets the first
+ * keystroke of a burst through and parks the rest: the document gains a
+ * fragment nobody typed, and the author's text reaches review in two
+ * pieces. So the plan runs again with the author's accepted writes to that
+ * field from this batch set aside beside it (reason `frame-conflict`, at
+ * the same log position), until the set stops growing. Writes accepted by
+ * an earlier request stay: they are in the log already.
+ *
  * @param {IntentEnvelope[][]}                units      Batch grouped into
  *                                                       units (groupUnits),
  *                                                       in authoring order.
@@ -1164,11 +1181,84 @@ export function groupUnits( intents ) {
  *                  entry that settled it.
  */
 export function planBatch( units, log, docAt, firstSeq = 0, seed = null ) {
+	/** @type {SetAside} */
+	const setAside = new Map();
+	let plan = planUnits( units, log, docAt, firstSeq, seed, setAside );
+	while ( widenSetAside( plan, setAside ) ) {
+		plan = planUnits( units, log, docAt, firstSeq, seed, setAside );
+	}
+	return { rows: plan.rows, headDoc: plan.headDoc };
+}
+
+/**
+ * Intents to escalate before any check, by id: the reason and the settling
+ * log position each carries.
+ *
+ * @typedef {Map<string, { reason: string, atSeq: number }>} SetAside
+ */
+
+/**
+ * A rule-5 clash found by a pass: the batch index of the intent it was
+ * found on, the frame key, and the settling log position.
+ *
+ * @typedef {{ index: number, key: string, atSeq: number }} FrameClash
+ */
+
+/**
+ * Adds to the set-aside group, for each rule-5 clash a pass found, the
+ * author's accepted writes to that field from earlier in the batch.
+ *
+ * @param {{ rows: PlanRow[], triggers: FrameClash[] }} plan     The pass.
+ * @param {SetAside}                                    setAside The group
+ *                                                               (widened in
+ *                                                               place).
+ * @return {boolean} Whether the group grew.
+ */
+function widenSetAside( plan, setAside ) {
+	const before = setAside.size;
+	for ( const trigger of plan.triggers ) {
+		for ( let i = 0; i < trigger.index; i++ ) {
+			const row = plan.rows[ i ];
+			if (
+				row.accepted !== null &&
+				! setAside.has( row.intent.intentId ) &&
+				frameWriteTargets( row.intent ).some( ( written ) =>
+					frameKeysOverlap( written, trigger.key )
+				)
+			) {
+				setAside.set( row.intent.intentId, {
+					reason: 'frame-conflict',
+					atSeq: trigger.atSeq,
+				} );
+			}
+		}
+	}
+	return setAside.size > before;
+}
+
+/**
+ * One pass of planBatch: plans the units with the given intents set aside
+ * up front, and reports every rule-5 clash found (planBatch widens the
+ * group from them and runs the pass again).
+ *
+ * @param {IntentEnvelope[][]}                units    See planBatch.
+ * @param {IntentEnvelope[]}                  log      See planBatch.
+ * @param {( seq: number ) => EngineDocument} docAt    See planBatch.
+ * @param {number}                            firstSeq See planBatch.
+ * @param {FrameState|null}                   seed     See planBatch.
+ * @param {SetAside}                          setAside Intents to escalate
+ *                                                     before any check.
+ * @return {{ rows: PlanRow[], headDoc: EngineDocument, triggers: FrameClash[] }}
+ *         The plan and the rule-5 clashes found.
+ */
+function planUnits( units, log, docAt, firstSeq, seed, setAside ) {
 	// Frame state spans the whole batch: one client's sequential authoring,
 	// continued from the actor's earlier set-aside work when seeded.
 	const frame = seed ? cloneFrameState( seed ) : createFrameState();
 	/** @type {PlanRow[]} */
 	const rows = [];
+	/** @type {FrameClash[]} */
+	const triggers = [];
 	let headDoc = docAt( firstSeq + log.length );
 	for ( const unit of units ) {
 		/** @type {RebaseOutcome[]} */
@@ -1189,17 +1279,29 @@ export function planBatch( units, log, docAt, firstSeq = 0, seed = null ) {
 				);
 				return index === -1 ? null : intent.baseSeq + index;
 			};
-			const frameProblem = frameEscalation(
-				frame,
-				intent,
-				firstRemoteSeq
-			);
-			const conflictSeq = frameProblem
+			const aside = setAside.get( intent.intentId );
+			const frameProblem = aside
 				? null
-				: intraUnitConflictSeq( unit, j, firstRemoteSeq );
+				: frameEscalation( frame, intent, firstRemoteSeq );
+			if ( frameProblem?.key !== undefined ) {
+				triggers.push( {
+					index: rows.length + j,
+					key: frameProblem.key,
+					atSeq: frameProblem.atSeq,
+				} );
+			}
+			const conflictSeq =
+				aside || frameProblem
+					? null
+					: intraUnitConflictSeq( unit, j, firstRemoteSeq );
 			/** @type {RebaseOutcome} */
 			let result;
-			if ( frameProblem ) {
+			if ( aside ) {
+				result = {
+					...escalate( intent, aside.reason ),
+					atSeq: aside.atSeq,
+				};
+			} else if ( frameProblem ) {
 				result = {
 					...escalate( intent, frameProblem.reason ),
 					atSeq: frameProblem.atSeq,
@@ -1270,7 +1372,7 @@ export function planBatch( units, log, docAt, firstSeq = 0, seed = null ) {
 			rows.push( { intent, disposition, accepted, proposal } );
 		}
 	}
-	return { rows, headDoc };
+	return { rows, headDoc, triggers };
 }
 
 /**

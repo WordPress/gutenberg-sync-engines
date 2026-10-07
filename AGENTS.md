@@ -1132,11 +1132,15 @@ applies.
     confirmed baseline, so the failure direction is a re-pushed block rather
     than a destroyed edit.
   - Typing INTO a paragraph a peer is editing, while this editor is still
-    behind on their change, escalates the later keystrokes of the burst
-    (`frame-conflict`, engine rule 5) instead of merging them: their offsets
-    sit in a frame both an earlier own edit and a remote edit wrote. They go
+    behind on their change, escalates the burst (`frame-conflict`, engine
+    rule 5) instead of merging it: the later keystrokes' offsets sit in a
+    frame both an earlier own edit and a remote edit wrote, and the
+    planner sets the earlier keystrokes of the same request aside with
+    them (it plans again with them escalated), so the document never
+    gains the first letter of a word whose rest went to review. They go
     to the review lane — parked, never lost — and normal merging resumes as
-    soon as the editor observes the remote change. (The related
+    soon as the editor observes the remote change. A keystroke accepted by
+    an EARLIER request stays. (The related
     one-keystroke DIVERGENCE this used to cause is FIXED: a settle that
     bypasses `clientReceive` — parked rows, voided markers, disposition
     acks — now replans the optimistic document, so a mispredicted escalated

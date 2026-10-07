@@ -474,7 +474,8 @@ for ( const mode of [ 'format', 'delete', 'join', 'conflict', 'unicode' ] ) {
 	// A peer appends a space at the end of the 31-character genesis
 	// paragraph: log 4.
 	serverIngestBatch( server, [ key( 'peer', ' ', 31, 0 ) ] );
-	// The typist has not seen it: " " applies, "l" clashes (rule 5).
+	// The typist has not seen it: "l" clashes (rule 5) and takes the " "
+	// accepted just before it in the same batch along to review.
 	serverIngestBatch( server, [
 		key( 'typist', ' ', 4, 4 ),
 		key( 'typist', 'l', 5, 4 ),

@@ -246,7 +246,11 @@ An intent escalates to the proposal lane iff:
    written (one-sided transform cannot reconcile the frames). Includes the
    intra-unit case where the own write is an earlier member of the same txn.
    Field-scoped: a remote write to a different field of the same block does
-   not conflict.
+   not conflict. The clash sets aside the whole burst: the author's writes
+   to that field accepted earlier in the SAME batch escalate beside it
+   (same reason, same settling position; the planner runs again with them
+   set aside), so the document never gains the first keystroke of a word
+   whose rest went to review. Writes accepted by an earlier request stay.
 6. `dependent-on-escalated` — it depends on an earlier own intent that did
    not apply: it reads a frame containing a phantom write, or addresses a
    block only a phantom intent created. Scoped by `baseSeq`: intents

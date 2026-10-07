@@ -56,6 +56,10 @@ release, which the release script generates from the commit history.
 
 ### Changed
 
+- intent-log: when a typing burst clashes with a peer's edit to the same
+  paragraph, the whole burst from that request is set aside for review.
+  Before, the first keystroke landed and only the rest went to review, so
+  the paragraph gained a stray character nobody typed.
 - The bundled Gutenberg includes the entity sync interface from
   [Gutenberg #83410](https://github.com/WordPress/gutenberg/pull/83410).
   The plugin registers its adapter at startup for all existing engines and

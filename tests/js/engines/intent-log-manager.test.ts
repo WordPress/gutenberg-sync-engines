@@ -3752,6 +3752,8 @@ describe( 'intent-log manager', () => {
 		 * user typed — pushes during a burst are superseded before they
 		 * render, so peer text never appears in these trees).
 		 */
+		const typed = new Map< typeof clientA, string >();
+		const pushesBeforePolling = new Map< typeof clientA, number >();
 		const typeBurst = ( client: typeof clientA, text: string ) => {
 			for ( let i = 1; i <= text.length; i++ ) {
 				client.manager.update(
@@ -3766,6 +3768,8 @@ describe( 'intent-log manager', () => {
 				);
 				jest.advanceTimersByTime( 80 );
 			}
+			typed.set( client, `Alpha paragraph${ text }` );
+			pushesBeforePolling.set( client, client.handlers.edits.length );
 		};
 
 		// Both users type concurrently: neither has polled since genesis.
@@ -3786,7 +3790,19 @@ describe( 'intent-log manager', () => {
 		}
 		flushEditorSync();
 
+		/*
+		 * The canvas holds the last push, or, when nothing was pushed
+		 * since the burst, what the editor itself typed: a window whose
+		 * burst was accepted whole and whose peer's burst parked whole
+		 * receives no row and is pushed nothing.
+		 */
 		const canvasText = ( client: typeof clientA ) => {
+			if (
+				client.handlers.edits.length ===
+				pushesBeforePolling.get( client )
+			) {
+				return typed.get( client );
+			}
 			const last = client.handlers.edits.at( -1 ) as {
 				blocks: Array< { attributes: { content?: unknown } } >;
 			};
