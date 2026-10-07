@@ -1108,11 +1108,11 @@ export function planBatch( units, log, docAt, firstSeq = 0 ) {
 	/** @type {PlanRow[]} */
 	const rows = [];
 	let headDoc = docAt( firstSeq + log.length );
-	// Every intent in the batch replays the same log entries, so each
-	// document version is built once here instead of once per intent.
+	// Intents in a batch rebase over the same log entries; build each
+	// document version once and share it.
 	/** @type {Map<number, EngineDocument>} */
 	const versions = new Map();
-	/** @param {number} seq */
+	/** @type {DocumentLookup} */
 	const versionAt = ( seq ) => {
 		let doc = versions.get( seq );
 		if ( ! doc ) {
