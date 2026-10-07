@@ -23,7 +23,7 @@ import { applyIntent, replay } from './reducer.js';
 import { textSliceIntents, withTextSlices } from './text-slices.js';
 
 /** @typedef {import('./engine-types').EngineDocument} EngineDocument */
-/** @typedef {(seq: number) => EngineDocument} DocAt */
+/** @typedef {(seq: number) => EngineDocument} DocumentLookup */
 /** @typedef {import('./engine-types').IntentEnvelope} IntentEnvelope */
 /** @typedef {import('./engine-types').IntentDisposition} IntentDisposition */
 /** @typedef {import('./engine-types').IntentProposal} IntentProposal */
@@ -957,23 +957,20 @@ function transformOne( intent, prior, doc ) {
  * @param {Intent}         intent     Intent to rebase.
  * @param {Intent[]}       priors     Accepted intents after startSeq, in log
  *                                    order.
- * @param {EngineDocument} docAtBase  Document at startSeq.
+ * @param {DocumentLookup} docAt      Document at a log position (read-only).
  * @param {number|null}    [startSeq] Log index of priors[0] (defaults to
  *                                    intent.baseSeq). Non-clean outcomes
  *                                    carry `atSeq`, the absolute log index
  *                                    of the prior that settled them.
- * @param {DocAt|null}     [docAt]    Document at a log position, when the
- *                                    caller already holds the versions;
- *                                    otherwise each prior is applied here.
  * @return {RebaseOutcome} { outcome: 'clean'|'escalate'|'void', intent,
  *                         reason?, atSeq? }.
  */
-export function rebaseIntent( intent, priors, docAtBase, startSeq = null, docAt = null ) {
+export function rebaseIntent( intent, priors, docAt, startSeq = null ) {
 	const base = startSeq ?? intent.baseSeq;
 	let current = intent;
-	let doc = docAtBase;
 	for ( let i = 0; i < priors.length; i++ ) {
 		const prior = priors[ i ];
+		const doc = docAt( base + i );
 		if ( prior.actorId !== intent.actorId ) {
 			const result = transformOne( current, prior, doc );
 			if ( result.outcome !== 'clean' ) {
@@ -981,7 +978,6 @@ export function rebaseIntent( intent, priors, docAtBase, startSeq = null, docAt 
 			}
 			current = result.intent;
 		}
-		doc = docAt ? docAt( base + i + 1 ) : applyIntent( doc, prior ).doc;
 	}
 	return clean( current );
 }
@@ -1168,13 +1164,7 @@ export function planBatch( units, log, docAt, firstSeq = 0 ) {
 					atSeq: conflictSeq,
 				};
 			} else {
-				result = rebaseIntent(
-					intent,
-					slice,
-					versionAt( intent.baseSeq ),
-					null,
-					versionAt
-				);
+				result = rebaseIntent( intent, slice, versionAt );
 			}
 			rebased.push( result );
 		}
