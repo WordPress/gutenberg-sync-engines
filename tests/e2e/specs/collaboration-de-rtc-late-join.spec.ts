@@ -29,10 +29,14 @@ import { test, expect } from '../config/collaboration-fixtures';
  *
  * Two insertions at the same spot of the same version are a conflict under
  * de-rtc's rules: the typed text is then set aside for review, with a
- * notice, never lost silently.
+ * notice, never lost silently. When the server has compacted the room past
+ * the saved post, no version shows it, and the typed text is dropped
+ * rather than proposed on the compacted version, where it would read as
+ * the person deleting the peer's unsaved text.
  */
 
 const HOLD_MS = 4000;
+const CHECKPOINT_FIXTURE = 'gutenberg-test-plugin-de-rtc-checkpoint-interval';
 const PEER_TEXT = ' plus user one';
 
 async function setSyncEngine(
@@ -117,7 +121,14 @@ test.describe( 'Collaboration - de-rtc late join (issue #100) @engine-de-rtc', (
 		peerTypesAtStart?: boolean;
 		newParagraph?: boolean;
 		setAside?: boolean;
+		compacted?: boolean;
 	} > = [
+		{
+			title: 'after the server compacted the room past the saved post, the typed text is dropped and the peer’s unsaved text survives',
+			typeDuringHold: true,
+			savedBeforeJoin: false,
+			compacted: true,
+		},
 		{
 			title: 'text typed where the peer typed, on the same version, is set aside for review with a notice',
 			typeDuringHold: true,
@@ -150,6 +161,7 @@ test.describe( 'Collaboration - de-rtc late join (issue #100) @engine-de-rtc', (
 		peerTypesAtStart = false,
 		newParagraph = false,
 		setAside = false,
+		compacted = false,
 	} of CASES ) {
 		// The peer's unsaved text, and the paragraph once it lands.
 		const peerText = peerTypesAtStart ? 'Big ' : PEER_TEXT;
@@ -159,135 +171,169 @@ test.describe( 'Collaboration - de-rtc late join (issue #100) @engine-de-rtc', (
 		test(
 			title,
 			async ( { collaborationUtils, requestUtils, editor, page } ) => {
-				const post = await requestUtils.createPost( {
-					title: 'Late join',
-					status: 'draft',
-					content:
-						'<!-- wp:paragraph -->\n<p>Existing content</p>\n<!-- /wp:paragraph -->',
-					date_gmt: new Date().toISOString(),
-				} );
-
-				await collaborationUtils.openCollaborativeSession( post.id );
-				const { editor2, page2 } = collaborationUtils;
-
-				for ( const currentEditor of [ editor, editor2 ] ) {
-					await expect( async () => {
-						const blocks = await currentEditor.getBlocks();
-						expect( blocks ).toMatchObject( [
-							{
-								name: 'core/paragraph',
-								attributes: { content: 'Existing content' },
-							},
-						] );
-					} ).toPass( { timeout: 10000 } );
+				if ( compacted ) {
+					await requestUtils.activatePlugin( CHECKPOINT_FIXTURE );
 				}
+				try {
+					const post = await requestUtils.createPost( {
+						title: 'Late join',
+						status: 'draft',
+						content:
+							'<!-- wp:paragraph -->\n<p>Existing content</p>\n<!-- /wp:paragraph -->',
+						date_gmt: new Date().toISOString(),
+					} );
 
-				// User 1 types text that is NOT saved (yet).
-				await editor.canvas
-					.locator( '[data-type="core/paragraph"]' )
-					.first()
-					.click();
-				await page.keyboard.press( peerTypesAtStart ? 'Home' : 'End' );
-				await page.keyboard.type( peerText, { delay: 30 } );
-
-				// The room holds it: user 2 sees it before reloading.
-				await expect( async () => {
-					const blocks = await editor2.getBlocks();
-					expect( blocks[ 0 ].attributes.content ).toBe(
-						withPeerText
+					await collaborationUtils.openCollaborativeSession(
+						post.id
 					);
-				} ).toPass( { timeout: 10000 } );
+					const { editor2, page2 } = collaborationUtils;
 
-				if ( savedBeforeJoin ) {
-					// The room outlives the save, so its first row is now older
-					// than the saved post the joiner will parse.
-					const saved = page.waitForResponse(
-						( response ) =>
-							decodeURIComponent( response.url() ).includes(
-								'/wp/v2/posts/'
-							) && 'POST' === response.request().method()
-					);
-					await editor.saveDraft();
-					await saved;
-					await waitForSyncQuiet( page );
-				}
+					for ( const currentEditor of [ editor, editor2 ] ) {
+						await expect( async () => {
+							const blocks = await currentEditor.getBlocks();
+							expect( blocks ).toMatchObject( [
+								{
+									name: 'core/paragraph',
+									attributes: { content: 'Existing content' },
+								},
+							] );
+						} ).toPass( { timeout: 10000 } );
+					}
 
-				const releaseAt = Date.now() + HOLD_MS;
-				( await holdSyncRequests( page2 ) )( releaseAt );
-				await page2.reload();
-				await collaborationUtils.waitForCollaborationReady( page2 );
-
-				const shownBeforeSync = String(
-					( await editor2.getBlocks() )[ 0 ].attributes.content
-				);
-				if ( typeDuringHold ) {
-					// The editor shows the SAVED content, so the person types
-					// after its last word.
-					await editor2.canvas
+					// User 1 types text that is NOT saved (yet).
+					await editor.canvas
 						.locator( '[data-type="core/paragraph"]' )
 						.first()
 						.click();
-					await page2.keyboard.press( 'End' );
-					await page2.keyboard.type( ' B' );
-					if ( newParagraph ) {
-						await page2.keyboard.press( 'Enter' );
-						await page2.keyboard.type( 'New paragraph' );
-					}
-					expect( Date.now() ).toBeLessThan( releaseAt );
-					expect(
-						String(
-							( await editor2.getBlocks() )[ 0 ].attributes
-								.content
-						)
-					).toBe( `${ shownBeforeSync } B` );
-				}
-
-				// Let the hold expire, the document land, and both windows
-				// settle.
-				await page2.waitForTimeout( HOLD_MS + 2000 );
-				await waitForSyncQuiet( page2 );
-				await waitForSyncQuiet( page );
-
-				// Both windows agree, the peer's text survives exactly once,
-				// and the typed text is kept where it was typed. Two
-				// insertions at the same spot were concurrent, so their
-				// order is the engine's call.
-				let acceptable = [ withPeerText ];
-				if ( typeDuringHold && ! setAside ) {
-					acceptable = peerTypesAtStart
-						? [ `${ peerText }Existing content B` ]
-						: [
-								`Existing content${ peerText } B`,
-								`Existing content B${ peerText }`,
-						  ];
-				}
-				await expect( async () => {
-					const text1 = String(
-						( await editor.getBlocks() )[ 0 ].attributes.content
+					await page.keyboard.press(
+						peerTypesAtStart ? 'Home' : 'End'
 					);
-					const text2 = String(
+					if ( compacted ) {
+						// Word by word, each landed before the next, so the
+						// server writes several rows and compacts the room past
+						// the saved post.
+						let typed = 'Existing content';
+						for ( const word of peerText.match( / \S+/g ) ?? [] ) {
+							await page.keyboard.type( word, { delay: 30 } );
+							typed += word;
+							const expectedSoFar = typed;
+							await expect( async () => {
+								const blocks = await editor2.getBlocks();
+								expect( blocks[ 0 ].attributes.content ).toBe(
+									expectedSoFar
+								);
+							} ).toPass( { timeout: 15000 } );
+						}
+					} else {
+						await page.keyboard.type( peerText, { delay: 30 } );
+					}
+
+					// The room holds it: user 2 sees it before reloading.
+					await expect( async () => {
+						const blocks = await editor2.getBlocks();
+						expect( blocks[ 0 ].attributes.content ).toBe(
+							withPeerText
+						);
+					} ).toPass( { timeout: 10000 } );
+
+					if ( savedBeforeJoin ) {
+						// The room outlives the save, so its first row is now older
+						// than the saved post the joiner will parse.
+						const saved = page.waitForResponse(
+							( response ) =>
+								decodeURIComponent( response.url() ).includes(
+									'/wp/v2/posts/'
+								) && 'POST' === response.request().method()
+						);
+						await editor.saveDraft();
+						await saved;
+						await waitForSyncQuiet( page );
+					}
+
+					const releaseAt = Date.now() + HOLD_MS;
+					( await holdSyncRequests( page2 ) )( releaseAt );
+					await page2.reload();
+					await collaborationUtils.waitForCollaborationReady( page2 );
+
+					const shownBeforeSync = String(
 						( await editor2.getBlocks() )[ 0 ].attributes.content
 					);
-					expect( text2 ).toBe( text1 );
-					expect( acceptable ).toContain( text1 );
-					const rest = async ( currentEditor: typeof editor ) =>
-						( await currentEditor.getBlocks() )
-							.slice( 1 )
-							.map( ( block ) =>
-								String( block.attributes.content )
-							);
-					const expectedRest = newParagraph
-						? [ 'New paragraph' ]
-						: [];
-					expect( await rest( editor ) ).toEqual( expectedRest );
-					expect( await rest( editor2 ) ).toEqual( expectedRest );
-				} ).toPass( { timeout: 10000 } );
-				if ( setAside ) {
-					// Both edits inserted text at the end of the same saved
-					// paragraph: the typist is told, and can restore it.
-					await expect(
-						page2.getByText( /was set aside/ ).first()
-					).toContainText( 'Existing content B' );
+					if ( typeDuringHold ) {
+						// The editor shows the SAVED content, so the person types
+						// after its last word.
+						await editor2.canvas
+							.locator( '[data-type="core/paragraph"]' )
+							.first()
+							.click();
+						await page2.keyboard.press( 'End' );
+						await page2.keyboard.type( ' B' );
+						if ( newParagraph ) {
+							await page2.keyboard.press( 'Enter' );
+							await page2.keyboard.type( 'New paragraph' );
+						}
+						expect( Date.now() ).toBeLessThan( releaseAt );
+						expect(
+							String(
+								( await editor2.getBlocks() )[ 0 ].attributes
+									.content
+							)
+						).toBe( `${ shownBeforeSync } B` );
+					}
+
+					// Let the hold expire, the document land, and both windows
+					// settle.
+					await page2.waitForTimeout( HOLD_MS + 2000 );
+					await waitForSyncQuiet( page2 );
+					await waitForSyncQuiet( page );
+
+					// Both windows agree, the peer's text survives exactly once,
+					// and the typed text is kept where it was typed. Two
+					// insertions at the same spot were concurrent, so their
+					// order is the engine's call.
+					let acceptable = [ withPeerText ];
+					if ( typeDuringHold && ! setAside && ! compacted ) {
+						acceptable = peerTypesAtStart
+							? [ `${ peerText }Existing content B` ]
+							: [
+									`Existing content${ peerText } B`,
+									`Existing content B${ peerText }`,
+							  ];
+					}
+					await expect( async () => {
+						const text1 = String(
+							( await editor.getBlocks() )[ 0 ].attributes.content
+						);
+						const text2 = String(
+							( await editor2.getBlocks() )[ 0 ].attributes
+								.content
+						);
+						expect( text2 ).toBe( text1 );
+						expect( acceptable ).toContain( text1 );
+						const rest = async ( currentEditor: typeof editor ) =>
+							( await currentEditor.getBlocks() )
+								.slice( 1 )
+								.map( ( block ) =>
+									String( block.attributes.content )
+								);
+						const expectedRest = newParagraph
+							? [ 'New paragraph' ]
+							: [];
+						expect( await rest( editor ) ).toEqual( expectedRest );
+						expect( await rest( editor2 ) ).toEqual( expectedRest );
+					} ).toPass( { timeout: 10000 } );
+					if ( setAside ) {
+						// Both edits inserted text at the end of the same saved
+						// paragraph: the typist is told, and can restore it.
+						await expect(
+							page2.getByText( /was set aside/ ).first()
+						).toContainText( 'Existing content B' );
+					}
+				} finally {
+					if ( compacted ) {
+						await requestUtils.deactivatePlugin(
+							CHECKPOINT_FIXTURE
+						);
+					}
 				}
 			}
 		);

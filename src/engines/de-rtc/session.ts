@@ -251,9 +251,13 @@ export function createDeRtcSessionCodec(
 	// The base the next proposal declares instead of the last version.
 	let heldEditsBase: string | null = null;
 
+	// Whether the first snapshot row was a compaction checkpoint (null
+	// until one arrives): a checkpoint may be newer than the saved post.
+	let firstSnapshotIsCheckpoint: boolean | null = null;
+
 	/**
-	 * The newest version newer than the one this session last applied
-	 * whose content hashes like the saved post, or null.
+	 * The newest version, from the one this session last applied on, whose
+	 * content hashes like the saved post, or null.
 	 *
 	 * @param savedContent The saved post's raw content.
 	 */
@@ -263,13 +267,50 @@ export function createDeRtcSessionCodec(
 		for ( const [ version, hash ] of versionHashes ) {
 			if (
 				hash === savedHash &&
-				versionSeq( version ) > currentSeq() &&
+				versionSeq( version ) >= currentSeq() &&
 				versionSeq( version ) > versionSeq( best )
 			) {
 				best = version;
 			}
 		}
 		return best;
+	}
+
+	/**
+	 * Settles edits made before the first sync response once the rest of
+	 * the first response has landed: declares the version that shows the
+	 * saved post as the next proposal's base, or drops the edits when no
+	 * version can be trusted to show it.
+	 *
+	 * A genesis row is built from the saved post the room started from, so
+	 * when no later version matches, the edits stay on it (a save made
+	 * outside the room has no matching version either). A compaction
+	 * checkpoint may be newer than the saved post: proposing the edits on
+	 * it would read every change a peer made since the save, and has not
+	 * saved, as the person deleting it. The edits are dropped instead and
+	 * the editor shows the checkpoint, the rule intent-log applies.
+	 *
+	 * @param savedContent The saved post's raw content.
+	 * @return Whether a proposal may go out.
+	 */
+	function settleHeldEdits( savedContent: string ): boolean {
+		const found = findSavedVersion( savedContent );
+		if ( found ) {
+			heldEditsBase = found === bridge.lastVersion() ? null : found;
+			return true;
+		}
+		if ( ! firstSnapshotIsCheckpoint ) {
+			return true;
+		}
+		const version = bridge.lastVersion();
+		const content = version ? canonicalContents.get( version ) : undefined;
+		dirty = false;
+		if ( version && undefined !== content ) {
+			// applyCanonical skips the version it already holds.
+			bridge.resetLineage();
+			bridge.applyCanonical( version, content );
+		}
+		return false;
 	}
 
 	const versionSeq = ( version: string | null ): number =>
@@ -417,13 +458,14 @@ export function createDeRtcSessionCodec(
 				 * own edit, competing with the same text in the room, and
 				 * set it aside. Wait for the rest of the first response
 				 * (the room's later versions follow the bootstrap row),
-				 * then declare the newest version that shows the saved post.
+				 * then settle the edits (settleHeldEdits).
 				 */
 				heldEditsLookup = true;
 				setTimeout( () => {
 					heldEditsLookup = false;
-					heldEditsBase = findSavedVersion( savedContent );
-					maybePropose();
+					if ( settleHeldEdits( savedContent ) ) {
+						maybePropose();
+					}
 				}, 0 );
 				return;
 			}
@@ -612,6 +654,9 @@ export function createDeRtcSessionCodec(
 			}
 		}
 		if ( DE_RTC_SNAPSHOT_TYPE === update.type ) {
+			if ( null === firstSnapshotIsCheckpoint ) {
+				firstSnapshotIsCheckpoint = true === decoded.checkpoint;
+			}
 			recordVersionHash(
 				decoded.version,
 				hashDeRtcContent( decoded.content )

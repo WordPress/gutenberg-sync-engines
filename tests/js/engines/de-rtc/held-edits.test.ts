@@ -39,9 +39,17 @@ const BLOCK_C = { name: 'core/paragraph', attributes: { content: 'Gamma' } };
 
 const contentOf = ( ...blocks: unknown[] ) => JSON.stringify( blocks );
 
-const snapshotRow = ( version: string, content: string ) => ( {
+const snapshotRow = (
+	version: string,
+	content: string,
+	checkpoint = false
+) => ( {
 	type: DE_RTC_SNAPSHOT_TYPE,
-	data: JSON.stringify( { version, content } ),
+	data: JSON.stringify( {
+		version,
+		content,
+		...( checkpoint ? { checkpoint: true, checkpointId: 1 } : {} ),
+	} ),
 } );
 
 const announceRow = ( version: string, contentHash: string ) => ( {
@@ -88,7 +96,7 @@ describe( 'de-rtc edits made before the first sync response', () => {
 			sent
 				.filter( ( update ) => DE_RTC_PROPOSAL_TYPE === update.type )
 				.map( ( update ) => JSON.parse( update.data ) );
-		return { session, proposals };
+		return { entity, session, proposals };
 	}
 
 	it( 'declares the version that shows the saved post, once the first response has landed', () => {
@@ -126,5 +134,28 @@ describe( 'de-rtc edits made before the first sync response', () => {
 
 		expect( proposals() ).toHaveLength( 1 );
 		expect( proposals()[ 0 ].baseVersion ).toBe( 'v1' );
+	} );
+
+	it( 'drops the edits when the first row is a checkpoint and no version shows the saved post', () => {
+		// Old history was compacted after the save: the checkpoint holds a
+		// peer's unsaved text. Proposing the edits on it would read that
+		// text as deleted.
+		const saved = contentOf( BLOCK_A );
+		const { entity, session, proposals } = joinAndEdit( saved, [
+			BLOCK_A,
+			BLOCK_C,
+		] );
+
+		session.receiveUpdate(
+			snapshotRow( 'v7', contentOf( BLOCK_B ), true )
+		);
+		jest.advanceTimersByTime( 1 );
+
+		expect( proposals() ).toHaveLength( 0 );
+		// The editor shows the checkpoint, not the dropped edits.
+		const blocks = ( entity.getEditorChanges( {} as any ) as any ).blocks;
+		expect(
+			blocks.map( ( block: any ) => block.attributes.content )
+		).toEqual( [ 'Beta' ] );
 	} );
 } );

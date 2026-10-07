@@ -1056,8 +1056,14 @@ applies.
   (`heldEditsSavedContent`, `findSavedVersion`), without a descriptor.
   Declaring the bootstrap row instead made the server read a save made
   during the room's life as the joiner's own edit and set the typed
-  text aside. Two insertions at the same spot of the saved version
-  still park (the frozen core's rule), with a notice.
+  text aside. No match on a GENESIS bootstrap keeps the genesis as the
+  base (it was built from the saved post). No match on a CHECKPOINT
+  bootstrap (`checkpoint: true`, compacted past the save) DROPS the
+  edits and re-applies the checkpoint (`settleHeldEdits`): proposing
+  them on it silently erased a peer's unsaved text (the verifier's
+  find; `de-rtc-checkpoint-interval.php` + the late-join spec's
+  compacted case pin it). Two insertions at the same spot of the saved
+  version still park (the frozen core's rule), with a notice.
   Do NOT reintroduce a `content` entry into de-rtc's property lane —
   it silently re-carries the whole document per announce (found by
   wire inspection; stripped on both sides).
