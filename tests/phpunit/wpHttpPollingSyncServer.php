@@ -1310,6 +1310,60 @@ class Tests_Collaboration_WpHttpPollingSyncServer extends WP_Test_REST_Controlle
 		$this->assertSame( array( 'cursor' => 'updated' ), $awareness[1] );
 	}
 
+	public function test_sync_awareness_says_which_person_each_entry_belongs_to() {
+		$room = $this->get_post_room();
+
+		// The editor opens the post in two tabs.
+		wp_set_current_user( self::$editor_id );
+		$this->dispatch_sync(
+			array(
+				$this->build_room( $room, 1, 0, array( 'name' => 'Tab 1' ) ),
+			)
+		);
+		$this->dispatch_sync(
+			array(
+				$this->build_room( $room, 2, 0, array( 'name' => 'Tab 2' ) ),
+			)
+		);
+
+		// A second person joins.
+		$editor_id_2 = self::factory()->user->create( array( 'role' => 'editor' ) );
+		wp_set_current_user( $editor_id_2 );
+		$response = $this->dispatch_sync(
+			array(
+				$this->build_room( $room, 3, 0, array( 'name' => 'Other' ) ),
+			)
+		);
+
+		$data = $response->get_data();
+		$this->assertSame(
+			array(
+				1 => self::$editor_id,
+				2 => self::$editor_id,
+				3 => $editor_id_2,
+			),
+			$this->sorted_by_key( $data['rooms'][0]['awareness_users'] )
+		);
+		$this->assertSame(
+			array_keys( $this->sorted_by_key( $data['rooms'][0]['awareness'] ) ),
+			array_keys( $this->sorted_by_key( $data['rooms'][0]['awareness_users'] ) ),
+			'Every awareness entry comes back with its person, and no person comes back without an entry.'
+		);
+		// The state stays as the client wrote it.
+		$this->assertSame( array( 'name' => 'Tab 1' ), $data['rooms'][0]['awareness'][1] );
+	}
+
+	/**
+	 * A copy of a map sorted by key, for order-insensitive comparison.
+	 *
+	 * @param array $map The map.
+	 * @return array The sorted copy.
+	 */
+	private function sorted_by_key( array $map ): array {
+		ksort( $map );
+		return $map;
+	}
+
 	public function test_sync_awareness_client_id_cannot_be_used_by_another_user() {
 		wp_set_current_user( self::$editor_id );
 

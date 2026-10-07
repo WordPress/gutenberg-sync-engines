@@ -116,14 +116,24 @@ jest.mock( '../../../../src/providers/http-polling/utils', () => ( {
 type Manager =
 	typeof import('../../../../src/providers/http-polling/polling-manager');
 
-function response( clients: number[], cursor = 1 ) {
+function response(
+	clients: number[],
+	cursor = 1,
+	users?: Record< number, number >
+) {
 	const awareness: Record< number, object > = {};
 	for ( const id of clients ) {
 		awareness[ id ] = { user: id };
 	}
 	return {
 		rooms: [
-			{ room: 'test-room', end_cursor: cursor, awareness, updates: [] },
+			{
+				room: 'test-room',
+				end_cursor: cursor,
+				awareness,
+				...( users ? { awareness_users: users } : {} ),
+				updates: [],
+			},
 		],
 	};
 }
@@ -431,6 +441,30 @@ describe( 'polling-manager cadence', () => {
 
 	it( 'an awareness map with company keeps the timer cadence even when the heartbeat is silent', async () => {
 		mockPostSyncUpdate.mockResolvedValue( response( [ 1, 2 ] ) );
+		register();
+		await jest.advanceTimersByTimeAsync( 0 );
+		await jest.advanceTimersByTimeAsync( 1000 );
+		expect( mockPostSyncUpdate ).toHaveBeenCalledTimes( 2 );
+	} );
+
+	it( "an awareness map holding only this person's own other tab is not company", async () => {
+		// Two entries, one person (user 7): the solo cadence, not the
+		// collaborator one.
+		mockPostSyncUpdate.mockResolvedValue(
+			response( [ 1, 2 ], 1, { 1: 7, 2: 7 } )
+		);
+		register();
+		await jest.advanceTimersByTimeAsync( 0 );
+		await jest.advanceTimersByTimeAsync( 1000 );
+		expect( mockPostSyncUpdate ).toHaveBeenCalledTimes( 1 );
+		await jest.advanceTimersByTimeAsync( 3000 );
+		expect( mockPostSyncUpdate ).toHaveBeenCalledTimes( 2 );
+	} );
+
+	it( 'an awareness map naming a second person is company', async () => {
+		mockPostSyncUpdate.mockResolvedValue(
+			response( [ 1, 2 ], 1, { 1: 7, 2: 8 } )
+		);
 		register();
 		await jest.advanceTimersByTimeAsync( 0 );
 		await jest.advanceTimersByTimeAsync( 1000 );

@@ -372,14 +372,13 @@ class WP_Sync_SSE_Server extends WP_HTTP_Polling_Sync_Server {
 				$this->snapshot_versions();
 				$data = array( 'rooms' => array() );
 				foreach ( $rooms as $room ) {
-					$engine                = $this->engines->get_engine_for_room( $room['room'] );
-					$response              = $engine->get_updates_since( $room['room'], (int) $room['client_id'], (int) $room['after'], array() );
-					$response['awareness'] = array();
-					foreach ( $this->awareness->entries( $room['room'], self::AWARENESS_TIMEOUT ) as $entry ) {
-						$response['awareness'][ $entry['client_id'] ] = $entry['state'];
-					}
-					$response['generation'] = $this->room_generation( $room['room'], (int) $response['end_cursor'] );
-					$data['rooms'][]        = $response;
+					$engine                      = $this->engines->get_engine_for_room( $room['room'] );
+					$response                    = $engine->get_updates_since( $room['room'], (int) $room['client_id'], (int) $room['after'], array() );
+					$entries                     = $this->awareness->entries( $room['room'], self::AWARENESS_TIMEOUT );
+					$response['awareness']       = self::awareness_map( $entries );
+					$response['awareness_users'] = self::awareness_users( $entries );
+					$response['generation']      = $this->room_generation( $room['room'], (int) $response['end_cursor'] );
+					$data['rooms'][]             = $response;
 				}
 			}
 		} catch ( RuntimeException $error ) {

@@ -489,7 +489,8 @@ if ( ! class_exists( 'WP_HTTP_Polling_Sync_Server' ) ) {
 			}
 
 			// Merge awareness state.
-			$merged_awareness = $this->process_awareness_update( $room, $client_id, $awareness );
+			$awareness_entries = $this->process_awareness_update( $room, $client_id, $awareness );
+			$merged_awareness  = self::awareness_map( $awareness_entries );
 
 			$context = array(
 				'awareness' => $merged_awareness,
@@ -523,8 +524,9 @@ if ( ! class_exists( 'WP_HTTP_Polling_Sync_Server' ) ) {
 			 */
 			$read_cursor = ! empty( $room_request['rows_received_separately'] ) ? self::READ_FROM_HEAD : $cursor;
 
-			$room_response              = $engine->get_updates_since( $room, $client_id, $read_cursor, $context );
-			$room_response['awareness'] = $merged_awareness;
+			$room_response                    = $engine->get_updates_since( $room, $client_id, $read_cursor, $context );
+			$room_response['awareness']       = $merged_awareness;
+			$room_response['awareness_users'] = self::awareness_users( $awareness_entries );
 
 			$generation = $this->room_generation( $room, (int) ( $room_response['end_cursor'] ?? 0 ) );
 			if ( null !== $generation ) {
@@ -711,7 +713,42 @@ if ( ! class_exists( 'WP_HTTP_Polling_Sync_Server' ) ) {
 		 * @return array Current awareness map.
 		 */
 		public function update_awareness( string $room, int $client_id, ?array $awareness_update ): array {
-			return $this->process_awareness_update( $room, $client_id, $awareness_update );
+			return self::awareness_map( $this->process_awareness_update( $room, $client_id, $awareness_update ) );
+		}
+
+		/**
+		 * The awareness map a room response carries: client id to state.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param array<int, array<string, mixed>> $entries Awareness entries.
+		 * @return array<int, array<string, mixed>> Map of client ID to awareness state.
+		 */
+		public static function awareness_map( array $entries ): array {
+			$map = array();
+			foreach ( $entries as $entry ) {
+				$map[ $entry['client_id'] ] = $entry['state'];
+			}
+			return $map;
+		}
+
+		/**
+		 * Which person each awareness entry belongs to: client id to
+		 * WordPress user id. Sent beside the awareness map, so a client can
+		 * tell another person from its own other tabs. The state itself is
+		 * left as the client wrote it.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param array<int, array<string, mixed>> $entries Awareness entries.
+		 * @return array<int, int> Map of client ID to user ID.
+		 */
+		public static function awareness_users( array $entries ): array {
+			$users = array();
+			foreach ( $entries as $entry ) {
+				$users[ $entry['client_id'] ] = (int) $entry['wp_user_id'];
+			}
+			return $users;
 		}
 
 		/**
@@ -895,7 +932,7 @@ if ( ! class_exists( 'WP_HTTP_Polling_Sync_Server' ) ) {
 		 * @param string                    $room             Room identifier.
 		 * @param int                       $client_id        Client identifier.
 		 * @param array<string, mixed>|null $awareness_update Awareness state sent by the client.
-		 * @return array<int, array<string, mixed>> Map of client ID to awareness state.
+		 * @return array<int, array<string, mixed>> The room's awareness entries.
 		 */
 		private function process_awareness_update( string $room, int $client_id, ?array $awareness_update ): array {
 			// A null update is this client leaving the room.
@@ -903,13 +940,7 @@ if ( ! class_exists( 'WP_HTTP_Polling_Sync_Server' ) ) {
 				? $this->awareness->forget( $room, $client_id, self::AWARENESS_TIMEOUT )
 				: $this->awareness->put( $room, $client_id, $awareness_update, get_current_user_id(), self::AWARENESS_TIMEOUT );
 
-			// Convert to client_id => state map for response.
-			$response = array();
-			foreach ( $updated_awareness as $entry ) {
-				$response[ $entry['client_id'] ] = $entry['state'];
-			}
-
-			return $response;
+			return $updated_awareness;
 		}
 	}
 }

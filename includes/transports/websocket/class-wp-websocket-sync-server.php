@@ -1592,10 +1592,9 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 			// clients expect (the shape process_awareness_update() responds
 			// with on the REST transports); the raw entry list crashes the
 			// editor's collaborator UI.
-			$awareness_map = array();
-			foreach ( $this->awareness()->entries( $room, WP_HTTP_Polling_Sync_Server::AWARENESS_TIMEOUT ) as $entry ) {
-				$awareness_map[ $entry['client_id'] ] = $entry['state'];
-			}
+			$entries         = $this->awareness()->entries( $room, WP_HTTP_Polling_Sync_Server::AWARENESS_TIMEOUT );
+			$awareness_map   = WP_HTTP_Polling_Sync_Server::awareness_map( $entries );
+			$awareness_users = WP_HTTP_Polling_Sync_Server::awareness_users( $entries );
 
 			foreach ( $this->clients as $other_key => $other ) {
 				if ( $other_key === $exclude_key || ! isset( $other['rooms'][ $room ] ) || ! $other['conn']->is_open() ) {
@@ -1605,8 +1604,9 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 				$client_id = $other['rooms'][ $room ]['client_id'];
 				$cursor    = $other['rooms'][ $room ]['cursor'];
 
-				$room_response              = $this->sync->get_engine_registry()->get_engine_for_room( $room )->get_updates_since( $room, $client_id, $cursor, array() );
-				$room_response['awareness'] = $awareness_map;
+				$room_response                    = $this->sync->get_engine_registry()->get_engine_for_room( $room )->get_updates_since( $room, $client_id, $cursor, array() );
+				$room_response['awareness']       = $awareness_map;
+				$room_response['awareness_users'] = $awareness_users;
 
 				// The room generation rides pushed frames too, so a socket
 				// client notices a room restart between its own requests.

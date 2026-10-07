@@ -322,6 +322,7 @@ class Tests_Collaboration_WpSseSyncServer extends WP_Test_REST_TestCase {
 		$this->assertCount( 2, $events, 'The initial read, then the read the awareness check woke.' );
 		$this->assertSame( 1.0, $events[1][0], 'Noticed on the check right after the write, though it bumped no counter.' );
 		$this->assertArrayHasKey( 42, $events[1][1]['rooms'][0]['awareness'] );
+		$this->assertSame( 0, $events[1][1]['rooms'][0]['awareness_users'][42], 'A stream read says which person each entry belongs to.' );
 	}
 
 	public function test_a_write_during_the_read_still_wakes_the_next_check() {
