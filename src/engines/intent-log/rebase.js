@@ -23,6 +23,7 @@ import { applyIntent, replay } from './reducer.js';
 import { textSliceIntents, withTextSlices } from './text-slices.js';
 
 /** @typedef {import('./engine-types').EngineDocument} EngineDocument */
+/** @typedef {(seq: number) => EngineDocument} DocAt */
 /** @typedef {import('./engine-types').IntentEnvelope} IntentEnvelope */
 /** @typedef {import('./engine-types').IntentDisposition} IntentDisposition */
 /** @typedef {import('./engine-types').IntentProposal} IntentProposal */
@@ -961,10 +962,13 @@ function transformOne( intent, prior, doc ) {
  *                                    intent.baseSeq). Non-clean outcomes
  *                                    carry `atSeq`, the absolute log index
  *                                    of the prior that settled them.
+ * @param {DocAt|null}     [docAt]    Document at a log position, when the
+ *                                    caller already holds the versions;
+ *                                    otherwise each prior is applied here.
  * @return {RebaseOutcome} { outcome: 'clean'|'escalate'|'void', intent,
  *                         reason?, atSeq? }.
  */
-export function rebaseIntent( intent, priors, docAtBase, startSeq = null ) {
+export function rebaseIntent( intent, priors, docAtBase, startSeq = null, docAt = null ) {
 	const base = startSeq ?? intent.baseSeq;
 	let current = intent;
 	let doc = docAtBase;
@@ -977,7 +981,7 @@ export function rebaseIntent( intent, priors, docAtBase, startSeq = null ) {
 			}
 			current = result.intent;
 		}
-		( { doc } = applyIntent( doc, prior ) );
+		doc = docAt ? docAt( base + i + 1 ) : applyIntent( doc, prior ).doc;
 	}
 	return clean( current );
 }
@@ -1108,6 +1112,22 @@ export function planBatch( units, log, docAt, firstSeq = 0 ) {
 	/** @type {PlanRow[]} */
 	const rows = [];
 	let headDoc = docAt( firstSeq + log.length );
+	// Every intent in the batch replays the same log entries, so each
+	// document version is built once here instead of once per intent.
+	/** @type {Map<number, EngineDocument>} */
+	const versions = new Map();
+	/** @param {number} seq */
+	const versionAt = ( seq ) => {
+		let doc = versions.get( seq );
+		if ( ! doc ) {
+			const previous = versions.get( seq - 1 );
+			doc = previous
+				? applyIntent( previous, log[ seq - 1 - firstSeq ] ).doc
+				: docAt( seq );
+			versions.set( seq, doc );
+		}
+		return doc;
+	};
 	for ( const unit of units ) {
 		/** @type {RebaseOutcome[]} */
 		const rebased = [];
@@ -1148,7 +1168,13 @@ export function planBatch( units, log, docAt, firstSeq = 0 ) {
 					atSeq: conflictSeq,
 				};
 			} else {
-				result = rebaseIntent( intent, slice, docAt( intent.baseSeq ) );
+				result = rebaseIntent(
+					intent,
+					slice,
+					versionAt( intent.baseSeq ),
+					null,
+					versionAt
+				);
 			}
 			rebased.push( result );
 		}
