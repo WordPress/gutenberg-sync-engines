@@ -680,6 +680,170 @@ describe( 'intent-log conflict records', () => {
 		} );
 	} );
 
+	describe( 'a record whose blocks the log has since split or merged', () => {
+		const ONE = createDocument( [
+			{ syncId: 'p1', blockType: 'core/paragraph', text: 'Text.Here.' },
+		] );
+		const splitP1 = ( options: { actorId?: string } = {} ) =>
+			intent(
+				'split_block',
+				{
+					syncId: 'p1',
+					field: 'content',
+					offset: 5,
+					newSyncId: 'p1b',
+				},
+				options
+			);
+
+		it( "covers the half a collaborator split off the author's block", () => {
+			// The author typed at the start of "Text.Here." while a
+			// collaborator split it into "Text." and "Here.". The second
+			// half is part of the disagreement, so the record covers it.
+			const split = splitP1( { actorId: 'u9c9' } );
+			const current = applyIntent( ONE, split ).doc;
+			const [ record ] = buildConflictRecords(
+				[
+					parked(
+						intent( 'insert_text', {
+							syncId: 'p1',
+							field: 'content',
+							offset: 0,
+							text: 'Some ',
+						} )
+					),
+				],
+				depsFor( current, { 0: ONE }, [ split ] )
+			);
+
+			expect( record.conflict.base ).toBe( 'p1:Text.Here.' );
+			expect( record.conflict.current ).toBe( 'p1:Text.|p1b:Here.' );
+			expect( record.conflict.proposed ).toBe( 'p1:Some Text.Here.' );
+			expect( record.conflict.target ).toEqual( {
+				type: 'blocks',
+				ids: [ 'p1', 'p1b' ],
+				parentId: undefined,
+				index: 0,
+				count: 2,
+			} );
+			expect( record.blockIds ).toEqual( [ 'p1', 'p1b' ] );
+			expect( record.spanIds ).toEqual( [ 'p1', 'p1b' ] );
+		} );
+
+		it( 'follows a half that was split again', () => {
+			const first = splitP1( { actorId: 'u9c9' } );
+			const second = intent(
+				'split_block',
+				{
+					syncId: 'p1b',
+					field: 'content',
+					offset: 3,
+					newSyncId: 'p1c',
+				},
+				{ actorId: 'u9c9', baseSeq: 1 }
+			);
+			const current = applyIntent(
+				applyIntent( ONE, first ).doc,
+				second
+			).doc;
+			const [ record ] = buildConflictRecords(
+				[
+					parked(
+						intent( 'insert_text', {
+							syncId: 'p1',
+							field: 'content',
+							offset: 0,
+							text: 'Some ',
+						} )
+					),
+				],
+				depsFor( current, { 0: ONE }, [ first, second ] )
+			);
+
+			expect( record.conflict.current ).toBe( 'p1:Text.|p1b:Her|p1c:e.' );
+			expect( record.spanIds ).toEqual( [ 'p1', 'p1b', 'p1c' ] );
+		} );
+
+		it( 'shows both halves of a parked split on the proposed side', () => {
+			// The mirror case: the collaborator's typing was accepted and
+			// the author's split was set aside.
+			const typed = intent(
+				'insert_text',
+				{ syncId: 'p1', field: 'content', offset: 0, text: 'Some ' },
+				{ actorId: 'u9c9' }
+			);
+			const current = applyIntent( ONE, typed ).doc;
+			const [ record ] = buildConflictRecords(
+				[ parked( splitP1() ) ],
+				depsFor( current, { 0: ONE }, [ typed ] )
+			);
+
+			expect( record.conflict.base ).toBe( 'p1:Text.Here.' );
+			expect( record.conflict.current ).toBe( 'p1:Some Text.Here.' );
+			expect( record.conflict.proposed ).toBe( 'p1:Text.|p1b:Here.' );
+			expect( record.conflict.target ).toMatchObject( {
+				ids: [ 'p1' ],
+				count: 1,
+			} );
+			expect( record.blockIds ).toEqual( [ 'p1', 'p1b' ] );
+		} );
+
+		it( "covers the block a collaborator merged into the author's block", () => {
+			const merge = intent(
+				'merge_blocks',
+				{ survivorId: 'p1', absorbedId: 'p2', field: 'content' },
+				{ actorId: 'u9c9' }
+			);
+			const current = applyIntent( BASE, merge ).doc;
+			const [ record ] = buildConflictRecords(
+				[
+					parked(
+						intent( 'insert_text', {
+							syncId: 'p1',
+							field: 'content',
+							offset: 5,
+							text: '!',
+						} )
+					),
+				],
+				depsFor( current, { 0: BASE }, [ merge ] )
+			);
+
+			expect( record.conflict.base ).toBe( 'p1:Hello|p2:World' );
+			expect( record.conflict.current ).toBe( 'p1:HelloWorld' );
+			expect( record.conflict.proposed ).toBe( 'p1:Hello!|p2:World' );
+			expect( record.blockIds ).toEqual( [ 'p1', 'p2' ] );
+			expect( record.spanIds ).toEqual( [ 'p1' ] );
+		} );
+
+		it( 'leaves a split from before the base alone', () => {
+			// The split is history the author already saw: its second
+			// half is an unrelated neighbour.
+			const split = splitP1( { actorId: 'u9c9' } );
+			const current = applyIntent( ONE, split ).doc;
+			const [ record ] = buildConflictRecords(
+				[
+					parked(
+						intent(
+							'insert_text',
+							{
+								syncId: 'p1',
+								field: 'content',
+								offset: 0,
+								text: 'Some ',
+							},
+							{ baseSeq: 1 }
+						)
+					),
+				],
+				depsFor( current, { 1: current }, [ split ] )
+			);
+
+			expect( record.conflict.current ).toBe( 'p1:Text.' );
+			expect( record.spanIds ).toEqual( [ 'p1' ] );
+		} );
+	} );
+
 	it( 'serializes only the top-most of nested targets, in document order', () => {
 		const doc = createDocument( [
 			{

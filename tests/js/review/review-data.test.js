@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
 import {
 	canApproveUnfilteredHtml,
+	conflictContinuingOnBlock,
 	conflictsTargetingBlock,
 } from '../../../src/review/components/review-data';
 
@@ -21,6 +22,7 @@ const select = () => ( {
 	} ),
 	getBlockRootClientId: ( clientId ) => BLOCKS[ clientId ]?.root,
 	getBlockIndex: ( clientId ) => BLOCKS[ clientId ]?.index,
+	getClientIdsWithDescendants: () => Object.keys( BLOCKS ),
 } );
 
 const record = ( id, target ) => ( { id, kind: 'merge', target } );
@@ -28,6 +30,70 @@ const matches = ( conflicts, clientId ) =>
 	conflictsTargetingBlock( select, conflicts, clientId ).map(
 		( conflict ) => conflict.id
 	);
+
+describe( 'conflictContinuingOnBlock', () => {
+	const span = record( 'a', {
+		type: 'blocks',
+		ids: [ 's1', 's2' ],
+		index: 0,
+		count: 2,
+	} );
+
+	it( 'names the record and the card block for a block after the first of a span', () => {
+		expect( conflictContinuingOnBlock( select, [ span ], 'c2' ) ).toEqual( {
+			conflict: span,
+			firstClientId: 'c1',
+		} );
+	} );
+
+	it( 'is null for the first block, which carries the card, and for blocks outside the span', () => {
+		expect(
+			conflictContinuingOnBlock( select, [ span ], 'c1' )
+		).toBeNull();
+		expect(
+			conflictContinuingOnBlock( select, [ span ], 'c3' )
+		).toBeNull();
+	} );
+
+	it( 'is null when the first block is no longer in the document', () => {
+		const orphan = record( 'a', {
+			type: 'blocks',
+			ids: [ 'gone', 's2' ],
+			index: 0,
+			count: 2,
+		} );
+		expect(
+			conflictContinuingOnBlock( select, [ orphan ], 'c2' )
+		).toBeNull();
+	} );
+
+	it( 'matches the span by client id, for documents that carry the editor ids', () => {
+		const byClientId = record( 'a', {
+			type: 'blocks',
+			ids: [ 'c3', 'c4' ],
+			index: 0,
+			count: 2,
+		} );
+		expect(
+			conflictContinuingOnBlock( select, [ byClientId ], 'c4' )
+		).toEqual( { conflict: byClientId, firstClientId: 'c3' } );
+	} );
+
+	it( 'ignores positional targets and proposed insertions', () => {
+		const conflicts = [
+			record( 'p', { type: 'blocks', index: 0, count: 2 } ),
+			record( 'i', {
+				type: 'blocks',
+				ids: [ 's1', 's2' ],
+				index: 0,
+				count: 0,
+			} ),
+		];
+		expect(
+			conflictContinuingOnBlock( select, conflicts, 'c2' )
+		).toBeNull();
+	} );
+} );
 
 describe( 'conflictsTargetingBlock', () => {
 	it( 'matches a block by its durable id', () => {

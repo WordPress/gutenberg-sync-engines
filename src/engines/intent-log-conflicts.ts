@@ -14,7 +14,12 @@
  * A RECORD COVERS ONE RUN OF SIBLING BLOCKS, from the first block the
  * members touch to the last, the blocks in between included, because an
  * accepted result replaces the run as one piece (see coveringRun() and
- * proposedBlocks()).
+ * proposedBlocks()). A block the log has since SPLIT OFF one of those
+ * blocks, or JOINED with one, counts as touched too (see
+ * relatedBlockIds()): a peer who split "Text.Here." into "Text." and
+ * "Here." while the author typed into it made the second half part of
+ * the same disagreement, and a decision that replaced the first half
+ * alone would leave the second half behind.
  *
  * THE THREE SIDES, all as serialized block content:
  *
@@ -81,7 +86,10 @@ export interface ConflictRecord {
 	conflict: SyncConflict;
 	/** The record's parked proposals, in arrival order. */
 	members: IntentLogProposal[];
-	/** Every block id the members touch (present in a document or not). */
+	/**
+	 * Every block id the members touch (present in a document or not),
+	 * plus the blocks split off them or merged with them since the base.
+	 */
 	blockIds: string[];
 	/**
 	 * The blocks the record covers in the current document: the run of
@@ -324,7 +332,8 @@ function userIdOf( actorId: string ): number {
 }
 
 /**
- * The block ids an intent touches.
+ * The block ids an intent touches: both halves of a split, both blocks
+ * of a merge, the inserted block, else the block named.
  *
  * @param intent Intent.
  * @return Block ids (empty for a property write).
@@ -335,7 +344,64 @@ function blockIdsOf( intent: IntentEnvelope ): string[] {
 		const block = payload.block as { syncId?: unknown } | undefined;
 		return 'string' === typeof block?.syncId ? [ block.syncId ] : [];
 	}
-	return 'string' === typeof payload.syncId ? [ payload.syncId ] : [];
+	let names = [ 'syncId' ];
+	if ( 'split_block' === intent.type ) {
+		names = [ 'syncId', 'newSyncId' ];
+	} else if ( 'merge_blocks' === intent.type ) {
+		names = [ 'survivorId', 'absorbedId' ];
+	}
+	return names
+		.map( ( name ) => payload[ name ] )
+		.filter( ( id ): id is string => 'string' === typeof id );
+}
+
+/**
+ * The record's block ids plus the blocks the log has split off them or
+ * joined with them since the base: a split's second half when its first
+ * half is one of the ids, and both blocks of a merge when either is.
+ * Followed through chains (a half split again), oldest first, so the
+ * run the record covers follows what became of the author's blocks.
+ *
+ * @param ids     The ids the members touch.
+ * @param baseSeq The record's base position.
+ * @param deps    The log.
+ * @return The ids, related ones appended in log order.
+ */
+function relatedBlockIds(
+	ids: string[],
+	baseSeq: number,
+	deps: ConflictDeps
+): string[] {
+	if ( ! deps.getLogSince || ! Number.isFinite( baseSeq ) ) {
+		return ids;
+	}
+	const related = [ ...ids ];
+	for ( const { intent: entry } of deps.getLogSince( baseSeq ) ) {
+		if ( 'split_block' !== entry.type && 'merge_blocks' !== entry.type ) {
+			continue;
+		}
+		const pair = blockIdsOf( entry );
+		if ( 2 !== pair.length ) {
+			continue;
+		}
+		const [ first, second ] = pair;
+		// A split's first half brings in the second; the second half of
+		// a split that happened since the base is not one of the ids.
+		// Either block of a merge brings in the other.
+		const joins =
+			'split_block' === entry.type
+				? related.includes( first )
+				: related.includes( first ) || related.includes( second );
+		if ( ! joins ) {
+			continue;
+		}
+		for ( const id of pair ) {
+			if ( ! related.includes( id ) ) {
+				related.push( id );
+			}
+		}
+	}
+	return related;
 }
 
 interface Draft {
@@ -577,6 +643,7 @@ export function buildConflictRecords(
 		const baseDoc = Number.isFinite( baseSeq )
 			? deps.getDocumentAt( baseSeq )
 			: null;
+		draft.blockIds = relatedBlockIds( draft.blockIds, baseSeq, deps );
 		// Without the base, the members apply onto the current document
 		// (which holds the author's accepted edits already): the closest
 		// reading of the author's intent still available.

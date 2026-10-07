@@ -11,6 +11,7 @@
  * Internal dependencies
  */
 import './hooks/review-cards';
+import './hooks/span-blocks';
 import './register-views';
 import './register-panel';
 import './style.scss';

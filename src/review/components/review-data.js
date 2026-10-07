@@ -140,12 +140,88 @@ export function conflictsTargetingBlock( select, conflicts, clientId ) {
 }
 
 /**
+ * The record whose span CONTINUES on a block, with the block its card is
+ * on: a record whose `ids` name the block after the first one, while the
+ * first one is in the document. The span's first block carries the card
+ * (conflictsTargetingBlock), which shows the whole span; the blocks after
+ * it are folded out of the canvas meanwhile (hooks/span-blocks.jsx). When
+ * the first block is gone the record has no card, and the later blocks
+ * are left alone (the sidebar panel lists the record).
+ *
+ * @param {Function} select    Registry select (inside a useSelect).
+ * @param {Array}    conflicts Open conflict records.
+ * @param {string}   clientId  The block's client id.
+ * @return {?Object} `{ conflict, firstClientId }`, or null.
+ */
+export function conflictContinuingOnBlock( select, conflicts, clientId ) {
+	const { getBlockAttributes, getClientIdsWithDescendants } =
+		select( blockEditorStore );
+	const syncId = getBlockAttributes( clientId )?.metadata?.syncId;
+	const isBlock = ( id, candidate ) =>
+		( !! syncId && id === syncId ) || id === candidate;
+
+	for ( const conflict of conflicts ) {
+		const { target } = conflict;
+		if (
+			'blocks' !== target.type ||
+			0 === target.count ||
+			! target.ids?.length
+		) {
+			continue;
+		}
+
+		const position = target.ids.findIndex( ( id ) =>
+			isBlock( id, clientId )
+		);
+		if ( position <= 0 ) {
+			continue;
+		}
+
+		const [ first ] = target.ids;
+		const firstClientId = getClientIdsWithDescendants().find(
+			( candidate ) =>
+				candidate === first ||
+				getBlockAttributes( candidate )?.metadata?.syncId === first
+		);
+		if ( firstClientId ) {
+			return { conflict, firstClientId };
+		}
+	}
+
+	return null;
+}
+
+/**
+ * The open record whose span continues on one block, if any (see
+ * conflictContinuingOnBlock).
+ *
+ * @param {string} clientId The block's client id.
+ * @return {?Object} `{ conflict, firstClientId }`, or null.
+ */
+export function useConflictContinuation( clientId ) {
+	const { postType, postId } = useCurrentPost();
+	const open = useOpenConflicts( postType, postId );
+
+	return useSelect(
+		( select ) => {
+			if ( ! open.length ) {
+				return null;
+			}
+
+			return conflictContinuingOnBlock( select, open, clientId );
+		},
+		[ clientId, open ]
+	);
+}
+
+/**
  * The open conflicts of one kind targeting one block (see
  * conflictsTargetingBlock for how a record names its block). One record
  * is one conflict: the engine publishes the edits it set aside together
  * as one record, and never two records of one kind over the same block
  * by one author. A record covering several blocks targets its first
- * block, so a section presents once.
+ * block, so a section presents once; its other blocks are folded away
+ * (useConflictContinuation).
  *
  * @param {string} clientId The block's client id.
  * @param {string} kind     `merge`, or `sequestration` for a security hold.

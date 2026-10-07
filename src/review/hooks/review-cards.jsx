@@ -15,8 +15,9 @@ import { useBlockConflictsOfKind } from '../components/review-data';
  * held card, and wins when a block has both. The block's content is
  * read-only until the record is reviewed, since its editable UI is not
  * rendered at all. A record covering several blocks presents on its
- * first block. The others keep their normal edit UI, so a section reads
- * as a single conflict rather than a wall of cards.
+ * first block, whose card shows the whole span; the other blocks are
+ * folded out of the canvas meanwhile (see span-blocks.jsx), so a
+ * section reads as one conflicted block.
  *
  * @param {Component} BlockEdit Original component.
  *
