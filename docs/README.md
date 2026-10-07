@@ -44,6 +44,11 @@ Start here if you want to:
 - **See what we plan to build next** → [plan/](plan/README.md) — one
   file per bug or feature, written in plain language with an example
   and a way to tell when it is done.
+- **Read the latest architecture and code review** →
+  [review/2026-10-07-architecture-review.md](review/2026-10-07-architecture-review.md)
+  — five questions answered against the code at one commit, with the
+  defects found, ranked recommendations, and the five detailed reports
+  beside it.
 
 The docs above describe how things work today; `plan/` describes what
 we intend to change, and `docs/plan/history.md` says why things are the way
