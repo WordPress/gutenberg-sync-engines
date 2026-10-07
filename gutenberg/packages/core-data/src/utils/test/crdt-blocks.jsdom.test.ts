@@ -1329,65 +1329,25 @@ describe( 'crdt-blocks', () => {
 			unregisterBlockType( name );
 		} );
 
-		it( 'keeps the saved HTML when an edit merges over the block', () => {
-			mergeCrdtBlocks(
-				yblocks,
-				[
-					{
-						name,
-						attributes: { content: 'One', className: 'a' },
-						innerBlocks: [],
-					},
-				],
-				null
-			);
-			expect( yblocks.get( 0 ).get( CRDT_BLOCK_SAVE_KEY ) ).toBe(
-				'<div class="a">One</div>'
-			);
+		const block = ( content: string, className: string ): Block => ( {
+			name,
+			attributes: { content, className },
+			innerBlocks: [],
+		} );
+		const savedHtml = () => yblocks.get( 0 ).get( CRDT_BLOCK_SAVE_KEY );
 
-			mergeCrdtBlocks(
-				yblocks,
-				[
-					{
-						name,
-						attributes: { content: 'Two', className: 'a' },
-						innerBlocks: [],
-					},
-				],
-				null
-			);
-			expect( yblocks.get( 0 ).get( CRDT_BLOCK_SAVE_KEY ) ).toBe(
-				'<div class="a">Two</div>'
-			);
+		it( 'keeps the saved HTML when an edit merges over the block', () => {
+			mergeCrdtBlocks( yblocks, [ block( 'One', 'a' ) ], null );
+			expect( savedHtml() ).toBe( '<div class="a">One</div>' );
+
+			mergeCrdtBlocks( yblocks, [ block( 'Two', 'a' ) ], null );
+			expect( savedHtml() ).toBe( '<div class="a">Two</div>' );
 		} );
 
 		it( 'refreshes the saved HTML when an attribute changes', () => {
-			mergeCrdtBlocks(
-				yblocks,
-				[
-					{
-						name,
-						attributes: { content: 'One', className: 'a' },
-						innerBlocks: [],
-					},
-				],
-				null
-			);
-
-			mergeCrdtBlocks(
-				yblocks,
-				[
-					{
-						name,
-						attributes: { content: 'One', className: 'b' },
-						innerBlocks: [],
-					},
-				],
-				null
-			);
-			expect( yblocks.get( 0 ).get( CRDT_BLOCK_SAVE_KEY ) ).toBe(
-				'<div class="b">One</div>'
-			);
+			mergeCrdtBlocks( yblocks, [ block( 'One', 'a' ) ], null );
+			mergeCrdtBlocks( yblocks, [ block( 'One', 'b' ) ], null );
+			expect( savedHtml() ).toBe( '<div class="b">One</div>' );
 		} );
 
 		it( 'keeps the saved HTML of a container when a block inside it changes', () => {
@@ -1406,9 +1366,7 @@ describe( 'crdt-blocks', () => {
 			mergeCrdtBlocks( yblocks, [ container( 'One' ) ], null );
 			mergeCrdtBlocks( yblocks, [ container( 'Two' ) ], null );
 
-			expect( yblocks.get( 0 ).get( CRDT_BLOCK_SAVE_KEY ) ).toBe(
-				'<div class="group"></div>'
-			);
+			expect( savedHtml() ).toBe( '<div class="group"></div>' );
 		} );
 	} );
 
