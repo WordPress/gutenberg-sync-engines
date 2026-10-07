@@ -80,6 +80,150 @@ export function showsSavedPost(
 }
 
 /**
+ * A version of the room's document with the person's edits on top: the
+ * blocks the edits leave alone are the version's own blocks, unchanged.
+ * Null when the held tree carries no edit.
+ *
+ * At each level the saved and held blocks share a run at the start and a
+ * run at the end; the blocks between them are the changed region. Within
+ * it, saved and held blocks pair up by position: a pair of the same type
+ * keeps the version's block with only the attributes the person changed
+ * (and recurses into its inner blocks); any other held block is new, and
+ * any unpaired saved block is gone. The result differs from the version
+ * only in that region, so a merge that skips equal blocks at the start
+ * and the end of a list touches nothing else.
+ *
+ * @param saved   The saved post (parseSavedPost).
+ * @param held    The editor's tree: the saved post plus the edits.
+ * @param version A version that shows the saved post (showsSavedPost).
+ */
+export function rebaseHeldTree(
+	saved: EditorBlock[],
+	held: EditorBlock[],
+	version: EditorBlock[]
+): EditorBlock[] | null {
+	if (
+		saved.length === held.length &&
+		saved.every( ( block, i ) => sameBlock( block, held[ i ] ) )
+	) {
+		return null;
+	}
+	return rebaseLevel( saved, held, version );
+}
+
+/**
+ * One level of rebaseHeldTree.
+ *
+ * @param saved   Saved blocks at this level.
+ * @param held    Held blocks at this level.
+ * @param version Version blocks at this level (pairs with `saved`).
+ */
+function rebaseLevel(
+	saved: EditorBlock[],
+	held: EditorBlock[],
+	version: EditorBlock[]
+): EditorBlock[] {
+	const max = Math.min( saved.length, held.length );
+	let start = 0;
+	while ( start < max && sameBlock( saved[ start ], held[ start ] ) ) {
+		start++;
+	}
+	let end = 0;
+	while (
+		end < max - start &&
+		sameBlock(
+			saved[ saved.length - 1 - end ],
+			held[ held.length - 1 - end ]
+		)
+	) {
+		end++;
+	}
+	const region: EditorBlock[] = [];
+	const savedCount = saved.length - start - end;
+	const heldCount = held.length - start - end;
+	for ( let i = 0; i < heldCount; i++ ) {
+		const before = saved[ start + i ];
+		const after = held[ start + i ];
+		if ( i >= savedCount || before.name !== after.name ) {
+			region.push( after );
+			continue;
+		}
+		const base = version[ start + i ];
+		const attributes = { ...base.attributes };
+		const names = new Set( [
+			...Object.keys( before.attributes ?? {} ),
+			...Object.keys( after.attributes ?? {} ),
+		] );
+		for ( const name of names ) {
+			const oldValue = before.attributes?.[ name ];
+			const newValue = after.attributes?.[ name ];
+			if (
+				isRichText( after.name, name )
+					? richTextToString( oldValue ) !==
+					  richTextToString( newValue )
+					: ! isDeepEqual( oldValue, newValue )
+			) {
+				if ( undefined === newValue ) {
+					delete attributes[ name ];
+				} else {
+					attributes[ name ] = isRichText( after.name, name )
+						? richTextToString( newValue )
+						: newValue;
+				}
+			}
+		}
+		region.push( {
+			...base,
+			attributes,
+			innerBlocks: rebaseLevel(
+				before.innerBlocks ?? [],
+				after.innerBlocks ?? [],
+				base.innerBlocks ?? []
+			),
+		} );
+	}
+	return [
+		...version.slice( 0, start ),
+		...region,
+		...version.slice( version.length - end ),
+	];
+}
+
+/**
+ * Whether two blocks from the same parser are the same: type, attributes
+ * (rich text as strings) and inner blocks.
+ *
+ * @param a A block.
+ * @param b Another block.
+ */
+function sameBlock( a: EditorBlock, b: EditorBlock ): boolean {
+	if ( a.name !== b.name ) {
+		return false;
+	}
+	const names = new Set( [
+		...Object.keys( a.attributes ?? {} ),
+		...Object.keys( b.attributes ?? {} ),
+	] );
+	for ( const name of names ) {
+		const aValue = a.attributes?.[ name ];
+		const bValue = b.attributes?.[ name ];
+		if (
+			isRichText( a.name, name )
+				? richTextToString( aValue ) !== richTextToString( bValue )
+				: ! isDeepEqual( aValue, bValue )
+		) {
+			return false;
+		}
+	}
+	const aInner = a.innerBlocks ?? [];
+	const bInner = b.innerBlocks ?? [];
+	return (
+		aInner.length === bInner.length &&
+		aInner.every( ( block, i ) => sameBlock( block, bInner[ i ] ) )
+	);
+}
+
+/**
  * A block's identity (`metadata.syncId`), if it carries one.
  *
  * @param block A block.

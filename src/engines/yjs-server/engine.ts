@@ -33,6 +33,9 @@ import { createUndoManager } from './undo';
 import { registerAwareness } from '../../awareness/registry';
 import {
 	findTypedTextSinceSave,
+	parseSavedPost,
+	rebaseHeldTree,
+	showsSavedPost,
 	type EditorBlock,
 	type TypedTextEdit,
 } from '../../shared/typed-text';
@@ -40,6 +43,7 @@ import {
 	createYjsServerSessionCodec,
 	YJS_SERVER_ENGINE_PROTOCOL,
 	YJS_SERVER_ENGINE_SLUG,
+	YJS_SERVER_SESSION_ORIGIN,
 } from './session';
 
 /**
@@ -60,8 +64,9 @@ import {
  *   tree is the SAVED post plus the person's keystrokes, and the
  *   server's document may be older or newer than the saved post, so a
  *   verbatim merge would count every difference as the person's edit
- *   (issue #57). Instead only the TEXT the person typed is applied to
- *   the document (see `replayTypedText`).
+ *   (issue #57). Instead the edit is applied to the version that shows
+ *   the saved post, and the CRDT merges it with what landed since (see
+ *   `replayHeldTree`, issue #100).
  * - `getEditorChanges` reports nothing until bootstrap, so an empty
  *   pre-sync document can never be dispatched into the editor as a
  *   mass deletion.
@@ -141,55 +146,158 @@ export function createYjsServerEngine(): SyncEngine {
 			};
 
 			/**
-			 * Applies what a person TYPED before the snapshot landed, and
-			 * nothing else. The buffered tree is compared with the saved post
-			 * as the editor parsed it; when the two differ only in rich text,
-			 * each difference is applied to the document's own text at the
-			 * same block position (see `findTypedTextSinceSave`). Any other
-			 * difference (a block added or removed, a non-text attribute) is
-			 * dropped, as is a tree with no saved content to compare against:
-			 * the window is one join round trip, and dropping such an edit
-			 * costs far less than merging a stale tree would.
+			 * Applies to `doc` what a person TYPED before the snapshot
+			 * landed, and nothing else (issue #57): the fallback of
+			 * replayHeldTree when no server row shows the saved post. The
+			 * buffered tree is compared with the saved post as the editor
+			 * parsed it; when the two differ only in rich text, each
+			 * difference is applied to the document's own text at the same
+			 * block position (see `findTypedTextSinceSave`). Any other
+			 * difference is dropped: with no version to apply it to, a
+			 * guess would cost a peer their work.
 			 *
-			 * One exception: a document that holds no blocks yet (an empty
-			 * post) has nothing a tree could collide with, so the buffered
-			 * edit is merged as it is. That keeps the first paragraph typed
-			 * into a new post, which the comparison above would drop (the
-			 * saved post parses to no blocks, the tree holds one).
+			 * @param doc  The document to edit.
+			 * @param held The buffered tree.
+			 */
+			const applyTypedText = ( doc: Y.Doc, held: EditorBlock[] ) => {
+				const yblocks = doc
+					.getMap( CRDT_RECORD_MAP_KEY )
+					.get( 'blocks' );
+				const edits =
+					'string' === typeof savedContent
+						? findTypedTextSinceSave( savedContent, held )
+						: null;
+				if ( ! edits || ! ( yblocks instanceof Y.Array ) ) {
+					return;
+				}
+				for ( const edit of edits ) {
+					applyTypedTextEdit( yblocks, edit );
+				}
+			};
+
+			/*
+			 * The server's rows as this document applied them, kept until a
+			 * buffered edit has been replayed: replayHeldTree rebuilds the
+			 * document at each row to find the one that shows the saved
+			 * post.
+			 */
+			const serverUpdates: Uint8Array[] = [];
+			const recordServerUpdate = (
+				update: Uint8Array,
+				origin: unknown
+			) => {
+				if ( YJS_SERVER_SESSION_ORIGIN === origin ) {
+					serverUpdates.push( update );
+				}
+			};
+			ydoc.on( 'updateV2', recordServerUpdate );
+
+			/**
+			 * Applies what a person did before the snapshot landed (typing,
+			 * a new or removed block) as an edit of the version they were
+			 * looking at: the saved post (issue #100).
+			 *
+			 * Runs once the whole first response has landed (the snapshot
+			 * row bootstraps the document, and the room's later rows follow
+			 * it in the same response). The document is rebuilt at each
+			 * server row, and the newest state that shows the saved post
+			 * (showsSavedPost) takes the person's edits (rebaseHeldTree)
+			 * through the ordinary local-change path. Only what that adds
+			 * to the rebuilt state goes into the document, so the CRDT
+			 * merges it with everything that landed since, as it would a
+			 * peer's concurrent edit.
+			 *
+			 * A document still empty after the response (an empty post)
+			 * takes the edit as it is. When no row shows the saved post (a
+			 * checkpoint newer than the save), only the typed text carries
+			 * over (applyTypedText, issue #57).
 			 *
 			 * @param entry The last buffered edit that carried the tree.
 			 */
-			const replayTypedText = ( entry: PendingLocalChange ) => {
+			const replayHeldTree = ( entry: PendingLocalChange ) => {
+				ydoc.off( 'updateV2', recordServerUpdate );
+				const updates = serverUpdates.splice( 0 );
+				const held = entry.changes.blocks;
+				const saved =
+					'string' === typeof savedContent
+						? parseSavedPost( savedContent )
+						: null;
 				const yblocks = recordMap.get( 'blocks' );
-				if (
-					! ( yblocks instanceof Y.Array ) ||
-					0 === yblocks.length
-				) {
-					applyChanges( entry.changes, entry.origin, entry.isSave );
-					return;
-				}
-				const after = entry.changes.blocks;
-				if (
-					! Array.isArray( after ) ||
-					'string' !== typeof savedContent
-				) {
-					return;
-				}
-				const edits = findTypedTextSinceSave(
-					savedContent,
-					after as EditorBlock[]
-				);
-				if ( ! edits || ( 0 === edits.length && ! entry.isSave ) ) {
-					return;
-				}
-				ydoc.transact( () => {
-					for ( const edit of edits ) {
-						applyTypedTextEdit( yblocks, edit );
+				const empty =
+					! ( yblocks instanceof Y.Array ) || 0 === yblocks.length;
+
+				/*
+				 * The edit is made on a copy and only the difference goes into
+				 * the document, as remote rows do. A local transaction here
+				 * would never reach the editor, which already shows the
+				 * document without the edit since the bootstrap; its next
+				 * change would then remove the edit again.
+				 */
+				let copy: Y.Doc | null = null;
+				let before: Uint8Array | null = null;
+				if ( empty ) {
+					copy = createYjsDoc( { objectType } );
+					Y.applyUpdateV2( copy, Y.encodeStateAsUpdateV2( ydoc ) );
+					before = Y.encodeStateVector( copy );
+					const target = copy;
+					// Without the selection: the merge would schedule a
+					// delayed cursor write on a copy that is about to go.
+					const { selection: _selection, ...changes } =
+						entry.changes as LocalChanges & { selection?: unknown };
+					target.transact( () =>
+						syncConfig.applyChangesToCRDTDoc(
+							target,
+							changes as LocalChanges
+						)
+					);
+				} else if ( Array.isArray( held ) && saved ) {
+					// The newest server row that shows the saved post.
+					const scratch = createYjsDoc( { objectType } );
+					let matched: Uint8Array | null = null;
+					for ( const update of updates ) {
+						Y.applyUpdateV2( scratch, update );
+						if (
+							showsSavedPost( saved, documentBlocks( scratch ) )
+						) {
+							matched = Y.encodeStateAsUpdateV2( scratch );
+						}
 					}
-					if ( entry.isSave ) {
-						markEntityAsSaved( ydoc );
-					}
-				}, entry.origin );
+					scratch.destroy();
+					copy = createYjsDoc( { objectType } );
+					Y.applyUpdateV2(
+						copy,
+						matched ?? Y.encodeStateAsUpdateV2( ydoc )
+					);
+					before = Y.encodeStateVector( copy );
+					const target = copy;
+					const edited = matched
+						? rebaseHeldTree(
+								saved,
+								held as EditorBlock[],
+								documentBlocks( target )
+						  )
+						: null;
+					target.transact( () => {
+						if ( edited ) {
+							syncConfig.applyChangesToCRDTDoc( target, {
+								blocks: edited,
+							} as LocalChanges );
+						} else if ( ! matched ) {
+							applyTypedText( target, held as EditorBlock[] );
+						}
+					} );
+				}
+				if ( copy && before ) {
+					const diff = Y.encodeStateAsUpdateV2( copy, before );
+					copy.destroy();
+					Y.applyUpdateV2( ydoc, diff, entry.origin );
+				}
+				if ( entry.isSave ) {
+					ydoc.transact(
+						() => markEntityAsSaved( ydoc ),
+						entry.origin
+					);
+				}
 			};
 
 			const onBootstrap = ( event: Y.YMapEvent< unknown > ) => {
@@ -211,7 +319,11 @@ export function createYjsServerEngine(): SyncEngine {
 					applyChanges( entry.changes, entry.origin, entry.isSave );
 				}
 				if ( lastTreeEntry ) {
-					replayTypedText( lastTreeEntry );
+					const entry = lastTreeEntry;
+					setTimeout( () => replayHeldTree( entry ), 0 );
+				} else {
+					ydoc.off( 'updateV2', recordServerUpdate );
+					serverUpdates.length = 0;
 				}
 			};
 			stateMap.observe( onBootstrap );
@@ -410,6 +522,35 @@ export function createYjsServerEngine(): SyncEngine {
 			};
 		},
 	};
+}
+
+/**
+ * The block key of core-data's save-markup mirror (`CRDT_BLOCK_SAVE_KEY` in
+ * the framework's crdt-blocks, which the editor runtime does not export).
+ */
+const BLOCK_SAVE_KEY = '_save';
+
+/**
+ * A document's blocks as editor blocks, without the save-markup mirror
+ * (doc-side bookkeeping the block merge leaves out of its comparison).
+ *
+ * @param doc A document.
+ */
+function documentBlocks( doc: Y.Doc ): EditorBlock[] {
+	const blocks = doc.getMap( CRDT_RECORD_MAP_KEY ).get( 'blocks' );
+	if ( ! ( blocks instanceof Y.Array ) ) {
+		return [];
+	}
+	const strip = ( list: EditorBlock[] ): EditorBlock[] =>
+		list.map( ( block ) => {
+			const { [ BLOCK_SAVE_KEY ]: _save, ...rest } =
+				block as EditorBlock & Record< string, unknown >;
+			return {
+				...rest,
+				innerBlocks: strip( block.innerBlocks ?? [] ),
+			} as EditorBlock;
+		} );
+	return strip( blocks.toJSON() as EditorBlock[] );
 }
 
 /**
