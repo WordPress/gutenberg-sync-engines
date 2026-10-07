@@ -36,9 +36,9 @@
  * memory, concurrency. Because the mu-plugin works with the plugin
  * DEACTIVATED, the baseline phase gets real server-side numbers too,
  * so CPU, worker share, and memory are true baseline/sync/delta
- * comparisons. Without the mu-plugin, or with SSE / WebSocket traffic,
- * server totals are unavailable. Raw request rows remain in the JSON;
- * they do not fully account for streams or persistent socket processes.
+ * comparisons. Opt-in timelines divide open-stream costs across phases
+ * with explicit sample and clock bounds. Missing timelines and WebSocket
+ * process costs remain unavailable. Raw rows and samples remain in JSON.
  *
  * Table rows: HTTP requests and socket frames per minute, payload bytes, PHP CPU per
  * minute, the share of one PHP worker held, options-cache
@@ -72,7 +72,8 @@
  *   metrics=    comma list to report: requests,traffic,cpu,workers,memory,cache,queries,diskio
  *               (default all)
  *   json=       write full results as JSON to this path
- *   headed=1    visible browser (debugging)
+ *   websocket-metrics= comma-separated /bench-metrics URLs for whole-process costs
+  headed=1    visible browser (debugging)
  *   --help      print the argument list and exit
  *
  * Requires a running environment with the plugin active at start (the
@@ -83,6 +84,7 @@
  * Environment: WP_BASE_URL / WP_USERNAME / WP_PASSWORD as usual.
  */
 import fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { chromium } from '@playwright/test';
 
@@ -102,6 +104,7 @@ import {
 	parseCliOptions,
 	restoreHostCache,
 	restoreSettings,
+	selectHostBenchmarkSite,
 	waitForSyncTraffic,
 } from '../transport/lib.mjs';
 
@@ -111,6 +114,16 @@ import {
 	matchesDocument,
 	serverCoverageLimits,
 } from './measurement.mjs';
+import {
+	clockRange,
+	validateTimelines,
+	measureTimelines,
+} from './timeline.mjs';
+import { checkMeasurementSupport } from './preflight.mjs';
+import {
+	sampleSocketProcesses,
+	socketProcessCosts,
+} from './websocket-costs.mjs';
 
 import {
 	deliveryOptions,
@@ -149,9 +162,10 @@ const HELP = `node tests/benchmarks/host/host-benchmark.mjs [key=value …]
   metrics=    comma list of table rows to print:
               requests,traffic,cpu,workers,memory,cache,queries,diskio (default all)
   json=       write full results as JSON to this path
+  websocket-metrics= comma-separated /bench-metrics URLs for whole-process costs
   headed=1    visible browser (debugging)
 
-Environment: WP_BASE_URL (default http://localhost:8889),
+Environment: WP_BASE_URL (default: this checkout’s running wp-env test site),
 WP_USERNAME/WP_PASSWORD (default admin/password).
 `;
 
@@ -177,6 +191,7 @@ const KNOWN_ARGS = [
 	'metrics',
 	'json',
 	'headed',
+	'websocket-metrics',
 ];
 const unknownArgs = Object.keys( opts ).filter(
 	( key ) => ! KNOWN_ARGS.includes( key )
@@ -200,6 +215,9 @@ if ( ENGINE.includes( ',' ) ) {
 	);
 	process.exit( 1 );
 }
+const SOCKET_METRICS = opts[ 'websocket-metrics' ]
+	? String( opts[ 'websocket-metrics' ] ).split( ',' )
+	: [];
 const TRANSPORT = String( opts.transport ?? 'current' );
 const CACHE = String( opts.cache ?? 'current' );
 const WAKE = String( opts.wake ?? 'auto' );
@@ -250,9 +268,22 @@ const POLLING_INTERVAL_SETTING = 'gutenberg_sync_engines_polling_interval';
  * @param {import('@playwright/test').BrowserContext} context  Browser context.
  * @param {{ scenario: string, approach: string }}    tag      Mutable labels.
  * @param {Set<Object>}                               measured Pages to tag.
+ * @param {Object}                                    tracking Shared request records for all peer contexts.
  */
-async function installGlobalTagging( context, tag, measured ) {
+async function installGlobalTagging(
+	context,
+	tag,
+	measured,
+	tracking = { issued: new Set(), expected: new Set(), requests: new Map() }
+) {
 	const origin = new URL( BASE ).origin;
+	const { issued, expected, requests } = tracking;
+	context.on( 'response', ( response ) => {
+		const id = response.headers()[ 'x-rtc-request-id' ];
+		if ( issued.has( id ) ) {
+			expected.add( id );
+		}
+	} );
 	await context.route(
 		( url ) => url.origin === origin,
 		async ( route ) => {
@@ -265,10 +296,31 @@ async function installGlobalTagging( context, tag, measured ) {
 			if ( ! page || ! measured.has( page ) ) {
 				return route.continue();
 			}
+			const id = randomUUID();
+			issued.add( id );
+			const url = new URL( route.request().url() );
+			const requestPath =
+				url.searchParams.get( 'rest_route' ) || url.pathname;
+			requests.set( id, { path: requestPath, scenario: tag.scenario } );
+			// Streams opened during setup can cross a measured period. Other
+			// setup requests use the MU response header: load-scripts.php and
+			// load-styles.php do not boot plugins and finish before measurement.
+			const phpRoute =
+				url.pathname.endsWith( '.php' ) ||
+				url.pathname.includes( '/wp-json/' ) ||
+				url.searchParams.has( 'rest_route' );
+			if (
+				requestPath.includes( '/wp-sync/v1/sse' ) ||
+				( tag.scenario.startsWith( 'host-' ) && phpRoute )
+			) {
+				expected.add( id );
+			}
 			await route.continue( {
 				headers: {
 					...route.request().headers(),
 					'x-rtc-test': '1',
+					'x-rtc-timeline': '1',
+					'x-rtc-request-id': id,
 					'x-rtc-scenario': tag.scenario,
 					'x-rtc-approach': tag.approach,
 					...( null !== POLL_OVERRIDE
@@ -278,6 +330,7 @@ async function installGlobalTagging( context, tag, measured ) {
 			} );
 		}
 	);
+	return { issued, expected, requests };
 }
 
 /**
@@ -589,12 +642,13 @@ async function saveViaEditor( page ) {
  * work), and optionally an idle span. Both phases run through this,
  * so the workload shape is identical; only who is present differs.
  *
- * @param {Object[]}      wins       Window records.
- * @param {Object}        tag        Mutable { scenario, approach } labels.
- * @param {Object}        rest       Administrative REST client.
- * @param {Array<string>} expected   Expected complete document.
- * @param {boolean}       withIdle   Run the idle span after editing.
- * @param {Function|null} sampleDbIo Database I/O counter sampler.
+ * @param {Object[]}      wins        Window records.
+ * @param {Object}        tag         Mutable { scenario, approach } labels.
+ * @param {Object}        rest        Administrative REST client.
+ * @param {Array<string>} expected    Expected complete document.
+ * @param {Function}      sampleClock Server clock probe.
+ * @param {boolean}       withIdle    Run the idle span after editing.
+ * @param {Function|null} sampleDbIo  Database I/O counter sampler.
  * @return {Promise<Object>} Per-window counter deltas and durations.
  */
 async function measurePhase(
@@ -602,6 +656,7 @@ async function measurePhase(
 	tag,
 	rest,
 	expected,
+	sampleClock,
 	withIdle = true,
 	sampleDbIo = null
 ) {
@@ -613,6 +668,8 @@ async function measurePhase(
 		await readEditors( wins.map( ( win ) => win.page ) )
 	).map( ( editor ) => editor.advisory );
 
+	const socketStart = await sampleSocketProcesses( SOCKET_METRICS );
+	const clockStart = await sampleClock();
 	const ioStart = sampleDbIo ? await sampleDbIo() : null;
 	tag.scenario = 'host-editing';
 	const editStart = Date.now();
@@ -632,6 +689,7 @@ async function measurePhase(
 	const editSync = wins.map( ( win ) => win.sync.snapshot() );
 	const ioEdit = sampleDbIo ? await sampleDbIo() : null;
 
+	const socketEdit = await sampleSocketProcesses( SOCKET_METRICS );
 	tag.scenario = 'host-idle';
 	const idleStart = Date.now();
 	if ( withIdle && IDLE_SECONDS > 0 ) {
@@ -642,6 +700,8 @@ async function measurePhase(
 	const idleSync = wins.map( ( win ) => win.sync.snapshot() );
 	const ioIdle = sampleDbIo ? await sampleDbIo() : null;
 	tag.scenario = 'setup';
+	const clockEnd = await sampleClock();
+	const socketIdle = await sampleSocketProcesses( SOCKET_METRICS );
 
 	// Verify outside the measurement windows: this administrative REST
 	// request must not inflate elapsed editing time or database I/O.
@@ -668,6 +728,23 @@ async function measurePhase(
 	return {
 		editMs,
 		idleMs,
+		clockProbes: [ clockStart, clockEnd ],
+		socketProcesses: {
+			editing: socketProcessCosts( socketStart, socketEdit ),
+			idle:
+				withIdle && IDLE_SECONDS > 0
+					? socketProcessCosts( socketEdit, socketIdle )
+					: [],
+			raw: {
+				start: socketStart,
+				editingEnd: socketEdit,
+				idleEnd: socketIdle,
+			},
+		},
+		windows: {
+			editing: { startMs: editStart, endMs: editStart + editMs },
+			idle: { startMs: idleStart, endMs: idleStart + idleMs },
+		},
 		saveOk: true,
 		contentVerified: true,
 		session:
@@ -876,9 +953,10 @@ function serverRates( agg, ms, persons ) {
  * @param {Array}         rows           All server rows (may be empty).
  * @param {string}        engine         Engine slug (the approach label).
  * @param {Array<string>} coverageLimits Reasons server totals are unavailable.
+ * @param {Object|null}   timeline       Validated server samples and clock.
  * @return {Object} { spans, job } for the report.
  */
-function summarize( phase, baseline, rows, engine, coverageLimits ) {
+function summarize( phase, baseline, rows, engine, coverageLimits, timeline ) {
 	// Preserve raw rows, but never present partial measurements as totals.
 	if ( coverageLimits.length ) {
 		rows = [];
@@ -960,6 +1038,32 @@ function summarize( phase, baseline, rows, engine, coverageLimits ) {
 			io: dbIoRates( phase.dbIo[ spanKey ], ms, WINDOWS ),
 			baseIo: dbIoRates( baseIoDelta, baseMs, basePersons ),
 		};
+		if ( timeline && ! coverageLimits.length ) {
+			const syncMeasured = measureTimelines(
+				timeline.rows.filter( ( row ) => row.approach === engine ),
+				[ phase.windows[ spanKey ] ],
+				timeline.clock,
+				WINDOWS
+			);
+			const baseWindows =
+				spanKey === 'editing'
+					? baseline.sessions.map(
+							( session ) => session.windows.editing
+					  )
+					: [ lastSession.windows.idle ];
+			const baseMeasured = measureTimelines(
+				timeline.rows.filter( ( row ) => row.approach === 'baseline' ),
+				baseWindows,
+				timeline.clock,
+				1
+			);
+			Object.assign( spans[ spanKey ], {
+				server: syncMeasured.rates,
+				baseServer: baseMeasured.rates,
+				serverTotals: syncMeasured.totals,
+				baseServerTotals: baseMeasured.totals,
+			} );
+		}
 	}
 
 	// Whole-job totals over the editing spans (saves included; idle
@@ -991,6 +1095,17 @@ function summarize( phase, baseline, rows, engine, coverageLimits ) {
 				: null,
 		},
 	};
+	if ( spans.editing.serverTotals ) {
+		for ( const [ side, total ] of [
+			[ 'sync', spans.editing.serverTotals ],
+			[ 'base', spans.editing.baseServerTotals ],
+		] ) {
+			job[ side ].serverCpuS = {
+				min: total.cpu_ms.min / 1000,
+				max: total.cpu_ms.max / 1000,
+			};
+		}
+	}
 	return { spans, job };
 }
 
@@ -1024,6 +1139,30 @@ async function main() {
 		);
 	}
 
+	for ( const endpoint of SOCKET_METRICS ) {
+		const url = new URL( endpoint );
+		if (
+			! [ 'http:', 'https:' ].includes( url.protocol ) ||
+			url.username ||
+			url.password ||
+			url.search ||
+			url.hash
+		) {
+			throw new Error(
+				'websocket-metrics requires HTTP(S) URLs without credentials, query strings, or fragments.'
+			);
+		}
+	}
+	selectHostBenchmarkSite();
+	console.log( `target: ${ BASE }` );
+	await checkMeasurementSupport( BASE );
+	const socketChecks = await sampleSocketProcesses( SOCKET_METRICS );
+	if ( socketChecks.some( ( entry ) => entry.error ) ) {
+		throw new Error(
+			'WebSocket measurement check failed before site changes. Enable GSE_BENCH_METRICS=1 on each selected server.'
+		);
+	}
+
 	// Playwright's own signal handling would close the browser the
 	// instant Ctrl+C lands, killing the REST transport the site-state
 	// restore below runs through — so signals are handled here instead.
@@ -1038,7 +1177,7 @@ async function main() {
 	const context = await browser.newContext();
 	const tag = { scenario: 'setup', approach: 'baseline' };
 	const measuredPages = new Set();
-	await installGlobalTagging( context, tag, measuredPages );
+	const tracking = await installGlobalTagging( context, tag, measuredPages );
 
 	let originalSettings = null;
 	let lastActive = null;
@@ -1140,6 +1279,19 @@ async function main() {
 				);
 				const data = await response.json();
 				return data?.available ? data : null;
+			} catch {
+				return null;
+			}
+		};
+
+		const sampleClock = async () => {
+			const sentMs = Date.now();
+			try {
+				const response = await adminPage.request.get(
+					`${ BASE }/?_rtctest=1&_rtcclock=1`
+				);
+				const data = await response.json();
+				return { ...data, sentMs, receivedMs: Date.now() };
 			} catch {
 				return null;
 			}
@@ -1286,7 +1438,12 @@ async function main() {
 		const storageState = await context.storageState();
 		const editorContext = async () => {
 			const peerContext = await browser.newContext( { storageState } );
-			await installGlobalTagging( peerContext, tag, measuredPages );
+			await installGlobalTagging(
+				peerContext,
+				tag,
+				measuredPages,
+				tracking
+			);
 			await allowPeers( peerContext, WINDOWS );
 			return peerContext;
 		};
@@ -1305,6 +1462,7 @@ async function main() {
 				tag,
 				rest,
 				expectedDocument( person + 1 ),
+				sampleClock,
 				isLast,
 				sampleDbIo
 			);
@@ -1396,6 +1554,7 @@ async function main() {
 				tag,
 				rest,
 				expectedDocument( WINDOWS ),
+				sampleClock,
 				true,
 				sampleDbIo
 			);
@@ -1453,11 +1612,45 @@ async function main() {
 			.catch( () => null );
 
 		// ---------------- Collect and report ----------------------------
-		const logResponse = await rest.get( '/rtc-test/v1/log' );
-		const serverRows =
-			200 === logResponse.status && Array.isArray( logResponse.data )
+		// A closed browser stream can occupy PHP until its next write notices
+		// the disconnect. Wait for every tagged PHP request's shutdown row.
+		let serverRows = [];
+		const collectionDeadline = Date.now() + 20000;
+		while ( true ) {
+			const logResponse = await rest.get( '/rtc-test/v1/log' );
+			serverRows = Array.isArray( logResponse.data )
 				? logResponse.data
 				: [];
+			const received = new Set(
+				serverRows.map( ( row ) => row.request_id )
+			);
+			if (
+				[ ...tracking.expected ].every( ( id ) =>
+					received.has( id )
+				) ||
+				Date.now() >= collectionDeadline
+			) {
+				break;
+			}
+			await adminPage.waitForTimeout( 250 );
+		}
+		let timeline = null;
+		let timelineError = null;
+		try {
+			const clock = clockRange( [
+				...baseline.sessions.flatMap(
+					( session ) => session.clockProbes
+				),
+				...phase.clockProbes,
+			] );
+			const rows = serverRows.filter( ( row ) =>
+				tracking.issued.has( row.request_id )
+			);
+			validateTimelines( rows, tracking.expected, clock );
+			timeline = { clock, rows };
+		} catch ( error ) {
+			timelineError = error.message;
+		}
 
 		const muPresent = serverRows.some(
 			( row ) => 'baseline' === row.approach
@@ -1465,6 +1658,7 @@ async function main() {
 
 		const coverageLimits = serverCoverageLimits( {
 			muMeasurement: muPresent,
+			timeline: Boolean( timeline ),
 			transport: wins.some(
 				( win ) => win.sync.snapshot().sseStreams > 0
 			)
@@ -1476,11 +1670,41 @@ async function main() {
 			} ),
 		} );
 
+		if ( timelineError ) {
+			coverageLimits.push( timelineError );
+		}
+
 		const report = {
 			schemaVersion: 3,
 			session: phase.session,
 			measurement: {
 				contentVerified: true,
+				missingRequests: [ ...tracking.expected ]
+					.filter(
+						( id ) =>
+							! serverRows.some(
+								( row ) => row.request_id === id
+							)
+					)
+					.map( ( id ) => ( {
+						requestId: id,
+						...tracking.requests.get( id ),
+					} ) ),
+				timeline: timeline
+					? {
+							clock: timeline.clock,
+							requests: timeline.rows.length,
+							samples: timeline.rows.reduce(
+								( sum, row ) =>
+									sum + row.timeline.samples.length,
+								0
+							),
+							truncatedRequests: timeline.rows.filter(
+								( row ) => row.timeline.truncated
+							).length,
+							method: 'Timestamp overlap for worker time; lower/upper bounds for CPU and query work across sample and clock boundaries.',
+					  }
+					: null,
 				serverCoverageLimits: coverageLimits,
 				traffic:
 					'HTTP body, SSE, and WebSocket payload bytes; excludes headers, protocol overhead, compression effects, and WebRTC.',
@@ -1494,6 +1718,7 @@ async function main() {
 				editSeconds: EDIT_SECONDS,
 				idleSeconds: IDLE_SECONDS,
 				muMeasurement: muPresent,
+				timeline: Boolean( timeline ),
 				server: serverEnv,
 				cache: CACHE,
 				wake: WAKE,
@@ -1513,7 +1738,8 @@ async function main() {
 					baseline,
 					serverRows,
 					engine,
-					coverageLimits
+					coverageLimits,
+					timeline
 				),
 				detail: phase,
 			},
@@ -1540,23 +1766,39 @@ async function main() {
  */
 function printReport( report ) {
 	const env = report.environment;
-	const fmt = ( value, decimals ) =>
-		null === value || undefined === value ? '—' : value.toFixed( decimals );
-	const delta = ( base, sync, decimals ) =>
-		null === base || undefined === base || null === sync
-			? '—'
-			: `${ sync - base >= 0 ? '+' : '' }${ ( sync - base ).toFixed(
-					decimals
-			  ) }`;
-	const pct = ( base, sync ) => {
-		if ( null === base || undefined === base || null === sync ) {
+	const bounds = ( value ) =>
+		typeof value === 'number' ? { min: value, max: value } : value;
+	const fmt = ( value, decimals ) => {
+		if ( value === null || value === undefined ) {
 			return '—';
 		}
-		if ( 0 === base ) {
-			return 0 === sync ? '+0%' : '—';
+		const { min, max } = bounds( value );
+		return min === max
+			? min.toFixed( decimals )
+			: `${ min.toFixed( decimals ) }–${ max.toFixed( decimals ) }`;
+	};
+	const delta = ( base, sync, decimals ) => {
+		if (
+			base === null ||
+			base === undefined ||
+			sync === null ||
+			sync === undefined
+		) {
+			return '—';
 		}
-		const value = Math.round( ( ( sync - base ) / base ) * 100 );
-		return `${ value >= 0 ? '+' : '' }${ value }%`;
+		const a = bounds( base );
+		const b = bounds( sync );
+		return fmt( { min: b.min - a.max, max: b.max - a.min }, decimals );
+	};
+	const pct = ( base, sync ) => {
+		if (
+			typeof base !== 'number' ||
+			typeof sync !== 'number' ||
+			base === 0
+		) {
+			return '—';
+		}
+		return `${ Math.round( ( ( sync - base ) / base ) * 100 ) }%`;
 	};
 
 	// One markdown table per span: the first column names the span
@@ -1678,7 +1920,7 @@ function printReport( report ) {
 			const base = span.baseServer;
 			const sync = span.server;
 			rows.push( [
-				'peak PHP memory MiB/request',
+				'peak PHP memory MiB/overlapping request',
 				base ? fmt( base.peakMemoryMaxMb, 1 ) : '—',
 				sync ? fmt( sync.peakMemoryMaxMb, 1 ) : '—',
 				base && sync
@@ -1703,6 +1945,44 @@ function printReport( report ) {
 		renderTable( 'metric (idle)', buildSpanRows( entry, 'idle' ) );
 	}
 
+	if ( entry.detail.socketProcesses.editing.length ) {
+		console.log(
+			'\nWebSocket processes: whole-process costs; sampled periods bracket editing and idle.'
+		);
+		console.log(
+			'Includes unrelated clients and measurement overhead. Memory is sampled at the boundaries, not a peak. Not added to PHP totals.'
+		);
+		const sessions = [
+			...report.baseline.detail.sessions.map( ( session, index ) => [
+				`baseline ${ index + 1 }`,
+				session,
+			] ),
+			[ 'sync', entry.detail ],
+		];
+		for ( const [ label, session ] of sessions ) {
+			for ( const period of [ 'editing', 'idle' ] ) {
+				for ( const cost of session.socketProcesses[ period ] ) {
+					console.log(
+						`${ label } ${ period } ${ cost.endpoint }: ${
+							cost.error ||
+							`${ cost.sampledMs.toFixed(
+								0
+							) } ms sampled; CPU ${ cost.cpuMs.toFixed(
+								1
+							) } ms; ${ cost.queries } queries; ${
+								cost.memoryKind
+							} MiB ${ (
+								cost.memoryStartBytes / 1048576
+							).toFixed( 1 ) } to ${ (
+								cost.memoryEndBytes / 1048576
+							).toFixed( 1 ) }`
+						}`
+					);
+				}
+			}
+		}
+	}
+
 	// Stats: single-value results that fit no table. (The whole-job
 	// totals stay in the JSON report as engine.job.)
 	console.log( '' );
@@ -1713,6 +1993,14 @@ function printReport( report ) {
 	for ( const reason of report.measurement.serverCoverageLimits ) {
 		console.log( `server totals unavailable: ${ reason }` );
 	}
+	if ( report.measurement.timeline ) {
+		console.log(
+			`server measurement: ${ report.measurement.timeline.method }`
+		);
+		console.log(
+			'Memory is the peak of overlapping requests, including measurement overhead; it is not a per-phase allocation.'
+		);
+	}
 	console.log( 'stats:' );
 	if ( entry.roomSize ) {
 		console.log(
@@ -1721,11 +2009,12 @@ function printReport( report ) {
 			} rows, ${ Math.round( entry.roomSize.bytes / 1024 ) } KiB`
 		);
 	}
-	const editShare = entry.spans.editing.server?.workerShare;
+	const share = entry.spans.editing.server?.workerShare;
+	const editShare = typeof share === 'number' ? share : share?.max;
 	if ( editShare > 0 ) {
 		console.log(
-			`  derived capacity: ~${ Math.floor(
-				1 / editShare
+			`  derived capacity: ~${ ( 1 / editShare ).toFixed(
+				2
 			) } editors per PHP worker (estimate without queueing or spare capacity; not a tested limit)`
 		);
 	}

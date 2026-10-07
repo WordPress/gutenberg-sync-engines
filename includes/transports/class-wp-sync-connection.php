@@ -324,6 +324,7 @@ if ( ! class_exists( 'WP_Sync_Connection' ) ) {
 		public function send_http_response( int $status_code, string $reason, string $body = '' ): void {
 			$response = sprintf( "HTTP/1.1 %d %s\r\n", $status_code, $reason )
 				. "Content-Type: text/plain\r\n"
+				. "Cache-Control: no-store\r\n"
 				. 'Content-Length: ' . strlen( $body ) . "\r\n"
 				. "Connection: close\r\n\r\n"
 				. $body;

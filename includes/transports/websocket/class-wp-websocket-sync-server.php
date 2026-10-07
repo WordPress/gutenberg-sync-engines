@@ -289,6 +289,43 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 		private float $last_room_scan_at = 0;
 
 		/**
+		 * Unique identity for benchmark snapshots from this server instance.
+		 *
+		 * @var string
+		 */
+		private string $benchmark_id = '';
+
+		/**
+		 * Opt-in whole-process counters. No credentials or room data are exposed.
+		 *
+		 * @return array|null Counters, or null when measurement is disabled.
+		 */
+		public function benchmark_snapshot(): ?array {
+			if ( '1' !== getenv( 'GSE_BENCH_METRICS' ) ) {
+				return null;
+			}
+			global $wpdb;
+			if ( '' === $this->benchmark_id ) {
+				$this->benchmark_id = wp_generate_uuid4();
+			}
+			$usage = function_exists( 'getrusage' ) ? getrusage() : false;
+			$cpu   = false === $usage ? null :
+				( $usage['ru_utime.tv_sec'] + $usage['ru_stime.tv_sec'] ) * 1000 +
+				( $usage['ru_utime.tv_usec'] + $usage['ru_stime.tv_usec'] ) / 1000;
+			return array(
+				'version'      => 1,
+				'process_id'   => $this->benchmark_id,
+				'kind'         => 'php-websocket',
+				'elapsed_ms'   => hrtime( true ) / 1000000,
+				'cpu_ms'       => $cpu,
+				'queries'      => (int) $wpdb->num_queries,
+				'memory_bytes' => memory_get_usage( true ),
+				'memory_kind'  => 'php-allocated',
+			);
+		}
+
+
+		/**
 		 * Constructor.
 		 *
 		 * @since 7.4.0
@@ -731,6 +768,13 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 			$is_upgrade = isset( $headers['sec-websocket-key'] )
 				&& isset( $headers['upgrade'] )
 				&& 'websocket' === strtolower( $headers['upgrade'] );
+
+			if ( ! $is_upgrade && '/bench-metrics' === $request['path'] && 'GET' === $request['method'] ) {
+				$snapshot = $this->benchmark_snapshot();
+				$conn->send_http_response( null === $snapshot ? 404 : 200, null === $snapshot ? 'Not Found' : 'OK', null === $snapshot ? '' : wp_json_encode( $snapshot ) );
+				$this->finish_or_mark_closing( $key );
+				return;
+			}
 
 			// Plain HTTP health check used by test harnesses and monitoring.
 			if ( ! $is_upgrade && '/health' === $request['path'] && 'GET' === $request['method'] ) {

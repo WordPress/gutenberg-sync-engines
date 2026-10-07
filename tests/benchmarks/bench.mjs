@@ -131,7 +131,7 @@ tests/debugging/README.md):
 
 Arguments are --key=value flags. Arguments other than --suite= are
 forwarded to the suite's script; each script's header documents its full
-list. Environment: WP_BASE_URL (default http://localhost:8889),
+list. Environment: WP_BASE_URL (host default: this checkout’s running wp-env test site; transport default: http://localhost:8889),
 WP_USERNAME/WP_PASSWORD.
 
 Examples:
