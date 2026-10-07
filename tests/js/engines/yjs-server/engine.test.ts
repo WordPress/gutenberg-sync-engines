@@ -18,6 +18,15 @@ import {
 // eslint-disable-next-line import/no-unresolved -- Provided at runtime as wp.sync.
 import type { SyncConfig } from '@wordpress/sync';
 
+// The engine reads the block library only to carry a pre-bootstrap block
+// tree over (block registration is editor state, and the subtree's copy
+// pulls in an ESM-only dependency under Jest); none of these tests buffer
+// a tree, so a stub library suffices.
+jest.mock( '@wordpress/blocks', () => ( {
+	getBlockType: () => undefined,
+	parse: () => [],
+} ) );
+
 /**
  * A minimal sync config: changes are applied as record-map keys, and editor
  * changes are the record map's JSON.

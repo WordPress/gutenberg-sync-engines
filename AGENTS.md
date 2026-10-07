@@ -975,7 +975,25 @@ applies.
   sourced split. Genesis blocks must still set `isValid: true` or the
   editor renders them as invalid-content recovery blocks (has bitten) —
   and a container-shaped variant of exactly that symptom is open, see
-  issue #38.
+  issue #38. A LATE JOINER'S pre-bootstrap keystroke (typed before the
+  first snapshot lands) carries the editor's WHOLE tree, parsed from the
+  SAVED post; the engine never merges that tree (issue #57: it
+  re-inserted a peer's saved text or deleted a peer's unsaved text
+  whenever the first snapshot row differed from the saved post). It
+  compares the tree with `parse(savedContent)` kept from `hydrate`,
+  and applies only the rich-text differences straight to the
+  document's own `Y.Text` at the same block position (prefix/suffix
+  diff; a deletion only where the document still holds those
+  characters, an insertion clamped to the text's end). A tree that
+  differs in any other way (block added/removed, non-text attribute,
+  no saved content) is DROPPED — EXCEPT when the document holds no
+  blocks at the first snapshot row (an empty post): nothing can
+  collide, so the buffered edit merges as is and the first paragraph
+  typed into a new post survives (the verifier caught that regression;
+  the late-join spec's empty-post case pins it). The replay runs
+  against the first snapshot row, so a keystroke typed after a peer's
+  just-saved text can land before or after it (the merge's call; the
+  late-join e2e spec accepts both).
 - **de-rtc known gaps** (docs/engine-comparison.md has the full list):
   every block carries a durable `metadata.syncId` (intent-log's scheme;
   `WP_De_RTC_Block_Identity` stamps genesis deterministically and
