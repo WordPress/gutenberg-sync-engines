@@ -35,6 +35,7 @@ import {
 	createAwarenessDoc,
 } from '../../shared/awareness-sync';
 import { registerAwareness } from '../../awareness/registry';
+import { getRawContentString } from '../../shared/raw-content';
 import {
 	createDeRtcDocBridge,
 	DE_RTC_REMOTE_ORIGIN,
@@ -367,9 +368,17 @@ export function createDeRtcEngine(): SyncEngine & {
 				record.apply( changes, DE_RTC_RESTORE_ORIGIN );
 			};
 
+			// The loaded record's raw content, and whether edits made on it
+			// before the first sync response were replayed at bootstrap:
+			// the first proposal then declares the version that shows it
+			// (see heldEditsSavedContent in the session).
+			let savedContent: string | undefined;
+			let heldEditsReplayed = false;
+
 			bridge.onBootstrap( () => {
 				const pending = pendingLocalChanges;
 				pendingLocalChanges = [];
+				heldEditsReplayed = pending.length > 0;
 				for ( const entry of pending ) {
 					applyEditorChanges( entry.changes, entry.origin );
 				}
@@ -552,6 +561,10 @@ export function createDeRtcEngine(): SyncEngine & {
 						bridge,
 						review,
 						undoFeed,
+						heldEditsSavedContent: () =>
+							heldEditsReplayed && undefined !== savedContent
+								? savedContent
+								: null,
 						// The Save/Sync inversion, stage 2:
 						// commits ride the autosave endpoint; the
 						// transport stays advisory. Null for types
@@ -567,9 +580,12 @@ export function createDeRtcEngine(): SyncEngine & {
 					return codec;
 				},
 
-				hydrate() {
-					// Deliberately empty: the server's genesis snapshot is
-					// the document's origin (see the engine docblock).
+				hydrate( loaded ) {
+					// No seeding: the server's genesis snapshot is the
+					// document's origin (see the engine docblock). The
+					// content is kept only as the base of edits made before
+					// the first sync response.
+					savedContent = getRawContentString( loaded?.content );
 				},
 
 				applyLocalChanges( changes, origin ) {

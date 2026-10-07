@@ -31,6 +31,7 @@ import { createYjsDoc, markEntityAsSaved, serializeCrdtDoc } from './doc';
 import { docContainsSnapshot, encodeDocSnapshot } from './snapshot';
 import { createUndoManager } from './undo';
 import { registerAwareness } from '../../awareness/registry';
+import { getRawContentString } from '../../shared/raw-content';
 import {
 	findTypedTextSinceSave,
 	parseSavedPost,
@@ -621,32 +622,6 @@ function applyTypedTextEdit(
  * document genuinely diverges from the record.
  */
 const REDUNDANT_DISPATCH_KEYS = new Set( [ 'blocks', 'content', 'selection' ] );
-
-/**
- * Extract the raw content string from an edited record's `content` property,
- * which is represented either as a plain string or as an object with a `raw`
- * property. Returns undefined for any other shape, notably the lazy serializer
- * function that replaces it once the editor has registered its own content
- * edit.
- *
- * @param value The edited record's `content` property.
- */
-function getRawContentString( value: unknown ): string | undefined {
-	if ( 'string' === typeof value ) {
-		return value;
-	}
-
-	if (
-		value &&
-		'object' === typeof value &&
-		'raw' in value &&
-		'string' === typeof value.raw
-	) {
-		return value.raw;
-	}
-
-	return undefined;
-}
 
 /**
  * Determine whether a reported change set merely re-states what the editor
