@@ -1272,7 +1272,7 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 
 		$materialized = $this->engine()->materialize( $this->room() );
 		$this->assertStringNotContainsString( '<script>', $materialized );
-		$this->assertStringContainsString( 'alert(1)', $materialized, 'kses strips tags, not their text content' );
+		$this->assertStringContainsString( 'Hello world', $materialized, 'kses strips the markup, not the paragraph' );
 
 		// A fresh peer converges on the sanitized content.
 		$doc_b = $this->client_doc_from_response(
