@@ -319,7 +319,9 @@ The framework/plugin split is complete: the framework ships **neither** engines
   - `shared/` — client code the base provides to more than one engine
     (no engine folder imports another engine's folder):
     `shared/awareness-sync.ts` — presence bridging used by all three
-    engines.
+    engines; `shared/typed-text.ts` — what a person typed before the
+    first sync response, compared with the saved post (yjs-server and
+    intent-log).
   - `providers/{http-polling,sse,sse-daemon,websocket}/` — transports
     (sse and sse-daemon reuse the polling manager, swapping only its
     receive half for the stream).
