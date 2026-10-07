@@ -1849,6 +1849,16 @@ export function createIntentLogManager( debug = false ): SyncManager & {
 			} finally {
 				state.capturing = false;
 			}
+			/*
+			 * Show the decision at once. The change handler skipped the
+			 * push while the batch was authored under the capture guard,
+			 * and the next push would otherwise wait for the server's
+			 * answer (a poll away): the reviewer watched the old blocks
+			 * stay for a second after accepting. A decision comes from a
+			 * dialog button, not from inside update(), so a push made here
+			 * reaches the editor.
+			 */
+			syncEditor( state );
 		};
 		const entity: EntityConflicts = {
 			list: () => conflictRecords().map( ( parked ) => parked.conflict ),

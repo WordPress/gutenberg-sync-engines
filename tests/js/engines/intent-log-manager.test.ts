@@ -2715,7 +2715,7 @@ describe( 'intent-log manager', () => {
 	} );
 
 	it( 'accept authors the replacement as ordinary intents, then closes every member, in that order', async () => {
-		const { manager, transport } = await loadManagedEntity();
+		const { manager, handlers, transport } = await loadManagedEntity();
 
 		transport.captured.session!.receiveUpdate(
 			snapshotRow( [
@@ -2762,10 +2762,17 @@ describe( 'intent-log manager', () => {
 				innerBlocks: [],
 			},
 		] );
+		handlers.edits.length = 0;
 		manager.conflicts.resolveConflict( 'postType/post', '1', open[ 0 ].id, {
 			action: 'accept',
 			content: replacement,
 		} );
+
+		// The canvas shows the decision at once, not a poll later.
+		const pushed = handlers.edits.at( -1 ) as {
+			blocks: Array< { attributes: Record< string, unknown > } >;
+		};
+		expect( pushed.blocks[ 0 ].attributes.content ).toBe( 'Hello, merged' );
 
 		const sent = transport.captured.sent.map( ( update ) => ( {
 			type: update.type,
