@@ -1,7 +1,19 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from 'vitest';
 import { Y } from '@wordpress/sync';
 import { RichTextData } from '@wordpress/rich-text';
+import { registerBlockType, unregisterBlockType } from '@wordpress/blocks';
+import { createElement } from '@wordpress/element';
 import {
+	CRDT_BLOCK_SAVE_KEY,
 	mergeCrdtBlocks,
 	mergeRichTextUpdate,
 	type Block,
@@ -1289,6 +1301,64 @@ describe( 'crdt-blocks', () => {
 			const attrs2 = block2.get( 'attributes' ) as YBlockAttributes;
 			expect( attrs2.has( 'content' ) ).toBe( true );
 			expect( attrs2.has( 'caption' ) ).toBe( false );
+		} );
+	} );
+
+	describe( 'saved HTML mirror', () => {
+		const name = 'test/save-mirror';
+
+		beforeAll( () => {
+			registerBlockType( name, {
+				apiVersion: 3,
+				title: 'Save mirror',
+				category: 'text',
+				attributes: {
+					content: { type: 'string' },
+					className: { type: 'string' },
+				},
+				save: ( { attributes } ) =>
+					createElement(
+						'div',
+						{ className: attributes.className },
+						attributes.content
+					),
+			} );
+		} );
+
+		afterAll( () => {
+			unregisterBlockType( name );
+		} );
+
+		it( 'keeps the saved HTML when an edit merges over the block', () => {
+			mergeCrdtBlocks(
+				yblocks,
+				[
+					{
+						name,
+						attributes: { content: 'One', className: 'a' },
+						innerBlocks: [],
+					},
+				],
+				null
+			);
+			expect( yblocks.get( 0 ).get( CRDT_BLOCK_SAVE_KEY ) ).toBe(
+				'<div class="a">One</div>'
+			);
+
+			mergeCrdtBlocks(
+				yblocks,
+				[
+					{
+						name,
+						attributes: { content: 'Two', className: 'a' },
+						innerBlocks: [],
+					},
+				],
+				null
+			);
+			expect( yblocks.get( 0 ).get( CRDT_BLOCK_SAVE_KEY ) ).toBe(
+				'<div class="a">Two</div>'
+			);
 		} );
 	} );
 
