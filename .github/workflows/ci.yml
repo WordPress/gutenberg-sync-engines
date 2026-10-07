@@ -72,11 +72,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # An UNBUILT gutenberg.php refuses to load its lib/ (the framework),
-      # so the plugin under test finds no WP_Sync_* contracts and the
-      # PHPUnit bootstrap dies with "Interface WP_Sync_Engine not found".
-      # The subtree build is required even for the PHP-only test path.
-      - uses: ./.github/actions/setup
+      # PHPUnit needs the Gutenberg build too: an unbuilt gutenberg.php
+      # skips its lib/, and the bootstrap dies with "Interface
+      # WP_Sync_Engine not found".
+      - name: Set up dependencies and the Gutenberg build
+        uses: ./.github/actions/setup
 
       # phpcs and the y-php conformance suite run on the runner's PHP
       # directly (no WordPress). The automerge-php suite does NOT — see
@@ -166,7 +166,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: ./.github/actions/setup
+      - name: Set up dependencies and the Gutenberg build
+        uses: ./.github/actions/setup
 
       - name: Build the plugin bundle
         run: npm run build
@@ -201,7 +202,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: ./.github/actions/setup
+      - name: Set up dependencies and the Gutenberg build
+        uses: ./.github/actions/setup
         with:
           playwright: 'true'
 
@@ -236,7 +238,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: ./.github/actions/setup
+      - name: Set up dependencies and the Gutenberg build
+        uses: ./.github/actions/setup
         with:
           playwright: 'true'
 
@@ -269,7 +272,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: ./.github/actions/setup
+      - name: Set up dependencies and the Gutenberg build
+        uses: ./.github/actions/setup
         with:
           playwright: 'true'
 
