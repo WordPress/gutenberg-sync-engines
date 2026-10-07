@@ -1344,26 +1344,29 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 	}
 
 	/**
-	 * A filtered author writes a script into the first block: the kses
-	 * lane sanitizes it and holds what it stripped.
+	 * One client sends one edit: reads the room as a client, applies the
+	 * edit to the document it got, and hands the update in.
 	 *
-	 * @param string $markup The markup the author types.
-	 * @return array The open hold.
+	 * @param int                       $user_id   The user sending it.
+	 * @param int                       $client_id The client sending it.
+	 * @param callable                  $edit      The edit, given the client's document.
+	 * @param int|null                  $read_as   Read the room as this client
+	 *                                             instead: one that sent nothing,
+	 *                                             so the document holds every
+	 *                                             row (a client's own rows are
+	 *                                             left out of its reads).
+	 * @param WP_Yjs_Server_Engine|null $engine    The engine that takes the edit.
+	 * @return array The handle_updates() result.
 	 */
-	private function raise_hold( string $markup = ' <script>alert(1)</script>' ): array {
-		$response = $this->engine()->get_updates_since( $this->room(), 101, 0, array() );
+	private function send_edit( int $user_id, int $client_id, callable $edit, ?int $read_as = null, ?WP_Yjs_Server_Engine $engine = null ): array {
+		wp_set_current_user( $user_id );
+		$response = $this->engine()->get_updates_since( $this->room(), $read_as ?? $client_id, 0, array() );
 		$doc      = $this->client_doc_from_response( $response );
+		$update   = $this->encode_edit( $doc, $edit );
 
-		wp_set_current_user( self::$author_id );
-		$update = $this->encode_edit(
-			$doc,
-			function ( $doc ) use ( $markup ) {
-				$this->first_block_content( $doc )->insert( 11, $markup );
-			}
-		);
-		$this->engine()->handle_updates(
+		return ( $engine ?? $this->engine() )->handle_updates(
 			$this->room(),
-			101,
+			$client_id,
 			(int) $response['end_cursor'],
 			array(
 				array(
@@ -1372,6 +1375,23 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 				),
 			),
 			array()
+		);
+	}
+
+	/**
+	 * A filtered author writes a script into the first block: the kses
+	 * lane sanitizes it and holds what it stripped.
+	 *
+	 * @param string $markup The markup the author types.
+	 * @return array The open hold.
+	 */
+	private function raise_hold( string $markup = ' <script>alert(1)</script>' ): array {
+		$this->send_edit(
+			self::$author_id,
+			101,
+			function ( $doc ) use ( $markup ) {
+				$this->first_block_content( $doc )->insert( 11, $markup );
+			}
 		);
 
 		$holds = $this->engine()->get_open_holds( $this->room() );
@@ -1452,26 +1472,12 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 	 * @return void
 	 */
 	private function peer_edits_the_held_block( string $text ): void {
-		wp_set_current_user( self::$editor_id );
-		$response = $this->engine()->get_updates_since( $this->room(), 202, 0, array() );
-		$doc      = $this->client_doc_from_response( $response );
-		$update   = $this->encode_edit(
-			$doc,
+		$this->send_edit(
+			self::$editor_id,
+			202,
 			function ( $doc ) use ( $text ) {
 				$this->first_block_content( $doc )->insert( 0, $text );
 			}
-		);
-		$this->engine()->handle_updates(
-			$this->room(),
-			202,
-			(int) $response['end_cursor'],
-			array(
-				array(
-					'type' => 'update',
-					'data' => $update,
-				),
-			),
-			array()
 		);
 	}
 
@@ -1621,26 +1627,7 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 		$first = $this->raise_hold();
 
 		// The author catches up on the sanitized block and tries again.
-		$response = $this->engine()->get_updates_since( $this->room(), 101, 0, array() );
-		$doc      = $this->client_doc_from_response( $response );
-		$update   = $this->encode_edit(
-			$doc,
-			function ( $doc ) {
-				$this->first_block_content( $doc )->insert( 0, '<script>alert(2)</script>' );
-			}
-		);
-		$this->engine()->handle_updates(
-			$this->room(),
-			101,
-			(int) $response['end_cursor'],
-			array(
-				array(
-					'type' => 'update',
-					'data' => $update,
-				),
-			),
-			array()
-		);
+		$this->author_tries_the_held_block_again( $this->engine(), '<script>alert(2)</script>' );
 
 		$holds = array_values( $this->engine()->get_open_holds( $this->room() ) );
 		$this->assertCount( 1, $holds, 'one review task per author and block' );
@@ -1667,26 +1654,14 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 	 * @return void
 	 */
 	private function author_tries_the_held_block_again( WP_Yjs_Server_Engine $engine, string $markup ): void {
-		wp_set_current_user( self::$author_id );
-		$response = $this->engine()->get_updates_since( $this->room(), 101, 0, array() );
-		$doc      = $this->client_doc_from_response( $response );
-		$update   = $this->encode_edit(
-			$doc,
+		$this->send_edit(
+			self::$author_id,
+			101,
 			function ( $doc ) use ( $markup ) {
 				$this->first_block_content( $doc )->insert( 0, $markup );
-			}
-		);
-		$engine->handle_updates(
-			$this->room(),
-			101,
-			(int) $response['end_cursor'],
-			array(
-				array(
-					'type' => 'update',
-					'data' => $update,
-				),
-			),
-			array()
+			},
+			null,
+			$engine
 		);
 	}
 
@@ -1749,24 +1724,7 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 	 * @return void
 	 */
 	private function author_edits( callable $edit ): void {
-		wp_set_current_user( self::$author_id );
-		// Read as a client that has sent nothing, so the document holds
-		// every row. A client's own rows are left out of its reads.
-		$response = $this->engine()->get_updates_since( $this->room(), 909, 0, array() );
-		$doc      = $this->client_doc_from_response( $response );
-		$update   = $this->encode_edit( $doc, $edit );
-		$result   = $this->engine()->handle_updates(
-			$this->room(),
-			101,
-			(int) $response['end_cursor'],
-			array(
-				array(
-					'type' => 'update',
-					'data' => $update,
-				),
-			),
-			array()
-		);
+		$result = $this->send_edit( self::$author_id, 101, $edit, 909 );
 		$this->assertSame( array( array( 'status' => 'applied' ) ), $result['dispositions'] );
 	}
 
@@ -1858,26 +1816,12 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 	 * @return void
 	 */
 	private function second_filtered_author_edits_the_first_block( string $markup ): void {
-		wp_set_current_user( self::$contributor_id );
-		$response = $this->engine()->get_updates_since( $this->room(), 303, 0, array() );
-		$doc      = $this->client_doc_from_response( $response );
-		$update   = $this->encode_edit(
-			$doc,
+		$result = $this->send_edit(
+			self::$contributor_id,
+			303,
 			function ( $doc ) use ( $markup ) {
 				$this->first_block_content( $doc )->insert( 0, $markup );
 			}
-		);
-		$result   = $this->engine()->handle_updates(
-			$this->room(),
-			303,
-			(int) $response['end_cursor'],
-			array(
-				array(
-					'type' => 'update',
-					'data' => $update,
-				),
-			),
-			array()
 		);
 		$this->assertSame( array( array( 'status' => 'applied' ) ), $result['dispositions'] );
 	}
@@ -2055,22 +1999,7 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 	 * @return void
 	 */
 	private function editor_edits( callable $edit ): void {
-		wp_set_current_user( self::$editor_id );
-		$response = $this->engine()->get_updates_since( $this->room(), 707, 0, array() );
-		$doc      = $this->client_doc_from_response( $response );
-		$update   = $this->encode_edit( $doc, $edit );
-		$result   = $this->engine()->handle_updates(
-			$this->room(),
-			202,
-			(int) $response['end_cursor'],
-			array(
-				array(
-					'type' => 'update',
-					'data' => $update,
-				),
-			),
-			array()
-		);
+		$result = $this->send_edit( self::$editor_id, 202, $edit, 707 );
 		$this->assertSame( array( array( 'status' => 'applied' ) ), $result['dispositions'] );
 	}
 

@@ -8,16 +8,10 @@
  * edited the merged result by hand" is one click. The real editor's side
  * of this is covered in merge-dialog.test.jsx.
  */
-import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import {
-	createBlock,
-	getBlockTypes,
-	serialize,
-	unregisterBlockType,
-} from '@wordpress/blocks';
-import { registerCoreBlocks } from '@wordpress/block-library';
+import { createBlock, serialize } from '@wordpress/blocks';
 import { MergeDialogBody } from '../../../src/review/components/merge-dialog';
 import { TableMergeDialogBody } from '../../../src/review/components/table-merge-dialog';
 import { PARAGRAPH_CONFLICT, TABLE_GRIDS, paragraph } from './fixtures';
@@ -47,13 +41,9 @@ jest.mock( '../../../src/review/components/merged-result-editor', () => ( {
 	},
 } ) );
 
-beforeAll( () => {
-	registerCoreBlocks();
-} );
+import { withCoreBlocks } from './core-blocks';
 
-afterAll( () => {
-	getBlockTypes().forEach( ( { name } ) => unregisterBlockType( name ) );
-} );
+withCoreBlocks();
 
 const merged = () => screen.getByTestId( 'merged' );
 

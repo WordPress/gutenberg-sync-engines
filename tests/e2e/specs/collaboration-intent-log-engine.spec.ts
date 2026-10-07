@@ -2,12 +2,17 @@
  * WordPress dependencies
  */
 import type { RequestUtils } from '@wordpress/e2e-test-utils-playwright';
-import type { FrameLocator, Page } from '@playwright/test';
 
 /**
  * Internal dependencies
  */
 import { test, expect } from '../config/collaboration-fixtures';
+import {
+	CONFLICT_CARD,
+	decideConflictCards,
+	findConflictCard,
+	openConflictDialog,
+} from '../config/review-cards';
 // The engine's deterministic genesis id function (vector-pinned against the
 // PHP twin) — imported directly so the spec asserts EXACT id agreement.
 import { genesisSyncId } from '../../js/engines/intent-log/genesis-sync-id.js';
@@ -62,44 +67,6 @@ async function setSyncEngine(
 		path: '/wp/v2/settings',
 		data: { wp_sync_engine: engine },
 	} );
-}
-
-/**
- * Decides every conflict card in one editor window: opens each card's
- * review dialog and accepts its merged result, which starts as the
- * current version, so accepting keeps the document as it is and closes
- * the record for every collaborator. Returns how many were decided.
- *
- * @param page   The window.
- * @param canvas The window's editor canvas.
- */
-async function decideConflictCards(
-	page: Page,
-	canvas: FrameLocator
-): Promise< number > {
-	let decided = 0;
-	for ( let i = 0; i < 40; i++ ) {
-		const review = canvas
-			.getByRole( 'button', { name: 'Review conflict', exact: true } )
-			.first();
-		if ( ( await review.count() ) === 0 ) {
-			break;
-		}
-		await review.click();
-		const dialog = page.getByRole( 'dialog', {
-			name: 'Review conflicting edits',
-		} );
-		await expect( dialog ).toBeVisible( { timeout: 10000 } );
-		await expect(
-			dialog.getByText( 'Merged result', { exact: true } )
-		).toBeVisible();
-		await dialog
-			.getByRole( 'button', { name: 'Accept', exact: true } )
-			.click();
-		await expect( dialog ).toBeHidden( { timeout: 10000 } );
-		decided++;
-	}
-	return decided;
 }
 
 test.describe( 'Collaboration - intent-log engine @engine-intent-log', () => {
@@ -881,18 +848,11 @@ test.describe( 'Collaboration - intent-log engine @engine-intent-log', () => {
 		 * block is replaced by its recovery card, so its content cannot be
 		 * edited until the conflict is reviewed. No notice announces it.
 		 */
-		const card = /has conflicting edits/;
-		let cardPage = page1;
-		let cardEditor = editor;
-		await expect( async () => {
-			const counts = await Promise.all( [
-				editor.canvas.getByText( card ).count(),
-				editor2.canvas.getByText( card ).count(),
-			] );
-			expect( counts[ 0 ] + counts[ 1 ] ).toBeGreaterThan( 0 );
-			cardPage = counts[ 0 ] > 0 ? page1 : page2;
-			cardEditor = counts[ 0 ] > 0 ? editor : editor2;
-		} ).toPass( { timeout: 20000 } );
+		const card = CONFLICT_CARD;
+		const { page: cardPage, editor: cardEditor } = await findConflictCard( [
+			{ page: page1, editor },
+			{ page: page2, editor: editor2 },
+		] );
 		await expect(
 			cardEditor.canvas
 				.getByRole( 'button', {
@@ -1004,27 +964,16 @@ test.describe( 'Collaboration - intent-log engine @engine-intent-log', () => {
 				page2.keyboard.type( 'two two two two two ', { delay: 100 } ),
 			] );
 
-			const card = /has conflicting edits/;
-			let cardPage = page1;
-			let cardEditor = editor;
-			await expect( async () => {
-				const counts = await Promise.all( [
-					editor.canvas.getByText( card ).count(),
-					editor2.canvas.getByText( card ).count(),
+			const { page: cardPage, editor: cardEditor } =
+				await findConflictCard( [
+					{ page: page1, editor },
+					{ page: page2, editor: editor2 },
 				] );
-				expect( counts[ 0 ] + counts[ 1 ] ).toBeGreaterThan( 0 );
-				cardPage = counts[ 0 ] > 0 ? page1 : page2;
-				cardEditor = counts[ 0 ] > 0 ? editor : editor2;
-			} ).toPass( { timeout: 20000 } );
 
-			await cardEditor.canvas
-				.getByRole( 'button', { name: 'Review conflict', exact: true } )
-				.first()
-				.click();
-			const dialog = cardPage.getByRole( 'dialog', {
-				name: 'Review conflicting edits',
-			} );
-			await expect( dialog ).toBeVisible( { timeout: 10000 } );
+			const dialog = await openConflictDialog(
+				cardPage,
+				cardEditor.canvas
+			);
 
 			// Both panes show their version as text. Neither renders blocks,
 			// which is what needs the revision comparison.

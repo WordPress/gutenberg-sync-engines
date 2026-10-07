@@ -1,8 +1,6 @@
-import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { getBlockTypes, unregisterBlockType } from '@wordpress/blocks';
-import { registerCoreBlocks } from '@wordpress/block-library';
 import {
 	ConflictBlockBody,
 	plainText,
@@ -16,13 +14,9 @@ import {
 
 // The table preview parses the record's sides into table blocks, so the
 // block types must be registered.
-beforeAll( () => {
-	registerCoreBlocks();
-} );
+import { withCoreBlocks } from './core-blocks';
 
-afterAll( () => {
-	getBlockTypes().forEach( ( { name } ) => unregisterBlockType( name ) );
-} );
+withCoreBlocks();
 
 describe( 'ConflictBlockBody', () => {
 	it( 'shows the review action above a preview of the conflict', () => {

@@ -1,8 +1,6 @@
-import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { getBlockTypes, unregisterBlockType } from '@wordpress/blocks';
-import { registerCoreBlocks } from '@wordpress/block-library';
 import {
 	TableMergeDialogBody,
 	tableGridsOf,
@@ -13,13 +11,9 @@ const props = TABLE_GRIDS;
 
 // The merged result is a real table block in the dialog's own block
 // editor, so the block types must be registered.
-beforeAll( () => {
-	registerCoreBlocks();
-} );
+import { withCoreBlocks } from './core-blocks';
 
-afterAll( () => {
-	getBlockTypes().forEach( ( { name } ) => unregisterBlockType( name ) );
-} );
+withCoreBlocks();
 
 // The last Accept payload as plain strings: the header labels and the
 // body's cell contents (cell contents may be strings or rich-text

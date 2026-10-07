@@ -1,8 +1,6 @@
-import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { getBlockTypes, unregisterBlockType } from '@wordpress/blocks';
-import { registerCoreBlocks } from '@wordpress/block-library';
 import * as revisionsDiff from '../../../src/review/revisions-diff';
 import { MergeDialogBody } from '../../../src/review/components/merge-dialog';
 import { KsesReviewDialogBody } from '../../../src/review/components/kses-review-dialog';
@@ -37,13 +35,9 @@ const noop = () => {};
 
 // The merged result is a real block editor, so the block types must be
 // registered.
-beforeAll( () => {
-	registerCoreBlocks();
-} );
+import { withCoreBlocks } from './core-blocks';
 
-afterAll( () => {
-	getBlockTypes().forEach( ( { name } ) => unregisterBlockType( name ) );
-} );
+withCoreBlocks();
 
 const texts = ( role ) =>
 	screen.getAllByRole( role ).map( ( node ) => node.textContent );

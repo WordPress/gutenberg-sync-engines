@@ -1,20 +1,14 @@
-import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { getBlockTypes, unregisterBlockType } from '@wordpress/blocks';
-import { registerCoreBlocks } from '@wordpress/block-library';
 import { MergeDialogBody } from '../../../src/review/components/merge-dialog';
 import { PARAGRAPH_CONFLICT, SECTION_CONFLICT, paragraph } from './fixtures';
 
 // The panes and the merged result render real blocks, so the block types
 // must be registered.
-beforeAll( () => {
-	registerCoreBlocks();
-} );
+import { withCoreBlocks } from './core-blocks';
 
-afterAll( () => {
-	getBlockTypes().forEach( ( { name } ) => unregisterBlockType( name ) );
-} );
+withCoreBlocks();
 
 // The pane blocks read by their diff status ("Modified block: Paragraph",
 // "Added block: Paragraph"). Plain labels are the merged editor's.

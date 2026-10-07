@@ -2,12 +2,17 @@
  * WordPress dependencies
  */
 import type { RequestUtils } from '@wordpress/e2e-test-utils-playwright';
-import type { FrameLocator, Page } from '@playwright/test';
 
 /**
  * Internal dependencies
  */
 import { test, expect } from '../config/collaboration-fixtures';
+import {
+	CONFLICT_CARD,
+	decideConflictCards,
+	findConflictCard,
+	openConflictDialog,
+} from '../config/review-cards';
 import {
 	SECOND_USER,
 	type CollaborationUtils,
@@ -93,44 +98,6 @@ async function openSession(
 		.click( { timeout: 3000 } )
 		.catch( () => {} );
 	await collaborationUtils.waitForMutualDiscovery();
-}
-
-/**
- * Decides every conflict card in one editor window: opens each card's
- * review dialog and accepts its merged result, which starts as the
- * current version, so accepting keeps the document as it is and closes
- * the record for every collaborator. Returns how many were decided.
- *
- * @param page   The window.
- * @param canvas The window's editor canvas.
- */
-async function decideConflictCards(
-	page: Page,
-	canvas: FrameLocator
-): Promise< number > {
-	let decided = 0;
-	for ( let i = 0; i < 40; i++ ) {
-		const review = canvas
-			.getByRole( 'button', { name: 'Review conflict', exact: true } )
-			.first();
-		if ( ( await review.count() ) === 0 ) {
-			break;
-		}
-		await review.click();
-		const dialog = page.getByRole( 'dialog', {
-			name: 'Review conflicting edits',
-		} );
-		await expect( dialog ).toBeVisible( { timeout: 10000 } );
-		await expect(
-			dialog.getByText( 'Merged result', { exact: true } )
-		).toBeVisible();
-		await dialog
-			.getByRole( 'button', { name: 'Accept', exact: true } )
-			.click();
-		await expect( dialog ).toBeHidden( { timeout: 10000 } );
-		decided++;
-	}
-	return decided;
 }
 
 test.describe( 'Collaboration - de-rtc engine @engine-de-rtc', () => {
@@ -472,18 +439,11 @@ test.describe( 'Collaboration - de-rtc engine @engine-de-rtc', () => {
 		 * block is replaced by its recovery card, so its content cannot be
 		 * edited until the conflict is reviewed. No notice announces it.
 		 */
-		const card = /has conflicting edits/;
-		let cardPage = page1;
-		let cardEditor = editor;
-		await expect( async () => {
-			const counts = await Promise.all( [
-				editor.canvas.getByText( card ).count(),
-				editor2.canvas.getByText( card ).count(),
-			] );
-			expect( counts[ 0 ] + counts[ 1 ] ).toBeGreaterThan( 0 );
-			cardPage = counts[ 0 ] > 0 ? page1 : page2;
-			cardEditor = counts[ 0 ] > 0 ? editor : editor2;
-		} ).toPass( { timeout: 20000 } );
+		const card = CONFLICT_CARD;
+		const { page: cardPage, editor: cardEditor } = await findConflictCard( [
+			{ page: page1, editor },
+			{ page: page2, editor: editor2 },
+		] );
 		await expect(
 			cardEditor.canvas
 				.getByRole( 'button', {
@@ -641,13 +601,7 @@ test.describe( 'Collaboration - de-rtc engine @engine-de-rtc', () => {
 
 		// The reviewer sees the whole sentence as the proposed version,
 		// and the version both started from.
-		await editor.canvas
-			.getByRole( 'button', { name: 'Review conflict', exact: true } )
-			.click();
-		const dialog = page1.getByRole( 'dialog', {
-			name: 'Review conflicting edits',
-		} );
-		await expect( dialog ).toBeVisible( { timeout: 10000 } );
+		const dialog = await openConflictDialog( page1, editor.canvas );
 		const proposedPane = dialog
 			.locator( '.gse-review-merge-dialog__pane' )
 			.first();
@@ -837,16 +791,7 @@ test.describe( 'Collaboration - de-rtc engine @engine-de-rtc', () => {
 			await expect(
 				editor.canvas.getByText( /has conflicting edits/ )
 			).toHaveCount( 1, { timeout: 20000 } );
-			await editor.canvas
-				.getByRole( 'button', {
-					name: 'Review conflict',
-					exact: true,
-				} )
-				.click();
-			const dialog = page1.getByRole( 'dialog', {
-				name: 'Review conflicting edits',
-			} );
-			await expect( dialog ).toBeVisible( { timeout: 10000 } );
+			const dialog = await openConflictDialog( page1, editor.canvas );
 			const proposedPane = dialog
 				.locator( '.gse-review-merge-dialog__pane' )
 				.first();

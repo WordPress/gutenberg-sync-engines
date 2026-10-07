@@ -1,7 +1,5 @@
 import {
-	afterAll,
 	afterEach,
-	beforeAll,
 	beforeEach,
 	describe,
 	expect,
@@ -10,12 +8,7 @@ import {
 } from '@jest/globals';
 import { act, renderHook } from '@testing-library/react';
 import { dispatch } from '@wordpress/data';
-import {
-	createBlock,
-	getBlockTypes,
-	unregisterBlockType,
-} from '@wordpress/blocks';
-import { registerCoreBlocks } from '@wordpress/block-library';
+import { createBlock } from '@wordpress/blocks';
 import { store as blockEditorStore } from '@wordpress/block-editor';
 import {
 	TYPING_HOLD_MAX_MS,
@@ -25,13 +18,9 @@ import {
 	useTypingHold,
 } from '../../../src/review/typing-hold';
 
-beforeAll( () => {
-	registerCoreBlocks();
-} );
+import { withCoreBlocks } from './core-blocks';
 
-afterAll( () => {
-	getBlockTypes().forEach( ( { name } ) => unregisterBlockType( name ) );
-} );
+withCoreBlocks();
 
 let paragraph;
 let sibling;

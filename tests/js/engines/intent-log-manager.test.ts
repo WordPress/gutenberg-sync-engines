@@ -167,6 +167,33 @@ const snapshotRow = (
 	type: INTENT_LOG_UPDATE_TYPES.SNAPSHOT,
 } );
 
+/**
+ * A parked row: an intent the server set aside for review.
+ *
+ * @param intent  The intent.
+ * @param actorId Its author.
+ * @param reason  Why it was set aside.
+ */
+const parkedRow = (
+	intent: Record< string, unknown >,
+	actorId: string,
+	reason = 'frame-conflict'
+) => ( {
+	data: JSON.stringify( { intent, actorId, reason } ),
+	type: INTENT_LOG_UPDATE_TYPES.PARKED,
+} );
+
+/**
+ * The paragraph texts of a record's side.
+ *
+ * @param side The side, as serialized blocks.
+ */
+const textOf = ( side: string | null ) =>
+	JSON.parse( side ?? '[]' ).map(
+		( block: { attributes: { content: string } } ) =>
+			block.attributes.content
+	);
+
 const FILTER = 'sync.providers';
 const HOOK = 'test/intent-log-manager';
 
@@ -2279,19 +2306,17 @@ describe( 'intent-log manager', () => {
 				{ syncId: 'block-a', blockType: 'core/paragraph', text: 'B' },
 			] )
 		);
-		transport.captured.session!.receiveUpdate( {
-			data: JSON.stringify( {
-				intent: {
+		transport.captured.session!.receiveUpdate(
+			parkedRow(
+				{
 					intentId: 'p-anchored',
 					txnId: null,
 					type: 'insert_text',
 					payload: { syncId: 'block-a', text: 'lost' },
 				},
-				actorId: 'u9c9',
-				reason: 'frame-conflict',
-			} ),
-			type: INTENT_LOG_UPDATE_TYPES.PARKED,
-		} );
+				'u9c9'
+			)
+		);
 		await Promise.resolve();
 		expect(
 			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
@@ -2309,19 +2334,18 @@ describe( 'intent-log manager', () => {
 		] );
 
 		// Document-level intents (entity properties) target the property.
-		transport.captured.session!.receiveUpdate( {
-			data: JSON.stringify( {
-				intent: {
+		transport.captured.session!.receiveUpdate(
+			parkedRow(
+				{
 					intentId: 'p-property',
 					txnId: null,
 					type: 'set_property',
 					payload: { name: 'title', value: 'Lost title' },
 				},
-				actorId: 'u9c9',
-				reason: 'property-conflict',
-			} ),
-			type: INTENT_LOG_UPDATE_TYPES.PARKED,
-		} );
+				'u9c9',
+				'property-conflict'
+			)
+		);
 		await Promise.resolve();
 		expect(
 			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
@@ -2346,9 +2370,9 @@ describe( 'intent-log manager', () => {
 				},
 			] )
 		);
-		transport.captured.session!.receiveUpdate( {
-			data: JSON.stringify( {
-				intent: {
+		transport.captured.session!.receiveUpdate(
+			parkedRow(
+				{
 					intentId: 'ins-1',
 					txnId: null,
 					type: 'insert_block',
@@ -2373,11 +2397,10 @@ describe( 'intent-log manager', () => {
 						afterSiblingId: 'p1',
 					},
 				},
-				actorId: 'u9c9',
-				reason: 'requires-approval',
-			} ),
-			type: INTENT_LOG_UPDATE_TYPES.PARKED,
-		} );
+				'u9c9',
+				'requires-approval'
+			)
+		);
 		await Promise.resolve();
 
 		// An insertion targets the slot after 'p1' with a count of 0 (no
@@ -2409,19 +2432,17 @@ describe( 'intent-log manager', () => {
 
 		// Bootstrap replay shape: parked row immediately followed by its
 		// resolution row (a long-resolved conflict).
-		transport.captured.session!.receiveUpdate( {
-			data: JSON.stringify( {
-				intent: {
+		transport.captured.session!.receiveUpdate(
+			parkedRow(
+				{
 					intentId: 'old-1',
 					txnId: null,
 					type: 'insert_text',
 					payload: { text: 'ancient' },
 				},
-				actorId: 'u9c9',
-				reason: 'frame-conflict',
-			} ),
-			type: INTENT_LOG_UPDATE_TYPES.PARKED,
-		} );
+				'u9c9'
+			)
+		);
 		transport.captured.session!.receiveUpdate( {
 			data: JSON.stringify( {
 				proposalId: 'old-1',
@@ -2436,19 +2457,17 @@ describe( 'intent-log manager', () => {
 
 		// A live open proposal opens a record. Dismissing it emits the
 		// wire row and empties the list.
-		transport.captured.session!.receiveUpdate( {
-			data: JSON.stringify( {
-				intent: {
+		transport.captured.session!.receiveUpdate(
+			parkedRow(
+				{
 					intentId: 'live-1',
 					txnId: null,
 					type: 'insert_text',
 					payload: { text: 'fresh' },
 				},
-				actorId: 'u9c9',
-				reason: 'frame-conflict',
-			} ),
-			type: INTENT_LOG_UPDATE_TYPES.PARKED,
-		} );
+				'u9c9'
+			)
+		);
 		await Promise.resolve();
 		expect(
 			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
@@ -2497,9 +2516,9 @@ describe( 'intent-log manager', () => {
 			type: INTENT_LOG_UPDATE_TYPES.INTENT,
 		} );
 		// ...and another author's edit against the same base parked.
-		transport.captured.session!.receiveUpdate( {
-			data: JSON.stringify( {
-				intent: {
+		transport.captured.session!.receiveUpdate(
+			parkedRow(
+				{
 					intentId: 'parked-1',
 					actorId: 'u8c8',
 					baseSeq: 0,
@@ -2512,22 +2531,15 @@ describe( 'intent-log manager', () => {
 						text: ' friend',
 					},
 				},
-				actorId: 'u8c8',
-				reason: 'frame-conflict',
-			} ),
-			type: INTENT_LOG_UPDATE_TYPES.PARKED,
-		} );
+				'u8c8'
+			)
+		);
 		await Promise.resolve();
 
 		const [ conflict ] = manager.conflicts.getOpenConflicts(
 			'postType/post',
 			'1'
 		);
-		const textOf = ( side: string | null ) =>
-			JSON.parse( side ?? '[]' ).map(
-				( block: { attributes: { content: string } } ) =>
-					block.attributes.content
-			);
 		expect( conflict ).toMatchObject( {
 			id: 'parked-1',
 			kind: 'merge',
@@ -2547,9 +2559,9 @@ describe( 'intent-log manager', () => {
 				{ syncId: 'p1', blockType: 'core/paragraph', text: 'Hello' },
 			] )
 		);
-		transport.captured.session!.receiveUpdate( {
-			data: JSON.stringify( {
-				intent: {
+		transport.captured.session!.receiveUpdate(
+			parkedRow(
+				{
 					intentId: 'parked-1',
 					actorId: 'u8c8',
 					baseSeq: 0,
@@ -2562,20 +2574,13 @@ describe( 'intent-log manager', () => {
 						text: ' friend',
 					},
 				},
-				actorId: 'u8c8',
-				reason: 'frame-conflict',
-			} ),
-			type: INTENT_LOG_UPDATE_TYPES.PARKED,
-		} );
+				'u8c8'
+			)
+		);
 		await Promise.resolve();
 
 		const changed = jest.fn();
 		manager.conflicts.subscribe( 'postType/post', '1', changed );
-		const textOf = ( side: string | null ) =>
-			JSON.parse( side ?? '[]' ).map(
-				( block: { attributes: { content: string } } ) =>
-					block.attributes.content
-			);
 		// The reviewer opens the dialog on this record.
 		const [ seen ] = manager.conflicts.getOpenConflicts(
 			'postType/post',
@@ -2664,9 +2669,9 @@ describe( 'intent-log manager', () => {
 				{ syncId: 'p2', blockType: 'core/paragraph', text: 'Other' },
 			] )
 		);
-		transport.captured.session!.receiveUpdate( {
-			data: JSON.stringify( {
-				intent: {
+		transport.captured.session!.receiveUpdate(
+			parkedRow(
+				{
 					intentId: 'parked-1',
 					actorId: 'u8c8',
 					baseSeq: 0,
@@ -2679,11 +2684,9 @@ describe( 'intent-log manager', () => {
 						text: ' friend',
 					},
 				},
-				actorId: 'u8c8',
-				reason: 'frame-conflict',
-			} ),
-			type: INTENT_LOG_UPDATE_TYPES.PARKED,
-		} );
+				'u8c8'
+			)
+		);
 		await Promise.resolve();
 		const changed = jest.fn();
 		manager.conflicts.subscribe( 'postType/post', '1', changed );
@@ -2724,9 +2727,9 @@ describe( 'intent-log manager', () => {
 			[ 'k1', 5, '!' ],
 			[ 'k2', 6, '?' ],
 		] as Array< [ string, number, string ] > ) {
-			transport.captured.session!.receiveUpdate( {
-				data: JSON.stringify( {
-					intent: {
+			transport.captured.session!.receiveUpdate(
+				parkedRow(
+					{
 						intentId,
 						actorId: 'u8c8',
 						baseSeq: 0,
@@ -2739,11 +2742,9 @@ describe( 'intent-log manager', () => {
 							text,
 						},
 					},
-					actorId: 'u8c8',
-					reason: 'frame-conflict',
-				} ),
-				type: INTENT_LOG_UPDATE_TYPES.PARKED,
-			} );
+					'u8c8'
+				)
+			);
 		}
 		await Promise.resolve();
 		const open = manager.conflicts.getOpenConflicts( 'postType/post', '1' );
@@ -2819,9 +2820,9 @@ describe( 'intent-log manager', () => {
 			[ 'm1', 'p1', 3 ],
 			[ 'm2', 'p3', 5 ],
 		] as Array< [ string, string, number ] > ) {
-			transport.captured.session!.receiveUpdate( {
-				data: JSON.stringify( {
-					intent: {
+			transport.captured.session!.receiveUpdate(
+				parkedRow(
+					{
 						intentId,
 						actorId: 'u8c8',
 						baseSeq: 0,
@@ -2834,11 +2835,9 @@ describe( 'intent-log manager', () => {
 							text: '!',
 						},
 					},
-					actorId: 'u8c8',
-					reason: 'frame-conflict',
-				} ),
-				type: INTENT_LOG_UPDATE_TYPES.PARKED,
-			} );
+					'u8c8'
+				)
+			);
 		}
 		await Promise.resolve();
 
@@ -2846,7 +2845,8 @@ describe( 'intent-log manager', () => {
 			'postType/post',
 			'1'
 		);
-		const textOf = ( side: string | null ) =>
+		// This record's sides hold several serialized runs.
+		const textOfRuns = ( side: string | null ) =>
 			JSON.parse( `[${ ( side ?? '' ).split( '\n\n' ).join( ',' ) }]` )
 				.flat()
 				.map(
@@ -2859,12 +2859,12 @@ describe( 'intent-log manager', () => {
 			index: 0,
 			count: 3,
 		} );
-		expect( textOf( conflict.current ) ).toEqual( [
+		expect( textOfRuns( conflict.current ) ).toEqual( [
 			'One',
 			'Two',
 			'Three',
 		] );
-		expect( textOf( conflict.proposed ) ).toEqual( [
+		expect( textOfRuns( conflict.proposed ) ).toEqual( [
 			'One!',
 			'Two',
 			'Three!',
@@ -2927,9 +2927,9 @@ describe( 'intent-log manager', () => {
 			[ 'm1', 'p1', 3 ],
 			[ 'm2', 'p3', 5 ],
 		] as Array< [ string, string, number ] > ) {
-			transport.captured.session!.receiveUpdate( {
-				data: JSON.stringify( {
-					intent: {
+			transport.captured.session!.receiveUpdate(
+				parkedRow(
+					{
 						intentId,
 						actorId: 'u8c8',
 						baseSeq: 0,
@@ -2942,11 +2942,9 @@ describe( 'intent-log manager', () => {
 							text: '!',
 						},
 					},
-					actorId: 'u8c8',
-					reason: 'frame-conflict',
-				} ),
-				type: INTENT_LOG_UPDATE_TYPES.PARKED,
-			} );
+					'u8c8'
+				)
+			);
 		}
 		await Promise.resolve();
 		const [ conflict ] = manager.conflicts.getOpenConflicts(
@@ -3000,9 +2998,9 @@ describe( 'intent-log manager', () => {
 			[ 'm1', 'p1', 3 ],
 			[ 'm2', 'p3', 5 ],
 		] as Array< [ string, string, number ] > ) {
-			transport.captured.session!.receiveUpdate( {
-				data: JSON.stringify( {
-					intent: {
+			transport.captured.session!.receiveUpdate(
+				parkedRow(
+					{
 						intentId,
 						actorId: 'u8c8',
 						baseSeq: 0,
@@ -3015,11 +3013,9 @@ describe( 'intent-log manager', () => {
 							text: '!',
 						},
 					},
-					actorId: 'u8c8',
-					reason: 'frame-conflict',
-				} ),
-				type: INTENT_LOG_UPDATE_TYPES.PARKED,
-			} );
+					'u8c8'
+				)
+			);
 		}
 		await Promise.resolve();
 		const [ conflict ] = manager.conflicts.getOpenConflicts(
@@ -3060,9 +3056,9 @@ describe( 'intent-log manager', () => {
 				{ syncId: 'p2', blockType: 'core/paragraph', text: 'Drop' },
 			] )
 		);
-		transport.captured.session!.receiveUpdate( {
-			data: JSON.stringify( {
-				intent: {
+		transport.captured.session!.receiveUpdate(
+			parkedRow(
+				{
 					intentId: 'parked-1',
 					actorId: 'u8c8',
 					baseSeq: 0,
@@ -3075,11 +3071,9 @@ describe( 'intent-log manager', () => {
 						text: '!',
 					},
 				},
-				actorId: 'u8c8',
-				reason: 'frame-conflict',
-			} ),
-			type: INTENT_LOG_UPDATE_TYPES.PARKED,
-		} );
+				'u8c8'
+			)
+		);
 		await Promise.resolve();
 
 		manager.conflicts.resolveConflict( 'postType/post', '1', 'parked-1', {
@@ -3115,9 +3109,9 @@ describe( 'intent-log manager', () => {
 			type: INTENT_LOG_UPDATE_TYPES.INTENT,
 		} );
 		// ...and another author's title against the same base parked.
-		session.receiveUpdate( {
-			data: JSON.stringify( {
-				intent: {
+		session.receiveUpdate(
+			parkedRow(
+				{
 					intentId: 'p-title',
 					actorId: 'u8c8',
 					baseSeq: 0,
@@ -3129,11 +3123,10 @@ describe( 'intent-log manager', () => {
 						observedVersion: 0,
 					},
 				},
-				actorId: 'u8c8',
-				reason: 'property-conflict',
-			} ),
-			type: INTENT_LOG_UPDATE_TYPES.PARKED,
-		} );
+				'u8c8',
+				'property-conflict'
+			)
+		);
 		await Promise.resolve();
 		expect(
 			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
@@ -3197,9 +3190,9 @@ describe( 'intent-log manager', () => {
 				},
 			] )
 		);
-		transport.captured.session!.receiveUpdate( {
-			data: JSON.stringify( {
-				intent: {
+		transport.captured.session!.receiveUpdate(
+			parkedRow(
+				{
 					intentId: 'lost-1',
 					txnId: null,
 					type: 'insert_text',
@@ -3210,11 +3203,9 @@ describe( 'intent-log manager', () => {
 						text: ' recovered',
 					},
 				},
-				actorId: 'u9c9',
-				reason: 'frame-conflict',
-			} ),
-			type: INTENT_LOG_UPDATE_TYPES.PARKED,
-		} );
+				'u9c9'
+			)
+		);
 		await Promise.resolve();
 
 		manager.restoreProposal!( 'postType/post', '1', 'lost-1' );
@@ -3264,9 +3255,9 @@ describe( 'intent-log manager', () => {
 			] )
 		);
 		// A requires-approval park of a raw-attr block (core/html shape).
-		transport.captured.session!.receiveUpdate( {
-			data: JSON.stringify( {
-				intent: {
+		transport.captured.session!.receiveUpdate(
+			parkedRow(
+				{
 					intentId: 'parked-html',
 					txnId: null,
 					type: 'insert_block',
@@ -3280,11 +3271,10 @@ describe( 'intent-log manager', () => {
 						afterSiblingId: 'gone-sibling',
 					},
 				},
-				actorId: 'u9c9',
-				reason: 'requires-approval',
-			} ),
-			type: INTENT_LOG_UPDATE_TYPES.PARKED,
-		} );
+				'u9c9',
+				'requires-approval'
+			)
+		);
 		await Promise.resolve();
 
 		manager.restoreProposal!( 'postType/post', '1', 'parked-html' );
@@ -3333,9 +3323,9 @@ describe( 'intent-log manager', () => {
 			] )
 		);
 		const format = 'obj|{"html":"<script>alert(0);</script>"}';
-		transport.captured.session!.receiveUpdate( {
-			data: JSON.stringify( {
-				intent: {
+		transport.captured.session!.receiveUpdate(
+			parkedRow(
+				{
 					intentId: 'parked-format',
 					txnId: null,
 					type: 'format_text',
@@ -3348,11 +3338,10 @@ describe( 'intent-log manager', () => {
 						on: true,
 					},
 				},
-				actorId: 'u9c9',
-				reason: 'requires-approval',
-			} ),
-			type: INTENT_LOG_UPDATE_TYPES.PARKED,
-		} );
+				'u9c9',
+				'requires-approval'
+			)
+		);
 		await Promise.resolve();
 
 		manager.restoreProposal!( 'postType/post', '1', 'parked-format' );
