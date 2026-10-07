@@ -58,6 +58,9 @@
  *   wake=       auto | redis | cache | table: what an SSE stream sleeps
  *               on (auto = whatever the site has; cache needs
  *               cache=redis, table needs cache=none)
+ *   peers=      total peers (default 2); windows= remains an alias
+ *   p95-ms=     optional maximum p95 delivery delay in milliseconds
+ *   max-lag-ms= maximum typing schedule delay (default 1000 ms)
  *   windows=    people per phase: collaborator windows, and the same
  *               number of one-after-the-other baseline turns (default 2)
  *   edit-seconds=      script duration per person (default 120, min 30; slow runs take longer)
@@ -82,6 +85,7 @@
  */
 import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 import { chromium } from '@playwright/test';
 
 import {
@@ -121,6 +125,14 @@ import {
 	socketProcessCosts,
 } from './websocket-costs.mjs';
 
+import {
+	deliveryOptions,
+	deliveryMeasurements,
+	contentAudit,
+	assessRun,
+} from './delivery.mjs';
+import { allowPeers, installMeasurements, readEditors } from './browser.mjs';
+
 const opts = parseCliOptions();
 
 const HELP = `node tests/benchmarks/host/host-benchmark.mjs [key=value …]
@@ -136,6 +148,9 @@ const HELP = `node tests/benchmarks/host/host-benchmark.mjs [key=value …]
               Redis; this checkout's wp-env sites only; restored after)
   wake=       auto | redis | cache | table: what an SSE stream sleeps on
               (cache needs cache=redis, table needs cache=none)
+  peers=      total peers (default 2); windows= remains an alias
+  p95-ms=     optional maximum p95 delivery delay in milliseconds
+  max-lag-ms= maximum typing schedule delay (default 1000 ms)
   windows=    people per phase: collaborator windows, and the same
               number of one-after-the-other baseline turns (default 2)
   edit-seconds=      script duration per person (default 120, min 30; slow runs take longer)
@@ -167,6 +182,9 @@ const KNOWN_ARGS = [
 	'cache',
 	'wake',
 	'windows',
+	'peers',
+	'p95-ms',
+	'max-lag-ms',
 	'edit-seconds',
 	'idle-seconds',
 	'polling-interval',
@@ -203,7 +221,14 @@ const SOCKET_METRICS = opts[ 'websocket-metrics' ]
 const TRANSPORT = String( opts.transport ?? 'current' );
 const CACHE = String( opts.cache ?? 'current' );
 const WAKE = String( opts.wake ?? 'auto' );
-const WINDOWS = Number( opts.windows ?? 2 );
+let limits;
+try {
+	limits = deliveryOptions( opts );
+} catch ( error ) {
+	console.error( error.message );
+	process.exit( 1 );
+}
+const WINDOWS = limits.peers;
 const EDIT_SECONDS = Number( opts[ 'edit-seconds' ] ?? 120 );
 const IDLE_SECONDS = Number( opts[ 'idle-seconds' ] ?? 120 );
 const POLL_OVERRIDE =
@@ -243,12 +268,16 @@ const POLLING_INTERVAL_SETTING = 'gutenberg_sync_engines_polling_interval';
  * @param {import('@playwright/test').BrowserContext} context  Browser context.
  * @param {{ scenario: string, approach: string }}    tag      Mutable labels.
  * @param {Set<Object>}                               measured Pages to tag.
+ * @param {Object}                                    tracking Shared request records for all peer contexts.
  */
-async function installGlobalTagging( context, tag, measured ) {
+async function installGlobalTagging(
+	context,
+	tag,
+	measured,
+	tracking = { issued: new Set(), expected: new Set(), requests: new Map() }
+) {
 	const origin = new URL( BASE ).origin;
-	const issued = new Set();
-	const expected = new Set();
-	const requests = new Map();
+	const { issued, expected, requests } = tracking;
 	context.on( 'response', ( response ) => {
 		const id = response.headers()[ 'x-rtc-request-id' ];
 		if ( issued.has( id ) ) {
@@ -325,17 +354,42 @@ async function editingDriver( win, start ) {
 		await paragraph.click( { timeout: 5000 } );
 		// End is only the end of a visual line on some platforms. Select
 		// the paragraph's actual text end so wrapping cannot reorder tokens.
-		await paragraph.evaluate( ( block ) => {
-			const element = block.matches( '[contenteditable="true"]' )
-				? block
-				: block.querySelector( '[contenteditable="true"]' );
-			const range = element.ownerDocument.createRange();
-			range.selectNodeContents( element );
-			range.collapse( false );
-			const selection = element.ownerDocument.defaultView.getSelection();
-			selection.removeAllRanges();
-			selection.addRange( range );
-		} );
+		await paragraph.evaluate(
+			( block, scheduled ) => {
+				const element = block.matches(
+					'.block-editor-rich-text__editable'
+				)
+					? block
+					: block.querySelector(
+							'.block-editor-rich-text__editable'
+					  );
+				if ( ! element?.isContentEditable ) {
+					throw new Error( 'The writer paragraph is not editable.' );
+				}
+				const range = element.ownerDocument.createRange();
+				range.selectNodeContents( element );
+				range.collapse( false );
+				const selection =
+					element.ownerDocument.defaultView.getSelection();
+				selection.removeAllRanges();
+				selection.addRange( range );
+				// Timestamp actual input in the browser, excluding automation travel time.
+				element.ownerDocument.addEventListener(
+					'beforeinput',
+					() => {
+						const at = Date.now();
+						element.ownerDocument.defaultView.top.__hostBench.sent[
+							scheduled.text.trim()
+						] = {
+							at,
+							lagMs: Math.max( 0, at - scheduled.due ),
+						};
+					},
+					{ once: true, capture: true }
+				);
+			},
+			{ text: token.text, due: start + token.at }
+		);
 		await win.page.keyboard.insertText( token.text );
 	}
 	await win.page.waitForTimeout(
@@ -479,6 +533,28 @@ async function openEditorWindow( context, measured, postId, index ) {
 	const page = await context.newPage();
 	measured.add( page );
 	page.on( 'close', () => measured.delete( page ) );
+	const errors = [];
+	let pageErrors = 0;
+	let requestErrors = 0;
+	page.on( 'pageerror', ( error ) => {
+		pageErrors++;
+		if ( errors.length < 20 ) {
+			errors.push( error.message );
+		}
+	} );
+	page.on( 'response', ( response ) => {
+		if (
+			response.status() >= 400 &&
+			decodeURIComponent( response.url() ).includes( '/wp-sync/v1/' )
+		) {
+			requestErrors++;
+			if ( errors.length < 20 ) {
+				errors.push(
+					`Sync request failed: HTTP ${ response.status() }`
+				);
+			}
+		}
+	} );
 	const sync = attachCounters( page );
 	const all = attachAllTrafficCounters( page, () => sync.snapshot() );
 	await sync.ready;
@@ -489,8 +565,17 @@ async function openEditorWindow( context, measured, postId, index ) {
 	await page.waitForFunction( () =>
 		window.wp?.data?.select( 'core/editor' )?.getCurrentPostId()
 	);
-	const win = { page, postId, index, all, sync, canvas: null };
+	const win = {
+		page,
+		postId,
+		index,
+		all,
+		sync,
+		canvas: null,
+		errors: () => ( { pageErrors, requestErrors, messages: errors } ),
+	};
 	win.canvas = await canvasOf( page );
+	await installMeasurements( page );
 	return win;
 }
 
@@ -579,6 +664,10 @@ async function measurePhase(
 	// setup stay out of the rates.
 	await wins[ 0 ].page.waitForTimeout( 3000 );
 
+	const advisoryBefore = (
+		await readEditors( wins.map( ( win ) => win.page ) )
+	).map( ( editor ) => editor.advisory );
+
 	const socketStart = await sampleSocketProcesses( SOCKET_METRICS );
 	const clockStart = await sampleClock();
 	const ioStart = sampleDbIo ? await sampleDbIo() : null;
@@ -658,6 +747,10 @@ async function measurePhase(
 		},
 		saveOk: true,
 		contentVerified: true,
+		session:
+			tag.approach === 'baseline'
+				? null
+				: await sessionReport( wins, advisoryBefore ),
 		dbIo: {
 			editing: diffDbIo( ioStart, ioEdit ),
 			idle: withIdle ? diffDbIo( ioEdit, ioIdle ) : null,
@@ -675,6 +768,96 @@ async function measurePhase(
 			},
 		} ) ),
 	};
+}
+
+/**
+ * Delivery evidence is retained even when content verification fails.
+ *
+ * @param {Array<Object>}      wins           Editor windows.
+ * @param {Array<Object>|null} advisoryBefore Advisory state before typing.
+ * @param {string|null}        error          Phase failure, if any.
+ */
+async function sessionReport( wins, advisoryBefore = null, error = null ) {
+	const editors = await readEditors( wins.map( ( win ) => win.page ) );
+	const scripts = wins.map( ( win ) =>
+		editingScript( win.index, EDIT_SECONDS * 1000 )
+	);
+	const result = {
+		peers: wins.length,
+		limits,
+		error,
+		pageErrors: wins.reduce(
+			( total, win ) => total + win.errors().pageErrors,
+			0
+		),
+		requestErrors: wins.reduce(
+			( total, win ) => total + win.errors().requestErrors,
+			0
+		),
+		errors: wins.map( ( win ) => win.errors() ),
+		correct: editors.every( ( editor ) =>
+			matchesDocument( editor.content, expectedDocument( WINDOWS ) )
+		),
+		delivery: deliveryMeasurements( editors, scripts ),
+		content: contentAudit( editors, scripts ),
+		advisoryBefore,
+		advisoryAfter: editors.map( ( editor ) => editor.advisory ),
+		editors,
+	};
+	return { ...result, ...assessRun( result, limits ) };
+}
+
+function printSession( session ) {
+	const latency = session.delivery.latencyMs;
+	console.log(
+		'\nEdit delivery (milliseconds, from input to another editor’s data):'
+	);
+	console.log( '| Peers | p50 ms | p95 ms | p99 ms | Missing | Result |' );
+	console.log( '| --- | --- | --- | --- | --- | --- |' );
+	console.log(
+		`| ${ session.peers } | ${ latency?.p50 ?? '—' } | ${
+			latency?.p95 ?? '—'
+		} | ${ latency?.p99 ?? '—' } | ${ session.delivery.missing } | ${
+			session.passed ? 'PASS' : 'FAIL'
+		} |`
+	);
+	console.log(
+		`Final content: ${
+			session.correct ? 'complete in every editor' : 'incorrect'
+		}; ${ session.content.missingCopies } missing marker copies, ${
+			session.content.extraCopies
+		} duplicate copies; ${
+			session.content.seenThenMissingCopies
+		} missing copies had appeared earlier.`
+	);
+	console.log(
+		`Maximum typing schedule delay: ${
+			session.delivery.scheduleLagMs
+				? Math.round( session.delivery.scheduleLagMs.max )
+				: 'unavailable'
+		} ms. p95 limit: ${
+			limits.p95Ms === null ? 'not set' : `${ limits.p95Ms } ms`
+		}.`
+	);
+	for ( const reason of session.reasons ) {
+		console.log( `  ${ reason }` );
+	}
+	if ( session.advisoryAfter.some( ( peer ) => peer?.overCap ) ) {
+		console.log(
+			'The advisory peer limit was exceeded; polling uses its timer fallback.'
+		);
+	}
+	console.log(
+		'This measures one workload and host; it does not establish a production peer limit.'
+	);
+}
+
+function writeReport( report ) {
+	if ( JSON_PATH ) {
+		fs.mkdirSync( path.dirname( JSON_PATH ), { recursive: true } );
+		fs.writeFileSync( JSON_PATH, JSON.stringify( report, null, 2 ) );
+		console.log( `\njson written: ${ JSON_PATH }` );
+	}
 }
 
 /**
@@ -1191,11 +1374,21 @@ async function main() {
 		);
 		console.log( `  edit-seconds=${ EDIT_SECONDS }` );
 		console.log( `  idle-seconds=${ IDLE_SECONDS }` );
-		console.log( `  windows=${ WINDOWS }` );
+		console.log(
+			`  peers=${ WINDOWS } (separate browser connection pools)`
+		);
+		console.log(
+			`  p95-ms=${ limits.p95Ms ?? 'not set' } max-lag-ms=${
+				limits.maxLagMs
+			}`
+		);
+		console.log(
+			'  The client join limit is overridden only in benchmark browsers.'
+		);
 		// The interval only governs the HTTP short-polling transport;
 		// under the other transports the line would mislead. 0 stored
 		// means the plugin defaults, which during a session with
-		// collaborators is one second — print the effective value.
+		// collaborators is five seconds — print the effective value.
 		if ( 'http-polling' === originalSettings.active.transport ) {
 			if ( null !== POLL_OVERRIDE ) {
 				console.log( `  polling-interval=${ POLL_OVERRIDE }` );
@@ -1204,7 +1397,7 @@ async function main() {
 					`  polling-interval=${ originalPoll } (site setting)`
 				);
 			} else {
-				console.log( '  polling-interval=1 (default)' );
+				console.log( '  polling-interval=5 (default)' );
 			}
 		}
 		if ( undefined !== opts.metrics ) {
@@ -1242,12 +1435,24 @@ async function main() {
 			deactivated.push( copy.plugin );
 		}
 
+		const storageState = await context.storageState();
+		const editorContext = async () => {
+			const peerContext = await browser.newContext( { storageState } );
+			await installGlobalTagging(
+				peerContext,
+				tag,
+				measuredPages,
+				tracking
+			);
+			await allowPeers( peerContext, WINDOWS );
+			return peerContext;
+		};
 		const baselineSessions = [];
 		for ( let person = 0; person < WINDOWS; person++ ) {
 			const isLast = person === WINDOWS - 1;
 			console.log( `  baseline step ${ person + 1 }/${ WINDOWS }…` );
 			const win = await openEditorWindow(
-				context,
+				await editorContext(),
 				measuredPages,
 				baselinePost,
 				person
@@ -1261,7 +1466,7 @@ async function main() {
 				isLast,
 				sampleDbIo
 			);
-			await win.page.close();
+			await win.page.context().close();
 			if ( session.perWindow[ 0 ].editing.sync.requests > 0 ) {
 				throw new Error(
 					'a baseline step made sync requests — the plugin was still active, so the comparison is meaningless'
@@ -1294,11 +1499,20 @@ async function main() {
 		const wins = [];
 		for ( let index = 0; index < WINDOWS; index++ ) {
 			const win = await openEditorWindow(
-				context,
+				await editorContext(),
 				measuredPages,
 				post,
 				index
 			);
+			if (
+				( await win.page.evaluate(
+					() => window.__hostBenchmarkLimit
+				) ) !== WINDOWS
+			) {
+				throw new Error(
+					'The benchmark peer-limit override did not load.'
+				);
+			}
 			await waitForSyncTraffic( win.page, win.sync, String( index ) );
 			wins.push( win );
 		}
@@ -1307,12 +1521,20 @@ async function main() {
 		// A solo SSE editor may correctly remain quiet without a stream.
 		let observed = observeTransport( wins[ 0 ].sync );
 		const selectedTransport = originalSettings.active.transport;
-		if ( ! ( WINDOWS === 1 && selectedTransport === 'sse' ) ) {
+		if (
+			! (
+				WINDOWS === 1 &&
+				[ 'sse', 'sse-daemon' ].includes( selectedTransport )
+			)
+		) {
 			const deadline = Date.now() + 45000;
 			while (
 				wins.some(
 					( win ) =>
-						observeTransport( win.sync ) !== selectedTransport
+						observeTransport( win.sync ) !==
+						( selectedTransport === 'sse-daemon'
+							? 'sse'
+							: selectedTransport )
 				)
 			) {
 				if ( Date.now() >= deadline ) {
@@ -1325,15 +1547,39 @@ async function main() {
 			observed = observeTransport( wins[ 0 ].sync );
 		}
 
-		const phase = await measurePhase(
-			wins,
-			tag,
-			rest,
-			expectedDocument( WINDOWS ),
-			sampleClock,
-			true,
-			sampleDbIo
-		);
+		let phase;
+		try {
+			phase = await measurePhase(
+				wins,
+				tag,
+				rest,
+				expectedDocument( WINDOWS ),
+				sampleClock,
+				true,
+				sampleDbIo
+			);
+		} catch ( error ) {
+			const session = await sessionReport( wins, null, error.message );
+			printSession( session );
+			writeReport( {
+				schemaVersion: 3,
+				measurement: { contentVerified: false },
+				environment: {
+					date: new Date().toISOString(),
+					baseUrl: BASE,
+					peers: WINDOWS,
+					engine,
+					delivery: originalSettings.active.delivery,
+					transportRequested: selectedTransport,
+					pollingIntervalSeconds: POLL_OVERRIDE ?? originalPoll,
+					editSeconds: EDIT_SECONDS,
+					idleSeconds: IDLE_SECONDS,
+					browserIsolation: 'peer',
+				},
+				session,
+			} );
+			throw error;
+		}
 		observed = observeTransport( wins[ 0 ].sync );
 		for ( const win of wins ) {
 			const edited = phase.perWindow[ win.index ].editing.sync;
@@ -1346,7 +1592,7 @@ async function main() {
 					`sync window ${ win.index } made no sync data traffic while editing — dead session, numbers unusable`
 				);
 			}
-			await win.page.close();
+			await win.page.context().close();
 		}
 		tag.approach = 'baseline';
 
@@ -1430,6 +1676,7 @@ async function main() {
 
 		const report = {
 			schemaVersion: 3,
+			session: phase.session,
 			measurement: {
 				contentVerified: true,
 				missingRequests: [ ...tracking.expected ]
@@ -1466,6 +1713,8 @@ async function main() {
 				date: new Date().toISOString(),
 				baseUrl: BASE,
 				windows: WINDOWS,
+				peers: WINDOWS,
+				browserIsolation: 'peer',
 				editSeconds: EDIT_SECONDS,
 				idleSeconds: IDLE_SECONDS,
 				muMeasurement: muPresent,
@@ -1499,9 +1748,10 @@ async function main() {
 
 		printReport( report );
 
-		if ( JSON_PATH ) {
-			fs.writeFileSync( JSON_PATH, JSON.stringify( report, null, 2 ) );
-			console.log( `\njson written: ${ JSON_PATH }` );
+		printSession( phase.session );
+		writeReport( report );
+		if ( ! phase.session.passed ) {
+			process.exitCode = 1;
 		}
 	} finally {
 		await cleanup();

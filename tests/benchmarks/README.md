@@ -1,5 +1,55 @@
 # Benchmarks
 
+The host report includes session-size measurements. Set the total peer count:
+
+```bash
+WP_BASE_URL=http://localhost:8889 npm run bench -- --peers=5 --p95-ms=2000 \
+  --json=bench-results/host-5.json
+```
+
+`--peers=N` takes one positive integer (default 2). `--windows=N` remains an
+alias. Each peer writes its own paragraph. Each has a separate browser
+connection pool, so large runs do not share one browser's HTTP connection
+limit. All browsers run on one machine and share its clock and CPU. The benchmark overrides the normal five-peer join limit only in its
+own browsers; the site's limit stays unchanged.
+
+The same run reports server costs and edit delivery times (p50, p95, p99).
+Delivery time starts at the browser's input event and ends when the marker
+first appears in another editor's data. It includes time spent waiting to
+send, server work, and remote processing; it does not measure screen paint.
+Each edit-to-other-peer pair is one sample. Missing or invalid samples are
+counted separately and always fail the run. One peer has no remote delivery
+samples, so its delay columns show a dash.
+
+`--p95-ms=2000` fails the run when p95 exceeds two seconds. Without this
+option, delays are reported without a pass limit. `--max-lag-ms=1000` sets
+the largest allowed delay in issuing a scheduled input (default one second).
+A slow test browser must not make an overloaded run appear successful by
+typing less often. The report also checks the complete final document and
+counts missing markers, duplicates, and edits that appeared then vanished.
+A content failure during collaboration suppresses the cost comparison and saves the delivery
+evidence to `--json`, when supplied. A delivery or typing-delay failure
+retains the cost report and exits with a nonzero status.
+
+To compare sizes and repeat runs, run the same command for each count:
+
+```bash
+for peers in 2 4 5 8 16; do
+  for repeat in 1 2 3; do
+    WP_BASE_URL=http://localhost:8889 npm run bench -- --peers="$peers" \
+      --p95-ms=2000 --json="bench-results/host-${peers}-${repeat}.json"
+  done
+done
+```
+
+Each run includes a serial baseline, so larger counts take longer. Keep the
+engine, transport, durations, polling setting, and host unchanged when
+comparing results. The initial document has one paragraph per peer, so its
+size also grows with the count. These measurements do not establish a
+production capacity guarantee. The JSON records advisory-channel state
+before and after editing; an exceeded WebRTC peer limit causes timer-based
+polling and is also noted in the printed report.
+
 One command runs everything here:
 
 ```bash
@@ -146,6 +196,9 @@ request timelines. Content checks, coverage limits, and configuration are
 also retained. Compare runs only across identical environments. The report
 measures one engine per run (`engine=`).
 
+The `session` object contains delivery distributions, final-content checks,
+per-editor input and arrival timestamps, and the pass/fail reasons.
+
 Fleet planning must use measured rates for the current configuration. The
 advisory channel can stop scheduled polling when an editor is alone and
 trigger reads on demand when peers are reachable. A missing peer link uses
@@ -153,7 +206,7 @@ the configured polling interval instead. The site default is 5 seconds; the
 e2e test setup sets 1 second. Do not project daily traffic from the old
 fixed 4-second solo / 1-second collaborative cadence.
 
-Run `windows=1` to measure solo editing and idle cost, then measure several
+Run `--peers=1` to measure solo editing and idle cost, then measure several
 collaborators. Record the delivery choice and configured polling setting from
 the JSON report. Multiply each scenario's measured rate by the time and
 open-tab count for that scenario across your platform. The host runner does
@@ -164,7 +217,7 @@ env:tests start`). The **baseline** is the same number of people producing
 the same document the old way — editing in series with the plugin
 deactivated: each person completes a fixed typing script, saves, and hands
 off (the post lock forces exactly this turn-taking today). Then the **sync**
-phase: the plugin active and the same `windows=` people collaborating live
+phase: the plugin active and the same `--peers=` people collaborating live
 on the chosen engine, typing the same scripts — so both phases must finish
 with the same paragraph text. The script is built before typing: a slower
 browser takes longer rather than producing fewer edits. Before each save,
@@ -178,7 +231,7 @@ followed by the summary stats (room storage, derived capacity). The run
 opens by stating the configuration it resolved (engine, transport,
 durations, polling), marking defaults. Arguments target what you need:
 `--engine=` (one per run — comparing engines is `--suite=engines`),
-`--transport=`, `--windows=`, `--edit-seconds=`/`--idle-seconds=`,
+`--transport=`, `--peers=`, `--edit-seconds=`/`--idle-seconds=`,
 `--polling-interval=` to override the HTTP short-polling interval for the
 run (restored afterwards), `--metrics=` to print only some rows, `--json=`
 for the full data — `npm run bench -- --help` prints the complete list. The
@@ -861,9 +914,9 @@ The comparison the decision turns on:
   this: its CPU/request totals are exact for the session it measured, but
   under real concurrency the lock-holding engines (intent-log, de-rtc)
   additionally queue on the per-room lock, which the card cannot see. A
-  browser-driven multi-client soak (extending
-  `tests/benchmarks/transport/` beyond two windows) validating the card's
-  projections end-to-end is the known remaining verification gap.
+  browser-driven host report (`npm run bench -- --peers=N`) measures
+  delivery delay and whole-request server costs under growing peer counts;
+  these are separate from this engine model.
 - **Opaque-relay quality is unmeasured here** by construction (a
   client-merging engine's merge runs in browser clients, outside the
   harness), not by omission. This limitation does not apply to yjs-server:

@@ -7,9 +7,10 @@
  *                                        # measured against the same site
  *                                        # with the plugin deactivated
  *                                        # (tests/benchmarks/host/)
- *   npm run bench -- --engine=de-rtc --windows=3     # host report, targeted
+ *   npm run bench -- --engine=de-rtc --peers=3     # host report, targeted
  *   npm run bench -- --suite=engines     # engine-decision matrix (below)
  *   npm run bench -- --suite=transport --transport=http-polling --trials=30
+ *   npm run bench -- --peers=5 --p95-ms=2000
  *
  * Those are the BENCHMARKS: the host report (default), the engine
  * matrix, and the transport experience. The soak and replay lanes are
@@ -97,8 +98,9 @@ Suites (--suite=; default: host):
                --wake=       auto | redis | cache | table: what an SSE
                              stream sleeps on (cache needs --cache=redis,
                              table needs --cache=none)
-               --windows=    collaborator windows per engine phase
-                             (default 2)
+               --peers=      total peers (default 2; --windows is an alias)
+               --p95-ms=     optional maximum p95 edit delivery delay
+               --max-lag-ms= maximum typing schedule delay (default 1000 ms)
                --edit-seconds=      editing seconds per person (default
                                     120, min 30)
                --idle-seconds=      idle seconds per phase (default 120;
@@ -134,7 +136,7 @@ WP_USERNAME/WP_PASSWORD.
 
 Examples:
   npm run bench
-  npm run bench -- --engine=de-rtc --windows=3 --polling-interval=2
+  npm run bench -- --engine=de-rtc --peers=3 --polling-interval=2
   npm run bench -- --suite=engines --scenarios=editorial-session
   npm run bench -- --certify=10
 `;

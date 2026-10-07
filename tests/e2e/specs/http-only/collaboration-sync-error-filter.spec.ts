@@ -7,25 +7,18 @@ import type { UserCredentials } from '../../../../gutenberg/test/e2e/specs/edito
 
 const BASE_URL = process.env.WP_BASE_URL || 'http://localhost:8889';
 
-// Additional users to fill the room up to the default connection limit (3).
-const FILLER_USERS: UserCredentials[] = [
-	{
-		username: 'filler_editor_1',
-		email: 'filler1@example.com',
+// Four filler users plus the first editor reach the five-peer default.
+const FILLER_USERS: UserCredentials[] = Array.from(
+	{ length: 4 },
+	( _, index ) => ( {
+		username: `filler_editor_${ index + 1 }`,
+		email: `filler${ index + 1 }@example.com`,
 		firstName: 'Filler',
-		lastName: 'One',
+		lastName: String( index + 1 ),
 		password: 'password',
 		roles: [ 'editor' ],
-	},
-	{
-		username: 'filler_editor_2',
-		email: 'filler2@example.com',
-		firstName: 'Filler',
-		lastName: 'Two',
-		password: 'password',
-		roles: [ 'editor' ],
-	},
-];
+	} )
+);
 
 test.describe( 'Sync connection error filter', () => {
 	test.beforeAll( async ( { requestUtils } ) => {
@@ -45,10 +38,10 @@ test.describe( 'Sync connection error filter', () => {
 		requestUtils,
 		admin,
 	} ) => {
-		// Four logged-in editor clients (admin, two fillers, and the
-		// over-limit fourth user) make this the heaviest setup in the
+		// Six logged-in editor clients (admin, four fillers, and the
+		// over-limit sixth user) make this the heaviest setup in the
 		// suite; the happy path can exceed the 60 s default cap on CI.
-		test.setTimeout( 120_000 );
+		test.setTimeout( 180_000 );
 
 		// Create filler users inside the test, after the fixture's
 		// deleteAllUsers() has run.
@@ -65,12 +58,13 @@ test.describe( 'Sync connection error filter', () => {
 		// Admin opens the post (1st client).
 		await collaborationUtils.openPost( post.id );
 
-		// Two filler users join to reach the default limit of 3.
-		await collaborationUtils.joinUser( post.id, FILLER_USERS[ 0 ] );
-		await collaborationUtils.joinUser( post.id, FILLER_USERS[ 1 ] );
+		// Four filler users join to reach the default limit of 5.
+		for ( const user of FILLER_USERS ) {
+			await collaborationUtils.joinUser( post.id, user );
+		}
 		await collaborationUtils.waitForMutualDiscovery();
 
-		// The second user (4th client) opens the post, exceeding the
+		// The second user (6th client) opens the post, exceeding the
 		// default connection limit. This triggers CONNECTION_LIMIT_EXCEEDED
 		// on their first poll response.
 		/*
@@ -80,26 +74,26 @@ test.describe( 'Sync connection error filter', () => {
 		 * 200ms after load, racing the fill below and silently blocking the
 		 * submit.
 		 */
-		const fourthContext = await admin.browser.newContext( {
+		const sixthContext = await admin.browser.newContext( {
 			baseURL: BASE_URL,
 			storageState: { cookies: [], origins: [] },
 		} );
-		const page4 = await fourthContext.newPage();
+		const page6 = await sixthContext.newPage();
 
 		try {
-			await page4.goto( '/wp-login.php' );
-			await page4.locator( '#user_login' ).fill( SECOND_USER.username );
-			await page4.locator( '#user_pass' ).fill( SECOND_USER.password );
-			await page4.getByRole( 'button', { name: 'Log In' } ).click();
-			await page4.waitForURL( '**/wp-admin/**' );
+			await page6.goto( '/wp-login.php' );
+			await page6.locator( '#user_login' ).fill( SECOND_USER.username );
+			await page6.locator( '#user_pass' ).fill( SECOND_USER.password );
+			await page6.getByRole( 'button', { name: 'Log In' } ).click();
+			await page6.waitForURL( '**/wp-admin/**' );
 
-			await page4.goto(
+			await page6.goto(
 				`/wp-admin/post.php?post=${ post.id }&action=edit`
 			);
 
 			// The plugin's filter returns true for connection-limit-exceeded,
 			// suppressing the default modal. The plugin renders its own modal.
-			const customModal = page4.getByRole( 'dialog', {
+			const customModal = page6.getByRole( 'dialog', {
 				name: 'Collaboration limit reached',
 			} );
 			await expect( customModal ).toBeVisible( { timeout: 30000 } );
@@ -117,12 +111,12 @@ test.describe( 'Sync connection error filter', () => {
 			).toBeVisible();
 
 			// The default modal should NOT be visible.
-			const defaultModal = page4.getByRole( 'dialog', {
+			const defaultModal = page6.getByRole( 'dialog', {
 				name: 'Too many editors connected',
 			} );
 			await expect( defaultModal ).toBeHidden();
 		} finally {
-			await fourthContext.close();
+			await sixthContext.close();
 		}
 	} );
 } );
