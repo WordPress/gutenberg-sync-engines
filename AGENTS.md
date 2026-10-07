@@ -647,10 +647,10 @@ carries no CORS headers, so the status is hidden), and the client logs
 `Error posting sync update, will retry with backoff` — then succeeds on
 the retry with a fresh token, so the suite still passes.
 Every tab on a post joins that post's awareness roster, and a page whose
-roster exceeds `DEFAULT_CLIENT_LIMIT_PER_ROOM` (3) is refused the room:
+roster exceeds `DEFAULT_CLIENT_LIMIT_PER_ROOM` (5) is refused the room:
 Gutenberg shows "Too many editors connected" and the real-time path stops
 for that tab. The check runs once, on the page's first connection, so a
-spec that opens a fourth tab on one post fails for this reason and not
+spec that opens a sixth tab on one post fails for this reason and not
 because of a transport fault. Give extra tabs their own post, or raise
 the limit with the `sync.pollingProvider.maxClientsPerRoom` filter.
 (The old y-websocket PEER-relay fixture lane — the test WS provider

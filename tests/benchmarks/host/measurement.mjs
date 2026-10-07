@@ -65,21 +65,27 @@ export function matchesDocument( content, expected ) {
  * @param {boolean} options.muMeasurement Whether the baseline was measured.
  * @param {string}  options.transport     Observed content transport.
  * @param {boolean} options.sockets       Whether any sockets were used.
+ * @param {boolean} options.timeline      Whether complete sampled measurements are available.
  * @return {Array<string>} Reasons totals cannot be reported.
  */
-export function serverCoverageLimits( { muMeasurement, transport, sockets } ) {
+export function serverCoverageLimits( {
+	muMeasurement,
+	transport,
+	sockets,
+	timeline = false,
+} ) {
 	const limits = [];
 	if ( ! muMeasurement ) {
 		limits.push( 'The baseline has no whole-request measurements.' );
 	}
-	if ( transport === 'sse' ) {
+	if ( transport === 'sse' && ! timeline ) {
 		limits.push(
-			'SSE requests span phases; shutdown logs cannot split their server cost between editing and idle.'
+			'SSE requests span phases; complete request timelines are required to report server costs.'
 		);
 	}
 	if ( transport === 'websocket' || sockets ) {
 		limits.push(
-			'WebSocket server or advisory relay CPU, memory, and worker time are not measured.'
+			'WebSocket server or advisory relay costs are not measured by the PHP request logger. Optional process samples are reported separately; combined totals remain unavailable.'
 		);
 	}
 	return limits;

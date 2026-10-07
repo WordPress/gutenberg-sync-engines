@@ -13,6 +13,14 @@ idle traffic on your hardware; the stable shape:
 | sse-daemon | pushed within about a second of the row landing (the daemon rescans each room once a second) | one held connection per stream in the sync daemon; no PHP worker, and no new port or TLS beyond the daemon the websocket transport already runs |
 | websocket | tens of milliseconds | a few frames per heartbeat — plus a persistent daemon, TLS termination, and an exposed port |
 
+Sessions allow **five total editor connections by default**, including the
+joining editor. Each tab counts as a connection, even for the same user.
+Polling, SSE, SSE-daemon, and WebSocket check this limit when the editor
+first joins its primary room. A sixth connection gets the connection-limit
+error; already admitted editors stay connected. The existing
+`sync.pollingProvider.maxClientsPerRoom` filter sets the limit for all these
+transports. The session benchmark overrides it in its own browser pages.
+
 **Short polling is the base transport, and an advisory channel sits
 beside it.** Every tab editing a post also opens a channel to the other
 tabs on that post: by default browser to browser (WebRTC, negotiated
