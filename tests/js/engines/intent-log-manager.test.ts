@@ -16,16 +16,24 @@ import {
 import { addFilter, removeFilter } from '@wordpress/hooks';
 
 // The real module drags ESM-only deps into Jest; the manager only reads
-// attribute schemas for its block-default merge.
+// attribute schemas (for its block-default merge and to tell rich text)
+// and parses the saved post (for text typed before the snapshot).
+const mockParse = jest.fn( (): unknown[] => [] );
 jest.mock( '@wordpress/blocks', () => ( {
-	getBlockType: ( name: string ) =>
-		'core/group' === name
-			? {
-					attributes: {
-						tagName: { default: 'div', type: 'string' },
-					},
-			  }
-			: undefined,
+	getBlockType: ( name: string ) => {
+		if ( 'core/group' === name ) {
+			return {
+				attributes: {
+					tagName: { default: 'div', type: 'string' },
+				},
+			};
+		}
+		if ( 'core/paragraph' === name ) {
+			return { attributes: { content: { type: 'rich-text' } } };
+		}
+		return undefined;
+	},
+	parse: () => mockParse(),
 } ) );
 
 // Taxonomy discovery (the manager mirrors entities.js: post-type
@@ -327,6 +335,248 @@ describe( 'intent-log manager', () => {
 				( update ) => 'insert_block' === JSON.parse( update.data ).type
 			)
 		).toHaveLength( 0 );
+	} );
+
+	describe( 'text typed before the snapshot on a post with content (issue #100)', () => {
+		const paragraph = ( content: string, syncId?: string ) => ( {
+			name: 'core/paragraph',
+			attributes: {
+				content,
+				...( syncId ? { metadata: { syncId } } : {} ),
+			},
+			innerBlocks: [],
+		} );
+
+		const peerAppend = {
+			data: JSON.stringify( {
+				intentId: 'peer-1',
+				actorId: 'u9c9',
+				baseSeq: 0,
+				txnId: null,
+				type: 'insert_text',
+				payload: {
+					syncId: 'p1',
+					field: 'content',
+					offset: 'Existing content'.length,
+					text: ' plus user one',
+				},
+			} ),
+			type: INTENT_LOG_UPDATE_TYPES.INTENT,
+		};
+
+		const genesis = () =>
+			snapshotRow( [
+				{
+					syncId: 'p1',
+					blockType: 'core/paragraph',
+					text: 'Existing content',
+				},
+			] );
+
+		const lastPushedContent = ( handlers: { edits: unknown[] } ) =>
+			(
+				handlers.edits.at( -1 ) as {
+					blocks: Array< { attributes: Record< string, unknown > } >;
+				}
+			 ).blocks[ 0 ].attributes.content;
+
+		const sentTexts = ( sent: EngineUpdate[] ) =>
+			sent
+				.map( ( update ) => JSON.parse( update.data ) )
+				.filter( ( intent ) => 'insert_text' === intent.type )
+				.map( ( intent ) => intent.payload.text );
+
+		afterEach( () => {
+			mockParse.mockReset();
+			mockParse.mockImplementation( () => [] );
+		} );
+
+		it( 'keeps the typed text when nothing was saved since the room began', async () => {
+			// Saved without identity: the editor stamps the genesis id
+			// before anybody types, which is no edit by the person.
+			mockParse.mockImplementation( () => [
+				paragraph( 'Existing content' ),
+			] );
+			const { manager, handlers, transport } = await loadManagedEntity( {
+				content: 'saved post',
+			} );
+
+			manager.update(
+				'postType/post',
+				'1',
+				{ blocks: [ paragraph( 'Existing content B', 'p1' ) ] },
+				'gutenberg'
+			);
+			transport.captured.session!.receiveUpdate( genesis() );
+			transport.captured.session!.receiveUpdate( peerAppend );
+			expect( transport.captured.sent ).toHaveLength( 0 );
+			jest.advanceTimersByTime( 1 );
+
+			// One insertion of the typed text (where the diff puts the
+			// space is the capture's call; the text is the same).
+			const sent = sentTexts( transport.captured.sent );
+			expect( sent ).toHaveLength( 1 );
+			expect( sent[ 0 ].trim() ).toBe( 'B' );
+			expect( lastPushedContent( handlers ) ).toBe(
+				'Existing content B plus user one'
+			);
+		} );
+
+		it( 'keeps only the typed text after a save mid-room (the saved text is not doubled)', async () => {
+			mockParse.mockImplementation( () => [
+				paragraph( 'Existing content plus user one', 'p1' ),
+			] );
+			const { manager, handlers, transport } = await loadManagedEntity( {
+				content: 'saved post',
+			} );
+
+			manager.update(
+				'postType/post',
+				'1',
+				{
+					blocks: [
+						paragraph( 'Existing content plus user one B', 'p1' ),
+					],
+				},
+				'gutenberg'
+			);
+			// The room began before the save: its first row is older than
+			// the saved post, and the peer's text replays behind it.
+			transport.captured.session!.receiveUpdate( genesis() );
+			transport.captured.session!.receiveUpdate( peerAppend );
+			jest.advanceTimersByTime( 1 );
+
+			expect( sentTexts( transport.captured.sent ) ).toEqual( [ ' B' ] );
+			expect( lastPushedContent( handlers ) ).toBe(
+				'Existing content plus user one B'
+			);
+		} );
+
+		it( 'drops a tree that differs from the saved post in more than text', async () => {
+			mockParse.mockImplementation( () => [
+				paragraph( 'Existing content', 'p1' ),
+			] );
+			const { manager, handlers, transport } = await loadManagedEntity( {
+				content: 'saved post',
+			} );
+
+			manager.update(
+				'postType/post',
+				'1',
+				{
+					blocks: [
+						paragraph( 'Existing content B', 'p1' ),
+						paragraph( 'A new block' ),
+					],
+				},
+				'gutenberg'
+			);
+			transport.captured.session!.receiveUpdate( genesis() );
+			transport.captured.session!.receiveUpdate( peerAppend );
+			jest.advanceTimersByTime( 1 );
+
+			expect( transport.captured.sent ).toHaveLength( 0 );
+			expect( lastPushedContent( handlers ) ).toBe(
+				'Existing content plus user one'
+			);
+		} );
+
+		it( 'removes typed-over characters only where the document still holds them', async () => {
+			mockParse.mockImplementation( () => [
+				paragraph( 'Existing content', 'p1' ),
+			] );
+			const { manager, handlers, transport } = await loadManagedEntity( {
+				content: 'saved post',
+			} );
+
+			// The person replaced "content" with "text".
+			manager.update(
+				'postType/post',
+				'1',
+				{ blocks: [ paragraph( 'Existing text', 'p1' ) ] },
+				'gutenberg'
+			);
+			transport.captured.session!.receiveUpdate( genesis() );
+			transport.captured.session!.receiveUpdate( peerAppend );
+			jest.advanceTimersByTime( 1 );
+
+			expect( lastPushedContent( handlers ) ).toBe(
+				'Existing text plus user one'
+			);
+		} );
+
+		it( 'keeps the typed text on a room that began empty and whose history filled it', async () => {
+			mockParse.mockImplementation( () => [
+				paragraph( 'saved marker', 'h1' ),
+			] );
+			const { manager, transport } = await loadManagedEntity( {
+				content: 'saved post',
+			} );
+
+			manager.update(
+				'postType/post',
+				'1',
+				{ blocks: [ paragraph( 'saved marker B', 'h1' ) ] },
+				'gutenberg'
+			);
+			transport.captured.session!.receiveUpdate( snapshotRow( [] ) );
+			transport.captured.session!.receiveUpdate( {
+				data: JSON.stringify( {
+					intentId: 'hist-1',
+					actorId: 'u9c9',
+					baseSeq: 0,
+					txnId: null,
+					type: 'insert_block',
+					payload: {
+						block: {
+							syncId: 'h1',
+							blockType: 'core/paragraph',
+							text: 'saved marker',
+						},
+						parentId: null,
+						afterSiblingId: null,
+					},
+				} ),
+				type: INTENT_LOG_UPDATE_TYPES.INTENT,
+			} );
+			jest.advanceTimersByTime( 1 );
+
+			const types = transport.captured.sent.map(
+				( update ) => JSON.parse( update.data ).type
+			);
+			expect( types ).not.toContain( 'insert_block' );
+			const sent = sentTexts( transport.captured.sent );
+			expect( sent ).toHaveLength( 1 );
+			expect( sent[ 0 ].trim() ).toBe( 'B' );
+		} );
+
+		it( 'a newer editor tree supersedes the buffered one', async () => {
+			mockParse.mockImplementation( () => [
+				paragraph( 'Existing content', 'p1' ),
+			] );
+			const { manager, transport } = await loadManagedEntity( {
+				content: 'saved post',
+			} );
+
+			manager.update(
+				'postType/post',
+				'1',
+				{ blocks: [ paragraph( 'Existing content B', 'p1' ) ] },
+				'gutenberg'
+			);
+			transport.captured.session!.receiveUpdate( genesis() );
+			// The editor reports its tree again before the replay runs: it
+			// is the newer testimony, captured on its own.
+			manager.update(
+				'postType/post',
+				'1',
+				{ blocks: [ paragraph( 'Existing content C', 'p1' ) ] },
+				'gutenberg'
+			);
+			jest.advanceTimersByTime( 1 );
+
+			expect( sentTexts( transport.captured.sent ) ).toEqual( [ ' C' ] );
+		} );
 	} );
 
 	it( 'REGRESSION: stale-base voids re-capture the editor tree instead of silently losing the edit', async () => {

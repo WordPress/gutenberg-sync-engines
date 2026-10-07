@@ -18,6 +18,10 @@ import { getBlockType, getSaveContent } from '@wordpress/blocks';
  * Internal dependencies
  */
 import { createAwarenessDoc } from '../shared/awareness-sync';
+import {
+	findTypedTextSinceSave,
+	type TypedTextEdit,
+} from '../shared/typed-text';
 import { registerAwareness } from '../awareness/registry';
 import {
 	applyDerivedIntents,
@@ -185,10 +189,11 @@ interface EntityState {
 	 * this buffer an edit made during the join round trip stays local
 	 * forever — the fuzzer found it as a reload straddling a block insert
 	 * on an empty-genesis room, where the bootstrap push (which would at
-	 * least reconcile the trees) is skipped too. An empty-genesis
-	 * bootstrap schedules a deferred capture of it (see the bootstrap
-	 * branch for why deferred and why only-when-still-empty); a non-empty
-	 * bootstrap or any newer post-init editor tree discards it.
+	 * least reconcile the trees) is skipped too. A bootstrap schedules a
+	 * deferred recovery of it (see the bootstrap branch for why
+	 * deferred): captured as is while the document is still empty,
+	 * otherwise only its typed text (replayPreInitText, issue #100). Any
+	 * newer post-init editor tree discards it.
 	 */
 	preInitTree: BridgeBlock[] | null;
 	/**
@@ -890,6 +895,64 @@ function scheduleEditorSync( state: EntityState, force = false ): void {
 }
 
 /**
+ * Applies one typed change (see findTypedTextSinceSave) to a bridge tree in
+ * place: to the block with the change's identity, else the block at its
+ * position. The removed characters come out only when the block still
+ * holds them at that offset; the inserted ones go in at that offset, or at
+ * the end of a shorter text.
+ *
+ * @param blocks The tree.
+ * @param edit   The change.
+ * @return Whether a block took the change.
+ */
+function applyTypedText( blocks: BridgeBlock[], edit: TypedTextEdit ): boolean {
+	const findById = ( list: BridgeBlock[] ): BridgeBlock | undefined => {
+		for ( const block of list ) {
+			const metadata = block.attributes?.metadata as
+				| { syncId?: string }
+				| undefined;
+			if ( metadata?.syncId === edit.syncId ) {
+				return block;
+			}
+			const inner = findById( block.innerBlocks );
+			if ( inner ) {
+				return inner;
+			}
+		}
+		return undefined;
+	};
+	let block = edit.syncId ? findById( blocks ) : undefined;
+	if ( ! block ) {
+		let list = blocks;
+		for ( const index of edit.path ) {
+			block = list[ index ];
+			if ( ! block ) {
+				return false;
+			}
+			list = block.innerBlocks;
+		}
+	}
+	if ( ! block ) {
+		return false;
+	}
+	const current = block.attributes[ edit.attribute ];
+	if ( undefined !== current && 'string' !== typeof current ) {
+		return false;
+	}
+	let text = current ?? '';
+	const at = Math.min( edit.offset, text.length );
+	if ( edit.removed.length > 0 && text.startsWith( edit.removed, at ) ) {
+		text = text.slice( 0, at ) + text.slice( at + edit.removed.length );
+	}
+	text = text.slice( 0, at ) + edit.inserted + text.slice( at );
+	if ( text === ( current ?? '' ) ) {
+		return false;
+	}
+	block.attributes[ edit.attribute ] = text;
+	return true;
+}
+
+/**
  * Resolves which state an arriving editor tree was authored against, and
  * makes it the observed baseline.
  *
@@ -1364,23 +1427,33 @@ export function createIntentLogManager( debug = false ): SyncManager {
 				 * every block duplicates (found by fuzz:quick when this
 				 * recovery ran synchronously). A still-empty document after
 				 * the burst means the room truly holds only its genesis —
-				 * exactly the stranded case. Any post-init editor tree
-				 * supersedes the buffer (update() clears it), and non-empty
-				 * bootstraps reconcile through pushDocument as before.
+				 * exactly the stranded case; a filled one carries over only
+				 * the typed text, like a non-empty bootstrap below. Any
+				 * post-init editor tree supersedes the buffer (update()
+				 * clears it).
 				 */
 				if ( 0 === blocks.length ) {
 					if ( state.preInitTree?.length ) {
 						setTimeout( () => {
+							if (
+								! state.unloaded &&
+								state.session.isInitialized() &&
+								documentBlocks(
+									state,
+									state.session.getDocument()!
+								).length > 0
+							) {
+								// History filled the room: the tree is the
+								// saved post plus keystrokes, as below.
+								replayPreInitText();
+								return;
+							}
 							const buffered = state.preInitTree;
 							state.preInitTree = null;
 							if (
 								! buffered ||
 								state.unloaded ||
-								! state.session.isInitialized() ||
-								documentBlocks(
-									state,
-									state.session.getDocument()!
-								).length > 0
+								! state.session.isInitialized()
 							) {
 								return;
 							}
@@ -1394,8 +1467,22 @@ export function createIntentLogManager( debug = false ): SyncManager {
 					}
 					return;
 				}
-				state.preInitTree = null;
 				pushDocument( state, bootstrap, blocks );
+				/*
+				 * Text typed during the join round trip on a post that has
+				 * content (issue #100). The push above replaces the canvas,
+				 * so the buffered tree is the only record of it. That tree
+				 * is the SAVED post plus the keystrokes, and the saved post
+				 * may be newer than this snapshot (a save mid-room), so it
+				 * is never captured as is: only its rich-text changes over
+				 * the saved post carry over, onto the document the editor
+				 * now shows. Deferred past the delivery burst for the same
+				 * reason as the empty-post recovery above: the room's later
+				 * rows land right behind this snapshot.
+				 */
+				if ( state.preInitTree?.length ) {
+					setTimeout( replayPreInitText, 0 );
+				}
 				return;
 			}
 			/*
@@ -1449,6 +1536,54 @@ export function createIntentLogManager( debug = false ): SyncManager {
 			}
 			log( 'session reset from server checkpoint', { key } );
 		} );
+
+		/**
+		 * Carries the text typed before the snapshot onto the document the
+		 * editor shows now, and authors it as an ordinary capture.
+		 *
+		 * Each rich-text change between the saved post and the buffered
+		 * tree is applied to the same block, found by its saved identity
+		 * (else by position): the removed characters come out only where
+		 * the document still holds them, the typed ones go in at the same
+		 * offset, or at the end of a shorter text. A tree that differs from
+		 * the saved post in any other way (a block added or removed, a
+		 * non-text attribute) is dropped, as before; so is a buffer that a
+		 * newer editor tree superseded.
+		 */
+		const replayPreInitText = (): void => {
+			const buffered = state.preInitTree;
+			state.preInitTree = null;
+			if (
+				! buffered ||
+				state.unloaded ||
+				! state.session.isInitialized() ||
+				'string' !== typeof recordContent
+			) {
+				return;
+			}
+			const edits = findTypedTextSinceSave( recordContent, buffered );
+			const shown = state.pendingPushes.at( -1 ) ?? state.observed;
+			if ( ! edits?.length || ! shown ) {
+				return;
+			}
+			const tree = documentBlocks( state, shown.doc );
+			let applied = false;
+			for ( const edit of edits ) {
+				applied = applyTypedText( tree, edit ) || applied;
+			}
+			if ( ! applied ) {
+				return;
+			}
+			manager.update(
+				objectType,
+				objectId,
+				{ blocks: tree },
+				'pre-init-capture'
+			);
+			// The editor has not seen the typed text since the bootstrap
+			// push replaced it; this runs outside update(), so it lands.
+			syncEditor( state, true );
+		};
 
 		/**
 		 * Re-derives local work from the last editor-fed tree against the
