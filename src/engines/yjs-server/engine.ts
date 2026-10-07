@@ -6,6 +6,7 @@ import * as Y from 'yjs';
 /**
  * WordPress dependencies
  */
+import { getBlockType, parse } from '@wordpress/blocks';
 // eslint-disable-next-line import/no-unresolved -- Provided at runtime as wp.sync.
 import type {
 	EngineCollection,
@@ -50,7 +51,13 @@ import {
  *   genesis snapshot row populates it on first sync.
  * - Local changes made before that snapshot arrives are BUFFERED and
  *   merged once it does (the state map's `version` key, which only the
- *   server writes for this engine, is the bootstrap marker).
+ *   server writes for this engine, is the bootstrap marker). A buffered
+ *   edit that carries the block tree is not merged as is: the editor's
+ *   tree is the SAVED post plus the person's keystrokes, and the
+ *   server's document may be older or newer than the saved post, so a
+ *   verbatim merge would count every difference as the person's edit
+ *   (issue #57). Instead only the TEXT the person typed is applied to
+ *   the document (see `replayTypedText`).
  * - `getEditorChanges` reports nothing until bootstrap, so an empty
  *   pre-sync document can never be dispatched into the editor as a
  *   mass deletion.
@@ -102,18 +109,22 @@ export function createYjsServerEngine(): SyncEngine {
 
 			// Edits made before the server snapshot arrives, replayed in
 			// order once it does.
-			let pendingLocalChanges: Array< {
-				changes: Parameters<
-					typeof syncConfig.applyChangesToCRDTDoc
-				>[ 1 ];
+			type LocalChanges = Parameters<
+				typeof syncConfig.applyChangesToCRDTDoc
+			>[ 1 ];
+			interface PendingLocalChange {
+				changes: LocalChanges;
 				origin: unknown;
 				isSave: boolean;
-			} > = [];
+			}
+			let pendingLocalChanges: PendingLocalChange[] = [];
+
+			// The loaded record's raw content: what the editor parsed into
+			// the tree a pre-bootstrap keystroke carries.
+			let savedContent: string | undefined;
 
 			const applyChanges = (
-				changes: Parameters<
-					typeof syncConfig.applyChangesToCRDTDoc
-				>[ 1 ],
+				changes: LocalChanges,
 				origin: unknown,
 				isSave: boolean
 			) => {
@@ -123,6 +134,63 @@ export function createYjsServerEngine(): SyncEngine {
 						markEntityAsSaved( ydoc );
 					}
 				}, origin );
+			};
+
+			/**
+			 * Applies what a person TYPED before the snapshot landed, and
+			 * nothing else. The buffered tree is compared with the saved post
+			 * as the editor parsed it; when the two differ only in rich text,
+			 * each difference is applied to the document's own text at the
+			 * same block position (see `findTypedTextEdits`). Any other
+			 * difference (a block added or removed, a non-text attribute) is
+			 * dropped, as is a tree with no saved content to compare against:
+			 * the window is one join round trip, and dropping such an edit
+			 * costs far less than merging a stale tree would.
+			 *
+			 * One exception: a document that holds no blocks yet (an empty
+			 * post) has nothing a tree could collide with, so the buffered
+			 * edit is merged as it is. That keeps the first paragraph typed
+			 * into a new post, which the comparison above would drop (the
+			 * saved post parses to no blocks, the tree holds one).
+			 *
+			 * @param entry The last buffered edit that carried the tree.
+			 */
+			const replayTypedText = ( entry: PendingLocalChange ) => {
+				const yblocks = recordMap.get( 'blocks' );
+				if (
+					! ( yblocks instanceof Y.Array ) ||
+					0 === yblocks.length
+				) {
+					applyChanges( entry.changes, entry.origin, entry.isSave );
+					return;
+				}
+				const after = entry.changes.blocks;
+				if (
+					! Array.isArray( after ) ||
+					'string' !== typeof savedContent
+				) {
+					return;
+				}
+				let edits: TypedTextEdit[] | null;
+				try {
+					edits = findTypedTextEdits(
+						parse( savedContent ) as EditorBlock[],
+						after as EditorBlock[]
+					);
+				} catch {
+					return;
+				}
+				if ( ! edits || ( 0 === edits.length && ! entry.isSave ) ) {
+					return;
+				}
+				ydoc.transact( () => {
+					for ( const edit of edits ) {
+						applyTypedTextEdit( yblocks, edit );
+					}
+					if ( entry.isSave ) {
+						markEntityAsSaved( ydoc );
+					}
+				}, entry.origin );
 			};
 
 			const onBootstrap = ( event: Y.YMapEvent< unknown > ) => {
@@ -135,8 +203,16 @@ export function createYjsServerEngine(): SyncEngine {
 				stateMap.unobserve( onBootstrap );
 				const pending = pendingLocalChanges;
 				pendingLocalChanges = [];
+				let lastTreeEntry: PendingLocalChange | undefined;
 				for ( const entry of pending ) {
+					if ( carriesBlockTree( entry.changes ) ) {
+						lastTreeEntry = entry;
+						continue;
+					}
 					applyChanges( entry.changes, entry.origin, entry.isSave );
+				}
+				if ( lastTreeEntry ) {
+					replayTypedText( lastTreeEntry );
 				}
 			};
 			stateMap.observe( onBootstrap );
@@ -161,12 +237,15 @@ export function createYjsServerEngine(): SyncEngine {
 				createSession: () =>
 					createYjsServerSessionCodec( { awareness, doc: ydoc } ),
 
-				hydrate() {
-					// Deliberately empty: the server's genesis snapshot is
-					// the document's origin. Seeding from the loaded record
-					// here would fork a duplicate universe of the same
-					// content; persisted client-side docs are likewise
-					// ignored in favor of the server's canonical state.
+				hydrate( record ) {
+					// Deliberately no seeding: the server's genesis snapshot
+					// is the document's origin. Seeding from the loaded
+					// record here would fork a duplicate universe of the
+					// same content; persisted client-side docs are likewise
+					// ignored in favor of the server's canonical state. The
+					// record's content is kept only as the base a buffered
+					// pre-bootstrap edit was made on.
+					savedContent = getRawContentString( record?.content );
 				},
 
 				applyLocalChanges( changes, origin, options ) {
@@ -332,6 +411,236 @@ export function createYjsServerEngine(): SyncEngine {
 			};
 		},
 	};
+}
+
+/**
+ * Whether a change set carries the editor's block tree: a `blocks` edit, or
+ * a raw `content` string the tree is re-parsed from (the code editor's
+ * per-keystroke dispatch). A lazy `content` serializer alone does not.
+ *
+ * @param changes A change set handed to applyLocalChanges.
+ */
+function carriesBlockTree( changes: Partial< ObjectData > ): boolean {
+	if ( 'blocks' in changes ) {
+		return true;
+	}
+	const content = changes.content;
+	return undefined !== content && 'function' !== typeof content;
+}
+
+/** A block as the editor holds it, as far as this engine reads it. */
+interface EditorBlock {
+	name: string;
+	attributes: Record< string, unknown >;
+	innerBlocks?: EditorBlock[];
+}
+
+/**
+ * One change to one rich-text attribute: at `path` (block indexes, outer
+ * to inner), `attribute` had `removed` replaced by `inserted` at `offset`.
+ */
+interface TypedTextEdit {
+	path: number[];
+	attribute: string;
+	offset: number;
+	removed: string;
+	inserted: string;
+}
+
+/**
+ * The rich-text changes between the tree the person started from and the
+ * tree they typed into, or null when the two differ in any other way
+ * (block count, block type, a non-text attribute).
+ *
+ * @param base  The saved post as the editor parsed it.
+ * @param after The editor's tree after the person typed.
+ * @param path  Block indexes of the containing block, outer to inner.
+ */
+function findTypedTextEdits(
+	base: EditorBlock[],
+	after: EditorBlock[],
+	path: number[] = []
+): TypedTextEdit[] | null {
+	if ( base.length !== after.length ) {
+		return null;
+	}
+	const edits: TypedTextEdit[] = [];
+	for ( let i = 0; i < base.length; i++ ) {
+		const before = base[ i ];
+		const block = after[ i ];
+		if ( before.name !== block.name ) {
+			return null;
+		}
+		const names = new Set( [
+			...Object.keys( before.attributes ?? {} ),
+			...Object.keys( block.attributes ?? {} ),
+		] );
+		for ( const name of names ) {
+			const oldValue = before.attributes?.[ name ];
+			const newValue = block.attributes?.[ name ];
+			if ( isRichText( block.name, name ) ) {
+				const oldText = richTextToString( oldValue );
+				const newText = richTextToString( newValue );
+				if ( oldText !== newText ) {
+					edits.push( {
+						path: [ ...path, i ],
+						attribute: name,
+						...diffText( oldText, newText ),
+					} );
+				}
+			} else if ( ! isDeepEqual( oldValue, newValue ) ) {
+				return null;
+			}
+		}
+		const inner = findTypedTextEdits(
+			before.innerBlocks ?? [],
+			block.innerBlocks ?? [],
+			[ ...path, i ]
+		);
+		if ( ! inner ) {
+			return null;
+		}
+		edits.push( ...inner );
+	}
+	return edits;
+}
+
+/**
+ * The one contiguous change between two strings: the text after the
+ * common start that is not part of the common end.
+ *
+ * @param before The text before the change.
+ * @param after  The text after the change.
+ */
+function diffText(
+	before: string,
+	after: string
+): Pick< TypedTextEdit, 'offset' | 'removed' | 'inserted' > {
+	const max = Math.min( before.length, after.length );
+	let start = 0;
+	while ( start < max && before[ start ] === after[ start ] ) {
+		start++;
+	}
+	let end = 0;
+	while (
+		end < max - start &&
+		before[ before.length - 1 - end ] === after[ after.length - 1 - end ]
+	) {
+		end++;
+	}
+	return {
+		offset: start,
+		removed: before.slice( start, before.length - end ),
+		inserted: after.slice( start, after.length - end ),
+	};
+}
+
+/**
+ * Applies one typed change to the document's own text for that block. The
+ * removed characters come out only when the document still holds them at
+ * that offset; the inserted ones go in at that offset, or at the end when
+ * the document's text is shorter. A block or attribute the document does
+ * not have at that position is left alone.
+ *
+ * @param yblocks The document's top-level blocks.
+ * @param edit    The change to apply.
+ */
+function applyTypedTextEdit(
+	yblocks: Y.Array< unknown >,
+	edit: TypedTextEdit
+) {
+	let blocks: unknown = yblocks;
+	let yblock: unknown;
+	for ( const index of edit.path ) {
+		if ( ! ( blocks instanceof Y.Array ) ) {
+			return;
+		}
+		yblock = blocks.get( index );
+		blocks = yblock instanceof Y.Map ? yblock.get( 'innerBlocks' ) : null;
+	}
+	if ( ! ( yblock instanceof Y.Map ) ) {
+		return;
+	}
+	const attributes = yblock.get( 'attributes' );
+	if ( ! ( attributes instanceof Y.Map ) ) {
+		return;
+	}
+	const text = attributes.get( edit.attribute );
+	if ( ! ( text instanceof Y.Text ) ) {
+		return;
+	}
+	const at = Math.min( edit.offset, text.length );
+	if (
+		edit.removed.length > 0 &&
+		text.toString().startsWith( edit.removed, at )
+	) {
+		text.delete( at, edit.removed.length );
+	}
+	if ( edit.inserted.length > 0 ) {
+		text.insert( at, edit.inserted );
+	}
+}
+
+/**
+ * A rich-text attribute as a string: the editor holds RichTextData, the
+ * parser may hold either, and a missing value reads as empty.
+ *
+ * @param value The attribute value.
+ */
+function richTextToString( value: unknown ): string {
+	return null === value || undefined === value ? '' : String( value );
+}
+
+/**
+ * Whether a registered block's attribute holds rich text.
+ *
+ * @param blockName     Block name.
+ * @param attributeName Attribute name.
+ */
+function isRichText( blockName: string, attributeName: string ): boolean {
+	const attributes = getBlockType( blockName )?.attributes as
+		| Record< string, { type?: string } >
+		| undefined;
+	return 'rich-text' === attributes?.[ attributeName ]?.type;
+}
+
+/**
+ * Structural equality for the JSON values a block attribute holds.
+ *
+ * @param a A value.
+ * @param b Another value.
+ */
+function isDeepEqual( a: unknown, b: unknown ): boolean {
+	if ( a === b ) {
+		return true;
+	}
+	if ( Array.isArray( a ) && Array.isArray( b ) ) {
+		return (
+			a.length === b.length &&
+			a.every( ( item, i ) => isDeepEqual( item, b[ i ] ) )
+		);
+	}
+	if (
+		a &&
+		b &&
+		'object' === typeof a &&
+		'object' === typeof b &&
+		! Array.isArray( a ) &&
+		! Array.isArray( b )
+	) {
+		const aRecord = a as Record< string, unknown >;
+		const bRecord = b as Record< string, unknown >;
+		const aKeys = Object.keys( aRecord );
+		return (
+			aKeys.length === Object.keys( bRecord ).length &&
+			aKeys.every(
+				( key ) =>
+					key in bRecord &&
+					isDeepEqual( aRecord[ key ], bRecord[ key ] )
+			)
+		);
+	}
+	return false;
 }
 
 /**

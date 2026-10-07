@@ -342,68 +342,7 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 			$this->last_room_scan_at = microtime( true );
 
 			while ( $this->running ) {
-				$read  = array( $this->listener );
-				$write = array();
-
-				foreach ( $this->clients as $client ) {
-					$stream = $client['conn']->get_stream();
-
-					/*
-					 * Every socket is watched, including a receive stream
-					 * that will never send another byte. A readable event on
-					 * one of those is the browser closing the stream, which
-					 * is the only way the daemon can learn that the
-					 * connection is finished and release its slot; without
-					 * it the slot is held until the idle sweep, and a
-					 * browser that reopens a stream per event exhausts the
-					 * per-IP cap within a minute.
-					 */
-					$read[] = $stream;
-
-					if ( $client['conn']->has_pending_writes() ) {
-						$write[] = $stream;
-					}
-				}
-
-				$except = null;
-
-				// Intentional silencing: stream_select() raises a warning when
-				// interrupted by a signal; a false return is handled below.
-				// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
-				$changed = @stream_select( $read, $write, $except, 1 );
-
-				if ( false !== $changed ) {
-					foreach ( $read as $stream ) {
-						if ( $stream === $this->listener ) {
-							$this->accept_connection();
-							continue;
-						}
-
-						$this->handle_readable( (int) $stream );
-					}
-
-					foreach ( $write as $stream ) {
-						$key = (int) $stream;
-						if ( ! isset( $this->clients[ $key ] ) ) {
-							continue;
-						}
-
-						/*
-						 * A failed write means the peer is gone, and takes
-						 * the connection's place in the client table with
-						 * it. Nothing else can reap a receive stream whose
-						 * peer vanished without closing it — the idle sweep
-						 * passes over a framing that never sends anything —
-						 * so the entry would otherwise hold its slot for
-						 * the life of the daemon.
-						 */
-						if ( ! $this->clients[ $key ]['conn']->flush_writes() ) {
-							$this->disconnect( $key );
-						}
-					}
-				}
-
-				$this->tick();
+				$this->poll_once();
 			}
 
 			foreach ( array_keys( $this->clients ) as $key ) {
@@ -414,6 +353,108 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 			$this->listener = null;
 
 			return true;
+		}
+
+		/**
+		 * Runs one pass of the event loop: waits up to a second for socket
+		 * activity, serves it, then runs the periodic work.
+		 *
+		 * @since n.e.x.t
+		 */
+		private function poll_once(): void {
+			$this->reap_closed_clients();
+
+			$read  = array( $this->listener );
+			$write = array();
+
+			foreach ( $this->clients as $client ) {
+				$stream = $client['conn']->get_stream();
+
+				/*
+				 * Every socket is watched, including a receive stream
+				 * that will never send another byte. A readable event on
+				 * one of those is the browser closing the stream, which
+				 * is the only way the daemon can learn that the
+				 * connection is finished and release its slot; without
+				 * it the slot is held until the idle sweep, and a
+				 * browser that reopens a stream per event exhausts the
+				 * per-IP cap within a minute.
+				 */
+				$read[] = $stream;
+
+				if ( $client['conn']->has_pending_writes() ) {
+					$write[] = $stream;
+				}
+			}
+
+			$except = null;
+
+			// Intentional silencing: stream_select() raises a warning when
+			// interrupted by a signal; a false return is handled below.
+			// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+			$changed = @stream_select( $read, $write, $except, 1 );
+
+			if ( false !== $changed ) {
+				foreach ( $read as $stream ) {
+					if ( $stream === $this->listener ) {
+						$this->accept_connection();
+						continue;
+					}
+
+					$this->handle_readable( (int) $stream );
+				}
+
+				foreach ( $write as $stream ) {
+					$key = (int) $stream;
+					if ( ! isset( $this->clients[ $key ] ) ) {
+						continue;
+					}
+
+					/*
+					 * A failed write means the peer is gone, and takes
+					 * the connection's place in the client table with
+					 * it. Nothing else can reap a receive stream whose
+					 * peer vanished without closing it — the idle sweep
+					 * passes over a framing that never sends anything —
+					 * so the entry would otherwise hold its slot for
+					 * the life of the daemon.
+					 */
+					if ( ! $this->clients[ $key ]['conn']->flush_writes() ) {
+						$this->disconnect( $key );
+					}
+				}
+			}
+
+			$this->tick();
+		}
+
+		/**
+		 * Disconnects every client whose stream is already closed.
+		 *
+		 * A write that fails closes its stream on the spot, and writes
+		 * happen everywhere: a broadcast, a roster, a keepalive. None of
+		 * those callers can drop the client then, because they are often
+		 * looping over the client table. So the entry stays until here,
+		 * and stream_select() must never see it: a closed stream makes it
+		 * throw, which ends the daemon and drops every connection.
+		 *
+		 * Disconnecting a client tells its rooms' other clients, and a
+		 * write to one of them can fail too. So this repeats until a pass
+		 * finds nothing to remove.
+		 *
+		 * @since n.e.x.t
+		 */
+		private function reap_closed_clients(): void {
+			do {
+				$reaped = false;
+
+				foreach ( array_keys( $this->clients ) as $key ) {
+					if ( isset( $this->clients[ $key ] ) && $this->clients[ $key ]['conn']->is_closed() ) {
+						$this->disconnect( $key );
+						$reaped = true;
+					}
+				}
+			} while ( $reaped );
 		}
 
 		/**

@@ -211,12 +211,21 @@ document-dependent action choices can differ. A replay is evidence of
 repeatability, not a guarantee of the same timing. Reducing `--steps` also
 changes milestone placement, so it does not preserve the original prefix.
 
-The spec reuses the subtree's collaboration fixtures
-(`gutenberg/test/e2e/specs/editor/collaboration/fixtures/`) and the
-plugin-local e2e global setup (auth, clean state, plugin activation
+The spec uses the plugin-local collaboration fixtures
+(`tests/e2e/config/collaboration-fixtures.ts`) and e2e global setup
+(auth, clean state, plugin activation
 including the worktree duplicate-mount handling). Engine/transport are set
 *outside* the spec by the runner; the spec only reads `RTC_FUZZ_ENGINE` /
 `RTC_FUZZ_TRANSPORT` to record them and adapt fault injection.
+
+Joining users log in through a request to WordPress's login endpoint in a
+fresh browser context. The login request has a 10-second limit and must
+return both the login redirect and an authentication cookie. Editor
+navigation has a 30-second limit. Failed setup closes the context and
+reports the error without retrying the join. This avoids the login page's
+delayed focus change, which could put the password in the username field
+and leave the fuzzer waiting for a form submission that never happened.
+Run the focused checks with `npm run test:js -- --runInBand collaboration-login`.
 
 ## Reading results
 
