@@ -11,14 +11,10 @@
  * parks keystroke by keystroke, and the reviewer must see it as one edit
  * with one decision, not a card per keystroke.
  *
- * A RECORD COVERS ONE RUN OF SIBLING BLOCKS. The blocks the members
- * touch need not be neighbours: one edit can change the first and the
- * third paragraph. An accepted result replaces the record's blocks as
- * one piece, so the record covers everything from its first block to its
- * last, the blocks in between included (see coveringRun()). The reviewer
- * then sees every block an accepted result replaces. A record that left
- * the second paragraph out would put the merged result where the first
- * one was and leave the second paragraph behind it, out of order.
+ * A RECORD COVERS ONE RUN OF SIBLING BLOCKS, from the first block the
+ * members touch to the last, the blocks in between included, because an
+ * accepted result replaces the run as one piece (see coveringRun() and
+ * proposedBlocks()).
  *
  * THE THREE SIDES, all as serialized block content:
  *
@@ -37,10 +33,7 @@
  *   capture batch are expressed against the base plus the batch's earlier
  *   members, and a later batch at the same frame against the base plus
  *   the earlier batches, so applying them in order rebuilds what the
- *   author saw. An edit that no longer applies is skipped. The blocks
- *   in between, which the author did not touch, read as the current
- *   document has them (see proposedBlocks()): choosing this side must
- *   not undo what a collaborator did to them.
+ *   author saw. An edit that no longer applies is skipped.
  * - `current`: the run in this client's optimistic document.
  *
  * Pure: the documents and the serializer come in through `deps`, so the
@@ -611,14 +604,9 @@ export function buildConflictRecords(
 				base,
 				proposed,
 				current: currentSide,
-				/*
-				 * The server remembers an author's set-aside edits to a
-				 * block across requests and sets their later typing there
-				 * aside as dependents (rule 6 seeded from the parked rows),
-				 * and those fold into this record. A property write has no
-				 * text frame for that. The card then waits for a typing
-				 * pause so the record carries the whole sentence.
-				 */
+				// The server sets an author's later typing in a held block
+				// aside into this record (rule 6, seeded from the parked
+				// rows). A property write has no text frame for that.
 				...( 'merge' === draft.kind && undefined === draft.property
 					? { followsTyping: true }
 					: {} ),

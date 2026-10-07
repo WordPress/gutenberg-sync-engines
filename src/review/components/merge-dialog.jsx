@@ -142,9 +142,6 @@ export function MergeDialogBody( {
 	onAccept,
 	onCancel,
 } ) {
-	// The merged result starts as the current version's blocks. Either
-	// pane's "Restore this version" reseeds it, and it stays
-	// hand-editable in the merged block editor below the panes.
 	const [ merged, setMerged ] = useState( () => parse( current ) );
 	// Which version the merged result is a plain copy of: 'current',
 	// 'proposed', or null once the reviewer has edited it by hand.

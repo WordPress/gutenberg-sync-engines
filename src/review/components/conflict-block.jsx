@@ -173,15 +173,10 @@ export function ConflictBlockBody( {
  * opens the built-in dialog, with its structure unlocked when the record
  * covers a section.
  *
- * The reviewer's decision goes to the ENGINE as content
- * (`resolveConflict` with `accept` plus serialized blocks): the engine
- * applies the replacement as an ordinary edit and closes the record in
- * the same round. The decision names the current version the dialog
- * showed, and the engine refuses it when a collaborator changed the
- * content in the meantime: the card then stays, with the content as it
- * is now. The card never writes into the canvas itself: a canvas
- * write dispatched right before resolving is silently lost to the sync
- * push the resolution triggers (see AGENTS.md on pushes from inside
+ * The decision goes to the engine as content (the contract note in
+ * src/review/types.ts). The card never writes into the canvas itself: a
+ * canvas write dispatched right before resolving is silently lost to the
+ * sync push the resolution triggers (see AGENTS.md on pushes from inside
  * update()).
  *
  * When several records target the block (parked edits by different

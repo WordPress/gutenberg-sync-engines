@@ -101,11 +101,10 @@ export function SequesteredBlockBody( { sequestration, canReview, onReview } ) {
  * so the content is read-only while held. The review dialog opens from
  * here. Its modal renders outside the canvas.
  *
- * Both decisions go to the ENGINE (`resolveConflict`): Approve accepts
- * the reviewed markup as content, Remove block accepts empty content
- * (the contract's "remove"). The card never writes into the canvas
- * itself: a canvas write dispatched right before resolving is silently
- * lost to the sync push the resolution triggers.
+ * Both decisions go to the engine: Approve accepts the reviewed markup
+ * as content, Remove block accepts empty content (the contract's
+ * "remove"). The card never writes into the canvas itself, for the
+ * reason given on ConflictBlock.
  *
  * When several records hold the block, the card presents the first.
  * The next one takes its place once it is decided.

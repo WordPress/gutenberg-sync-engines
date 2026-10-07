@@ -707,14 +707,10 @@ export function createIntentLogSession(
 					 * document must be replanned explicitly: the last
 					 * replan ran while this intent was still pending, and
 					 * its predicted-applied effect would otherwise sit on
-					 * the canvas until the next accepted row — which may
-					 * never come. (The fuzzer's one-keystroke divergence:
-					 * concurrent same-paragraph typing left the loser's
-					 * first escalated keystroke on their canvas forever.)
-					 */
-					/*
-					 * One of our own planner escalations also seeds every
-					 * later replan: a pending intent that still counts the
+					 * the canvas until the next accepted row, which may
+					 * never come (the fuzzer's one-keystroke divergence).
+					 * One of our own escalations also seeds every later
+					 * replan: a pending intent that still counts the
 					 * set-aside text (same old baseSeq) is predicted as the
 					 * dependent the server will make of it, so the
 					 * optimistic document never shows it misplaced.
