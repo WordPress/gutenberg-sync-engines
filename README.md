@@ -17,6 +17,13 @@ This repository is where candidates are built, measured, and compared so
 that one can be chosen. The eventual goal is to package the preferred
 engine as a feature plugin for wider testing.
 
+## Requirements
+
+WordPress 7.0 and the
+[Presence API](https://wordpress.org/plugins/presence-api/) plugin, which
+must be active before this plugin can be activated. The wp-env
+environments and both Playground blueprints install it.
+
 ## What it provides
 
 ### Engines
@@ -66,17 +73,20 @@ runs over a direct WebRTC link between browsers or over a WebSocket.
 ### Storage
 
 - Two plugin-owned tables, `wp_sync_updates` (the update log) and
-  `wp_sync_room_meta` (which engine created the room, who is
-  present, engine bookkeeping),
+  `wp_sync_room_meta` (which engine created the room, engine
+  bookkeeping),
   substituted for Gutenberg's default post-meta storage. No collaboration
-  write touches post caches. On a site with a persistent object cache
-  (Redis, Memcached), who is present in a room is kept in the cache
-  rather than the database, the storage strategy the WordPress hosting
-  performance tests recommended; a poll that changes nothing writes
-  nothing. Activating the plugin creates the tables;
+  write touches post caches. Activating the plugin creates the tables;
   deactivating it leaves them and every room in place; deleting the
   plugin (`uninstall.php`) or running `wp collaboration storage drop`
   removes them. `wp collaboration storage status` shows what a site has.
+- Who is present in a room (names, avatars, cursors) is kept in the
+  Presence API's `wp_presence` table, one row per editor tab. When that
+  plugin's recording is turned off, presence falls back to
+  `wp_sync_room_meta`, or to the object cache on a site with a
+  persistent one (Redis, Memcached), the storage strategy the WordPress
+  hosting performance tests recommended. Either way, a poll that changes
+  nothing writes nothing.
 
 The active engine, and how editors get each other's changes (polling,
 polling with an advisory channel over WebRTC or a WebSocket,
