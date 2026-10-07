@@ -8,7 +8,7 @@ import {
 	predictedDisposition,
 	replanClient,
 } from './intent-log/client.js';
-import { serverDocAt } from './intent-log/rebase.js';
+import { groupUnits, planBatch, serverDocAt } from './intent-log/rebase.js';
 import { createIntent } from './intent-log/intents.js';
 import type {
 	EngineDocument,
@@ -105,6 +105,13 @@ export interface IntentLogResolution {
  */
 export interface SettledDisposition extends EngineDisposition {
 	predicted?: IntentDisposition | null;
+}
+
+/** The local effect lost when a caught-up replica receives stale-base acks. */
+interface StaleBaseRecovery {
+	base: EngineDocument;
+	target: EngineDocument;
+	seq: number;
 }
 
 export interface IntentLogSessionOptions {
@@ -215,12 +222,14 @@ export interface IntentLogSession extends EngineSessionCodec {
 	/** The optimistic document (acked + pending), or null pre-snapshot. */
 	getDocument: () => EngineDocument | null;
 
-	/** Escalated intents received for this room, in arrival order. */
+	/** Server proposals and conflicts found during local stale-base recovery. */
 	getProposals: () => IntentLogProposal[];
 
 	/**
 	 * Escalated intents not yet resolved (arrival order): the review list.
-	 * Reconstructs entirely from retained rows — no client persistence.
+	 * Server proposals reconstruct from retained rows. Conflicts found
+	 * during stale-base recovery remain in this tab only; there is no
+	 * client persistence.
 	 */
 	getOpenProposals: () => IntentLogProposal[];
 
@@ -228,6 +237,7 @@ export interface IntentLogSession extends EngineSessionCodec {
 	 * Sends a resolution for a parked proposal. `restored` callers author
 	 * the recovered content as ordinary intents FIRST — restoration is a
 	 * normal edit; this only closes the proposal. Idempotent server-side.
+	 * A proposal found during local recovery closes in this tab only.
 	 */
 	resolveProposal: (
 		proposalId: string,
@@ -291,6 +301,16 @@ export interface IntentLogSession extends EngineSessionCodec {
 	/** Subscribes to settled dispositions (the server's acks). */
 	onDisposition: (
 		listener: ( settled: SettledDisposition ) => void
+	) => void;
+
+	/**
+	 * Recovers stale-base edits using the retained log's merged document.
+	 * Both documents include remote edits and still-pending local work.
+	 * Runs after settlement, before a change can push the reverted document.
+	 * A deferred horizon reset uses its separate reset recovery instead.
+	 */
+	onStaleBaseRecovery: (
+		listener: ( recovery: StaleBaseRecovery ) => void
 	) => void;
 
 	/** Subscribes to arriving proposals (escalations, any author). */
@@ -375,6 +395,9 @@ export function createIntentLogSession(
 	let localAwareness: LocalAwarenessState = {};
 	let peers: AwarenessState = {};
 	const proposals: IntentLogProposal[] = [];
+	// Conflicts found while recovering stale edits exist only in this tab.
+	// The server discarded their priors, so it cannot create these proposals.
+	const localProposalIds = new Set< string >();
 	const resolvedIds = new Set< string >();
 	const proposalsChangeListeners = new Set< () => void >();
 	const notifyProposalsChange = () => {
@@ -383,6 +406,9 @@ export function createIntentLogSession(
 	const changeListeners = new Set< () => void >();
 	const dispositionListeners = new Set<
 		( settled: SettledDisposition ) => void
+	>();
+	const staleBaseRecoveryListeners = new Set<
+		( recovery: StaleBaseRecovery ) => void
 	>();
 	const proposalListeners = new Set<
 		( proposal: IntentLogProposal ) => void
@@ -686,6 +712,53 @@ export function createIntentLogSession(
 		},
 
 		receiveDispositions: ( dispositions: EngineDisposition[] ) => {
+			let recoveryTarget: EngineDocument | null = null;
+			const recoveryProposals: IntentLogProposal[] = [];
+			if ( replica && ! deferredResetBuffer ) {
+				const staleIds = new Set(
+					dispositions
+						.filter(
+							( entry ) =>
+								entry.status === 'voided' &&
+								entry.reason === 'stale-base'
+						)
+						.map( ( entry ) => entry.intentId )
+				);
+				if (
+					replica.outbox.some( ( entry ) =>
+						staleIds.has( entry.intentId )
+					)
+				) {
+					// The server no longer has these priors, but a caught-up
+					// replica does. Recover their merged effect, never a diff
+					// from an editor tree that may lack other authors' edits.
+					// Exclude other settled outcomes: a rejected conflict in
+					// this same response must not be silently retried.
+					const settledIds = new Set(
+						dispositions.map( ( entry ) => entry.intentId )
+					);
+					const pending = replica.outbox.filter(
+						( entry ) =>
+							! settledIds.has( entry.intentId ) ||
+							staleIds.has( entry.intentId )
+					);
+					const plan = planBatch(
+						groupUnits( pending ),
+						replica.log,
+						( seq ) => serverDocAt( replica!, seq ),
+						replica.firstSeq
+					);
+					recoveryTarget = plan.headDoc;
+					for ( const row of plan.rows ) {
+						if (
+							row.proposal &&
+							staleIds.has( row.intent.intentId )
+						) {
+							recoveryProposals.push( row.proposal );
+						}
+					}
+				}
+			}
 			let settled = false;
 			for ( const disposition of dispositions ) {
 				/*
@@ -712,6 +785,29 @@ export function createIntentLogSession(
 			 */
 			if ( settled && replica ) {
 				replanClient( replica );
+			}
+			if ( recoveryTarget && replica ) {
+				const recovery = {
+					base: replica.doc,
+					target: recoveryTarget,
+					seq: replica.cursor,
+				};
+				staleBaseRecoveryListeners.forEach( ( listener ) =>
+					listener( recovery )
+				);
+			}
+			// A stale-base ack did not run the server planner. Keep local
+			// conflicts available for review instead of losing their content
+			// when only the clean part of the recovery is re-authored.
+			for ( const proposal of recoveryProposals ) {
+				localProposalIds.add( proposal.intent.intentId );
+				proposals.push( proposal );
+				proposalListeners.forEach( ( listener ) =>
+					listener( proposal )
+				);
+			}
+			if ( recoveryProposals.length ) {
+				notifyProposalsChange();
 			}
 			notifyChange();
 			// A drained outbox releases any deferred horizon reset.
@@ -874,7 +970,7 @@ export function createIntentLogSession(
 			),
 		resolveProposal: ( proposalId, resolution ) => {
 			const data = JSON.stringify( { proposalId, resolution } );
-			if ( localUpdateListener ) {
+			if ( localUpdateListener && ! localProposalIds.has( proposalId ) ) {
 				localUpdateListener(
 					{ data, type: INTENT_LOG_UPDATE_TYPES.RESOLVED },
 					new TextEncoder().encode( data ).length
@@ -934,6 +1030,9 @@ export function createIntentLogSession(
 		},
 		onDisposition: ( listener ) => {
 			dispositionListeners.add( listener );
+		},
+		onStaleBaseRecovery: ( listener ) => {
+			staleBaseRecoveryListeners.add( listener );
 		},
 		onProposal: ( listener ) => {
 			proposalListeners.add( listener );

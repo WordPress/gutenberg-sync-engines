@@ -3,7 +3,8 @@
  */
 import { applyFilters } from '@wordpress/hooks';
 
-export const DEFAULT_CLIENT_LIMIT_PER_ROOM = 3;
+// Total editor connections, including the joining editor.
+export const DEFAULT_CLIENT_LIMIT_PER_ROOM = 5;
 
 // Retry delays after poll failures.
 // The disconnect dialog shows after all retries are exhausted, then retries

@@ -24,6 +24,9 @@ release, which the release script generates from the commit history.
 
 ### Changed
 
+- The default collaboration join limit is five editor tabs per post,
+  including the joining tab. The same limit now applies to WebSocket,
+  HTTP polling, SSE, and SSE-daemon connections.
 - The bundled Gutenberg includes the entity sync interface from
   [Gutenberg #83410](https://github.com/WordPress/gutenberg/pull/83410).
   The plugin registers its adapter at startup for all existing engines and

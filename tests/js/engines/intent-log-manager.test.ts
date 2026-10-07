@@ -719,7 +719,7 @@ describe( 'intent-log manager', () => {
 		} );
 	} );
 
-	it( 'REGRESSION: stale-base voids re-capture the editor tree instead of silently losing the edit', async () => {
+	it( 'REGRESSION: stale-base voids recover local edits instead of silently losing them', async () => {
 		// A2's retry-free e2e runs found this as real data loss: a client
 		// whose own earlier burst pushed the room past the checkpoint trim
 		// authors its next edits at a now-trimmed seq; the server voids
@@ -727,8 +727,7 @@ describe( 'intent-log manager', () => {
 		// client's cursor is current) no snapshot reset ever arrives. The
 		// replica's replan then dropped the optimistic effect and the next
 		// editor sync pushed the REVERTED document over the canvas — the
-		// user watched their typing vanish. The manager must instead
-		// re-capture the current editor tree at the current seq.
+		// user watched their typing vanish. The manager must retry the lost local effect at the current seq.
 		const { manager, transport } = await loadManagedEntity();
 
 		transport.captured.session!.receiveUpdate(
@@ -779,6 +778,199 @@ describe( 'intent-log manager', () => {
 		expect( reauthored.intentId ).not.toBe( first.intentId );
 		expect( JSON.stringify( reauthored.payload ) ).toContain( '!!' );
 	} );
+
+	it.each( [
+		[ false, false ],
+		[ true, false ],
+		[ false, true ],
+	] )(
+		'stale-base recovery keeps unseen remote edits (same paragraph: %s, split acks: %s)',
+		async ( sameParagraph, splitAcks ) => {
+			const { manager, transport, handlers } = await loadManagedEntity();
+			handlers.onEscalation = jest.fn();
+			const session = transport.captured.session! as IntentLogSession;
+			const initial = [
+				{ syncId: 'p1', blockType: 'core/paragraph', text: 'Hello' },
+				{ syncId: 'p2', blockType: 'core/paragraph', text: 'Other' },
+			];
+			const server = rebaseCreateServer( createDocument( initial ) );
+			session.receiveUpdate( snapshotRow( initial ) );
+			const type = ( content: string ) =>
+				manager.update(
+					'postType/post',
+					'1',
+					{
+						blocks: [ content, 'Other' ].map( ( text, index ) => ( {
+							name: 'core/paragraph',
+							attributes: {
+								content: text,
+								metadata: { syncId: `p${ index + 1 }` },
+							},
+							innerBlocks: [],
+						} ) ),
+					},
+					'gutenberg'
+				);
+			const deliver = ( entries: typeof server.log ) => {
+				for ( const entry of entries ) {
+					session.receiveUpdate( {
+						type: INTENT_LOG_UPDATE_TYPES.INTENT,
+						data: JSON.stringify( entry ),
+					} );
+				}
+			};
+			// The first local edit is accepted. Recovery must not repeat it.
+			type( 'Hello!' );
+			serverIngestBatch(
+				server,
+				transport.captured.sent
+					.splice( 0 )
+					.map( ( row ) => JSON.parse( row.data ) )
+			);
+			deliver( server.log );
+			const beforeRemote = server.log.length;
+			serverIngestBatch(
+				server,
+				( sameParagraph ? [ 'p1', 'p2' ] : [ 'p2' ] ).map(
+					( syncId, index ) => ( {
+						intentId: `remote-${ index }`,
+						actorId: 'u2c2',
+						baseSeq: beforeRemote,
+						txnId: null,
+						type: 'insert_text',
+						payload: {
+							syncId,
+							field: 'content',
+							offset: 0,
+							text: 'Remote ',
+						},
+					} )
+				)
+			);
+			deliver( server.log.slice( beforeRemote ) );
+			// Both changes reached the replica, but typing kept the editor on
+			// its previous view. Two later local edits use that older frame.
+			type( 'Hello!!' );
+			type( 'Hello!!!' );
+			const stale = transport.captured.sent
+				.splice( 0 )
+				.map( ( row ) => JSON.parse( row.data ) );
+			const checkpoint = rebaseCreateServer(
+				serverDocAtForTest( server, server.log.length ),
+				server.log.length
+			);
+			session.receiveUpdate( {
+				type: INTENT_LOG_UPDATE_TYPES.SNAPSHOT,
+				data: JSON.stringify( {
+					doc: checkpoint.initialDoc,
+					seq: checkpoint.firstSeq,
+				} ),
+			} );
+			const acknowledgments = stale.map( ( intent ) => ( {
+				intentId: intent.intentId,
+				status: 'voided',
+				reason: 'stale-base',
+			} ) );
+			if ( splitAcks ) {
+				for ( const ack of acknowledgments ) {
+					session.receiveDispositions!( [ ack ] );
+					await jest.advanceTimersByTimeAsync( 1 );
+				}
+			} else {
+				session.receiveDispositions!( acknowledgments );
+			}
+			await jest.advanceTimersByTimeAsync( 1 );
+			const recovered = transport.captured.sent
+				.splice( 0 )
+				.map( ( row ) => JSON.parse( row.data ) );
+			expect(
+				recovered.every( ( intent ) => intent.payload.syncId === 'p1' )
+			).toBe( true );
+			expect(
+				recovered.every(
+					( intent ) => intent.baseSeq === checkpoint.firstSeq
+				)
+			).toBe( true );
+			serverIngestBatch( checkpoint, recovered );
+			deliver( checkpoint.log );
+			if ( ! sameParagraph ) {
+				// Recovery must not pretend the editor displayed remote text.
+				// The next keystroke still comes from its old view.
+				type( 'Hello!!!!' );
+				const next = transport.captured.sent
+					.splice( 0 )
+					.map( ( row ) => JSON.parse( row.data ) );
+				expect( next ).toHaveLength( 1 );
+				expect( next[ 0 ] ).toMatchObject( {
+					type: 'insert_text',
+					payload: { syncId: 'p1', text: '!' },
+				} );
+				session.receiveDispositions!( [
+					{
+						intentId: next[ 0 ].intentId,
+						status: 'voided',
+						reason: 'stale-base',
+					},
+				] );
+				const retry = transport.captured.sent
+					.splice( 0 )
+					.map( ( row ) => JSON.parse( row.data ) );
+				const delivered = checkpoint.log.length;
+				serverIngestBatch( checkpoint, retry );
+				deliver( checkpoint.log.slice( delivered ) );
+			}
+			session.receiveDispositions!( acknowledgments );
+			await flushEditorSync();
+			expect( transport.captured.sent ).toHaveLength( 0 );
+			expect( session.getOpenProposals() ).toHaveLength(
+				sameParagraph ? 1 : 0
+			);
+			const expected = [
+				sameParagraph ? 'Remote Hello!!' : 'Hello!!!!',
+				'Remote Other',
+			];
+			expect(
+				session
+					.getDocument()!
+					.root.map( ( block ) => block.fields.content.text )
+			).toEqual( expected );
+			expect(
+				serverDocAtForTest(
+					checkpoint,
+					checkpoint.firstSeq + checkpoint.log.length
+				).root.map( ( block ) => block.fields.content.text )
+			).toEqual( expected );
+			expect(
+				(
+					handlers.edits.at( -1 ) as {
+						blocks: Array< { attributes: { content: string } } >;
+					}
+				 ).blocks.map( ( block ) => block.attributes.content )
+			).toEqual( expected );
+			if ( sameParagraph ) {
+				const [ proposal ] = session.getOpenProposals();
+				expect( handlers.onEscalation ).toHaveBeenCalledWith(
+					expect.objectContaining( {
+						reason: 'frame-conflict',
+						isLocal: true,
+					} )
+				);
+				manager.restoreProposal!(
+					'postType/post',
+					'1',
+					proposal.intent.intentId
+				);
+				expect( session.getOpenProposals() ).toHaveLength( 0 );
+				expect( transport.captured.sent ).toHaveLength( 1 );
+				expect(
+					JSON.parse( transport.captured.sent[ 0 ].data )
+				).toMatchObject( {
+					type: 'insert_text',
+					payload: { text: '!' },
+				} );
+			}
+		}
+	);
 
 	it( 'pushes the snapshot document into the editor, captures edits as intents, and suppresses the echo', async () => {
 		const { manager, handlers, transport } = await loadManagedEntity();
