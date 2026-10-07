@@ -385,6 +385,93 @@ describe( 'polling-manager', () => {
 			);
 		} );
 
+		it( "counts people, not tabs: one person's extra tabs do not fill the room", async () => {
+			// Four entries but two people (user 100 has three tabs).
+			const awareness = {
+				1: { collaboratorInfo: { id: 100 } },
+				2: { collaboratorInfo: { id: 100 } },
+				3: { collaboratorInfo: { id: 100 } },
+				4: { collaboratorInfo: { id: 200 } },
+			};
+
+			mockPostSyncUpdate.mockResolvedValue( {
+				rooms: [
+					{
+						room: 'test-room',
+						end_cursor: 1,
+						awareness,
+						awareness_users: { 1: 100, 2: 100, 3: 100, 4: 200 },
+						updates: [],
+					},
+				],
+			} );
+
+			const onStatusChange = jest.fn();
+
+			pollingManager.registerRoom( {
+				room: 'test-room',
+				session: createMockSession( 1 ),
+				log: jest.fn(),
+				onStatusChange,
+			} );
+
+			await jest.advanceTimersByTimeAsync( 0 );
+
+			expect( onStatusChange ).not.toHaveBeenCalledWith(
+				expect.objectContaining( {
+					error: expect.objectContaining( {
+						code: 'connection-limit-exceeded',
+					} ),
+				} )
+			);
+		} );
+
+		it( 'still refuses a room holding more people than the limit', async () => {
+			const awareness = {
+				1: { collaboratorInfo: { id: 100 } },
+				2: { collaboratorInfo: { id: 100 } },
+				3: { collaboratorInfo: { id: 200 } },
+				4: { collaboratorInfo: { id: 300 } },
+				5: { collaboratorInfo: { id: 400 } },
+			};
+
+			mockPostSyncUpdate.mockResolvedValue( {
+				rooms: [
+					{
+						room: 'test-room',
+						end_cursor: 1,
+						awareness,
+						awareness_users: {
+							1: 100,
+							2: 100,
+							3: 200,
+							4: 300,
+							5: 400,
+						},
+						updates: [],
+					},
+				],
+			} );
+
+			const onStatusChange = jest.fn();
+
+			pollingManager.registerRoom( {
+				room: 'test-room',
+				session: createMockSession( 1 ),
+				log: jest.fn(),
+				onStatusChange,
+			} );
+
+			await jest.advanceTimersByTimeAsync( 0 );
+
+			expect( onStatusChange ).toHaveBeenCalledWith( {
+				status: 'disconnected',
+				error: expect.objectContaining( {
+					code: 'connection-limit-exceeded',
+				} ),
+			} );
+		} );
+
 		it( 'does not enforce limits on the second registered room', async () => {
 			// Register a first room (which consumes the enforceConnectionLimit flag).
 			mockPostSyncUpdate.mockResolvedValue( {

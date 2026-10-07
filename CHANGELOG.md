@@ -24,6 +24,11 @@ release, which the release script generates from the commit history.
 
 ### Changed
 
+- The editor counts people, not tabs: a person's own extra tabs on a post
+  no longer fill the "Too many editors" limit or switch polling to the
+  two-person rate. Sync answers now say which user each awareness entry
+  belongs to (`awareness_users`)
+  ([#147](https://github.com/WordPress/gutenberg-sync-engines/issues/147)).
 - The bundled Gutenberg includes the entity sync interface from
   [Gutenberg #83410](https://github.com/WordPress/gutenberg/pull/83410).
   The plugin registers its adapter at startup for all existing engines and

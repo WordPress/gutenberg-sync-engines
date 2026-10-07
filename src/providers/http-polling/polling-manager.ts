@@ -358,14 +358,39 @@ const roomStates: Map< string, RoomState > = new Map();
 installSyncDebug();
 
 /**
- * Check whether the awareness state exceeds the configured connection limit.
+ * How many people an awareness map holds. One person's tabs count once;
+ * an entry the server named no person for counts as its own.
  *
  * @param awareness The awareness state from the server response.
+ * @param users     Client id to WordPress user id, from the same response.
+ * @return The number of people in the room.
+ */
+export function countPeople(
+	awareness: AwarenessState,
+	users: Record< string, number > = {}
+): number {
+	const people = new Set< string >();
+	for ( const clientId of Object.keys( awareness ) ) {
+		const userId = users[ clientId ];
+		people.add(
+			undefined === userId ? `client:${ clientId }` : `user:${ userId }`
+		);
+	}
+	return people.size;
+}
+
+/**
+ * Check whether the people in a room exceed the configured connection
+ * limit. A person's own tabs count once.
+ *
+ * @param awareness The awareness state from the server response.
+ * @param users     Client id to WordPress user id, from the same response.
  * @param roomState The room state corresponding to the awareness state
  * @return True if a peer limit has been exceeded.
  */
 function checkConnectionLimit(
 	awareness: AwarenessState,
+	users: Record< string, number > | undefined,
 	roomState: RoomState
 ): boolean {
 	if ( ! roomState.isPrimaryRoom || hasCheckedConnectionLimit ) {
@@ -381,7 +406,7 @@ function checkConnectionLimit(
 		roomState.room
 	);
 
-	const clientCount = Object.keys( awareness ).length;
+	const clientCount = countPeople( awareness, users );
 	const validatedLimit = intValueOrDefault(
 		maxClientsPerRoom,
 		DEFAULT_CLIENT_LIMIT_PER_ROOM
@@ -1544,7 +1569,9 @@ function applyRoomResponse(
 		state.endCursor = room.end_cursor;
 
 		// If a limit is exceeded, disconnect immediately without processing updates.
-		if ( checkConnectionLimit( room.awareness, state ) ) {
+		if (
+			checkConnectionLimit( room.awareness, room.awareness_users, state )
+		) {
 			state.onStatusChange( {
 				status: 'disconnected',
 				error: new ConnectionError(
@@ -1566,8 +1593,12 @@ function applyRoomResponse(
 	// the loop keeps its timer cadence (or the safety cadence
 	// under full channel coverage). Only the primary room is
 	// checked to avoid false positives from shared collection
-	// rooms (e.g. taxonomy/category).
-	if ( state.isPrimaryRoom && Object.keys( room.awareness ).length > 1 ) {
+	// rooms (e.g. taxonomy/category). This person's own other tabs
+	// count once, so they never make company here.
+	if (
+		state.isPrimaryRoom &&
+		countPeople( room.awareness, room.awareness_users ) > 1
+	) {
 		hasCollaborators = true;
 	}
 

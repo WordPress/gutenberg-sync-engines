@@ -69,6 +69,12 @@ interface SyncEnvelopeFromServer {
 	/** Engine diagnostics, present only when the request opted in. */
 	_debug?: Record< string, unknown >;
 	awareness: AwarenessState;
+	/**
+	 * Which person each awareness entry belongs to: client id to
+	 * WordPress user id. Lets a tab tell another person from its own
+	 * other tabs. A client id missing here counts as its own person.
+	 */
+	awareness_users?: Record< string, number >;
 	dispositions?: EngineDisposition[];
 	end_cursor: number; // use as `after` in next request
 	/**
