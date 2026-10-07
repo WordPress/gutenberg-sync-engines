@@ -319,9 +319,9 @@ The framework/plugin split is complete: the framework ships **neither** engines
   - `shared/` — client code the base provides to more than one engine
     (no engine folder imports another engine's folder):
     `shared/awareness-sync.ts` — presence bridging used by all three
-    engines; `shared/typed-text.ts` — what a person typed before the
-    first sync response, compared with the saved post (yjs-server and
-    intent-log).
+    engines; `shared/typed-text.ts` — edits made before the first
+    sync response, compared with the saved post (intent-log's
+    saved-version check, yjs-server's text-only replay).
   - `providers/{http-polling,sse,sse-daemon,websocket}/` — transports
     (sse and sse-daemon reuse the polling manager, swapping only its
     receive half for the stream).
@@ -1103,24 +1103,22 @@ applies.
     `tests/js/engines/intent-log-manager.test.ts`; the old replay
     (`npm run fuzz -- --combos=intent-log/http-polling --seed-list=6
     --steps=14 --profile=concurrency`) passes.
-  - FIXED (issue #100): text typed during the join round trip on a
-    post WITH content used to vanish under the bootstrap push. After
-    the delivery burst the buffered tree is compared with the saved
-    post as parsed (`src/shared/typed-text.ts`, shared with
-    yjs-server's #57 fix), and its rich-text changes are authored
-    against the NEWEST retained version whose texts for those blocks
-    equal the saved ones, at that version's seq
-    (`replayPreInitText`, `authorBatch` with `observe: false`). The
-    planner moves them past later rows, so a peer's text earlier in
-    the paragraph is respected and a clash is set aside for review.
-    Do NOT apply the saved offsets to the current text instead (the
-    first attempt did): a peer's earlier insertion then garbles the
-    paragraph. Still dropped: a tree that differs in more than text,
-    and text whose saved version the replica no longer holds (a
-    checkpoint bootstrap newer than the save). The comparison
-    ignores `metadata.syncId`: the stamper puts genesis ids on a post
-    saved without them before anybody types. Browser spec:
-    `collaboration-intent-log-late-join`.
+  - FIXED (issue #100): edits made during the join round trip on a
+    post WITH content (typing, a new or removed block) used to vanish
+    under the bootstrap push. After the delivery burst the buffered
+    tree is derived against the NEWEST retained version that shows
+    the saved post (`showsSavedPost` in `src/shared/typed-text.ts`:
+    same block types and nesting, same rich text, identity compared
+    only where both carry one) and authored at that version's seq
+    (`replayPreInitTree`, `authorBatch` with `observe: false`). The
+    planner moves it past later rows, so a peer's text earlier in the
+    paragraph is respected and a clash is set aside for review. Do
+    NOT diff the tree against the head (peer work since the save
+    reads as deleted) or apply saved offsets to the current text (an
+    earlier attempt: a peer's earlier insertion garbles the
+    paragraph). Still dropped: a tree whose saved version the replica
+    no longer holds (a checkpoint bootstrap newer than the save).
+    Browser spec: `collaboration-intent-log-late-join`.
 
 ## Deep history
 

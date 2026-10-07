@@ -116,14 +116,10 @@ export interface EditorBlock {
 /**
  * One change to one rich-text attribute: at `path` (block indexes, outer
  * to inner), `attribute` had `removed` replaced by `inserted` at `offset`.
- * `syncId` is the block's saved identity, when it has one, and `before` the
- * attribute's whole saved text.
  */
 export interface TypedTextEdit {
 	path: number[];
-	syncId?: string;
 	attribute: string;
-	before: string;
 	offset: number;
 	removed: string;
 	inserted: string;
@@ -164,21 +160,13 @@ export function findTypedTextEdits(
 				const oldText = richTextToString( oldValue );
 				const newText = richTextToString( newValue );
 				if ( oldText !== newText ) {
-					const syncId = syncIdOf( block );
 					edits.push( {
 						path: [ ...path, i ],
-						...( syncId ? { syncId } : {} ),
 						attribute: name,
-						before: oldText,
 						...diffText( oldText, newText ),
 					} );
 				}
-			} else if (
-				! isDeepEqual(
-					withoutSyncId( name, oldValue ),
-					withoutSyncId( name, newValue )
-				)
-			) {
+			} else if ( ! isDeepEqual( oldValue, newValue ) ) {
 				return null;
 			}
 		}
@@ -193,22 +181,6 @@ export function findTypedTextEdits(
 		edits.push( ...inner );
 	}
 	return edits;
-}
-
-/**
- * An attribute value with the block's identity left out. The editor stamps
- * `metadata.syncId` on blocks of a post saved without one before anybody
- * types, so the stamp alone is no edit by the person.
- *
- * @param name  Attribute name.
- * @param value Attribute value.
- */
-function withoutSyncId( name: string, value: unknown ): unknown {
-	if ( 'metadata' !== name || ! value || 'object' !== typeof value ) {
-		return value;
-	}
-	const { syncId, ...rest } = value as Record< string, unknown >;
-	return Object.keys( rest ).length > 0 ? rest : undefined;
 }
 
 /**
