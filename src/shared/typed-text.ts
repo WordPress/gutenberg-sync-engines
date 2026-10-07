@@ -48,12 +48,14 @@ export interface EditorBlock {
 /**
  * One change to one rich-text attribute: at `path` (block indexes, outer
  * to inner), `attribute` had `removed` replaced by `inserted` at `offset`.
- * `syncId` is the block's saved identity, when it has one.
+ * `syncId` is the block's saved identity, when it has one, and `before` the
+ * attribute's whole saved text.
  */
 export interface TypedTextEdit {
 	path: number[];
 	syncId?: string;
 	attribute: string;
+	before: string;
 	offset: number;
 	removed: string;
 	inserted: string;
@@ -103,6 +105,7 @@ export function findTypedTextEdits(
 						path: [ ...path, i ],
 						...( 'string' === typeof syncId ? { syncId } : {} ),
 						attribute: name,
+						before: oldText,
 						...diffText( oldText, newText ),
 					} );
 				}

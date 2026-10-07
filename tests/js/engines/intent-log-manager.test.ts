@@ -417,9 +417,12 @@ describe( 'intent-log manager', () => {
 			const sent = sentTexts( transport.captured.sent );
 			expect( sent ).toHaveLength( 1 );
 			expect( sent[ 0 ].trim() ).toBe( 'B' );
-			expect( lastPushedContent( handlers ) ).toBe(
-				'Existing content B plus user one'
-			);
+			// Two insertions at the same offset: the order is the
+			// engine's call.
+			expect( [
+				'Existing content B plus user one',
+				'Existing content plus user one B',
+			] ).toContain( lastPushedContent( handlers ) );
 		} );
 
 		it( 'keeps only the typed text after a save mid-room (the saved text is not doubled)', async () => {
@@ -548,6 +551,87 @@ describe( 'intent-log manager', () => {
 			const sent = sentTexts( transport.captured.sent );
 			expect( sent ).toHaveLength( 1 );
 			expect( sent[ 0 ].trim() ).toBe( 'B' );
+		} );
+
+		it( 'moves the typed text past a peer’s earlier insertion in the same paragraph', async () => {
+			// The verifier's case: applying the saved offset to the CURRENT
+			// text put " B" inside "content" ("Big Existing con Btent").
+			mockParse.mockImplementation( () => [
+				paragraph( 'Existing content', 'p1' ),
+			] );
+			const { manager, handlers, transport } = await loadManagedEntity( {
+				content: 'saved post',
+			} );
+
+			manager.update(
+				'postType/post',
+				'1',
+				{ blocks: [ paragraph( 'Existing content B', 'p1' ) ] },
+				'gutenberg'
+			);
+			transport.captured.session!.receiveUpdate( genesis() );
+			transport.captured.session!.receiveUpdate( {
+				data: JSON.stringify( {
+					intentId: 'peer-start',
+					actorId: 'u9c9',
+					baseSeq: 0,
+					txnId: null,
+					type: 'insert_text',
+					payload: {
+						syncId: 'p1',
+						field: 'content',
+						offset: 0,
+						text: 'Big ',
+					},
+				} ),
+				type: INTENT_LOG_UPDATE_TYPES.INTENT,
+			} );
+			jest.advanceTimersByTime( 1 );
+
+			// Authored against the saved version, which the server moves
+			// past the peer's insertion the same way.
+			const sent = transport.captured.sent.map( ( update ) =>
+				JSON.parse( update.data )
+			);
+			expect( sent ).toHaveLength( 1 );
+			expect( sent[ 0 ].baseSeq ).toBe( 0 );
+			expect( lastPushedContent( handlers ) ).toBe(
+				'Big Existing content B'
+			);
+		} );
+
+		it( 'drops the typed text when no retained version matches the saved post', async () => {
+			// A checkpoint newer than the save: the saved text is in no
+			// version this replica holds, so nothing can be authored
+			// against it, and a guess would garble.
+			mockParse.mockImplementation( () => [
+				paragraph( 'Existing content', 'p1' ),
+			] );
+			const { manager, handlers, transport } = await loadManagedEntity( {
+				content: 'saved post',
+			} );
+
+			manager.update(
+				'postType/post',
+				'1',
+				{ blocks: [ paragraph( 'Existing content B', 'p1' ) ] },
+				'gutenberg'
+			);
+			transport.captured.session!.receiveUpdate(
+				snapshotRow( [
+					{
+						syncId: 'p1',
+						blockType: 'core/paragraph',
+						text: 'Newer checkpoint text',
+					},
+				] )
+			);
+			jest.advanceTimersByTime( 1 );
+
+			expect( transport.captured.sent ).toHaveLength( 0 );
+			expect( lastPushedContent( handlers ) ).toBe(
+				'Newer checkpoint text'
+			);
 		} );
 
 		it( 'a newer editor tree supersedes the buffered one', async () => {

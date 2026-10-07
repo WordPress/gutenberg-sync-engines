@@ -895,17 +895,16 @@ function scheduleEditorSync( state: EntityState, force = false ): void {
 }
 
 /**
- * Applies one typed change (see findTypedTextSinceSave) to a bridge tree in
- * place: to the block with the change's identity, else the block at its
- * position. The removed characters come out only when the block still
- * holds them at that offset; the inserted ones go in at that offset, or at
- * the end of a shorter text.
+ * The block a typed change (see findTypedTextSinceSave) was made in: the
+ * block with the change's saved identity, else the block at its position.
  *
- * @param blocks The tree.
+ * @param blocks A bridge tree.
  * @param edit   The change.
- * @return Whether a block took the change.
  */
-function applyTypedText( blocks: BridgeBlock[], edit: TypedTextEdit ): boolean {
+function findTypedBlock(
+	blocks: BridgeBlock[],
+	edit: TypedTextEdit
+): BridgeBlock | undefined {
 	const findById = ( list: BridgeBlock[] ): BridgeBlock | undefined => {
 		for ( const block of list ) {
 			const metadata = block.attributes?.metadata as
@@ -921,35 +920,44 @@ function applyTypedText( blocks: BridgeBlock[], edit: TypedTextEdit ): boolean {
 		}
 		return undefined;
 	};
-	let block = edit.syncId ? findById( blocks ) : undefined;
-	if ( ! block ) {
-		let list = blocks;
-		for ( const index of edit.path ) {
-			block = list[ index ];
-			if ( ! block ) {
-				return false;
-			}
-			list = block.innerBlocks;
+	if ( edit.syncId ) {
+		const block = findById( blocks );
+		if ( block ) {
+			return block;
 		}
 	}
+	let block: BridgeBlock | undefined;
+	let list = blocks;
+	for ( const index of edit.path ) {
+		block = list[ index ];
+		if ( ! block ) {
+			return undefined;
+		}
+		list = block.innerBlocks;
+	}
+	return block;
+}
+
+/**
+ * A block's text for a typed change's attribute, or null when the block
+ * is missing or the attribute is not text.
+ *
+ * @param blocks A bridge tree.
+ * @param edit   The change.
+ */
+function typedBlockText(
+	blocks: BridgeBlock[],
+	edit: TypedTextEdit
+): string | null {
+	const block = findTypedBlock( blocks, edit );
 	if ( ! block ) {
-		return false;
+		return null;
 	}
-	const current = block.attributes[ edit.attribute ];
-	if ( undefined !== current && 'string' !== typeof current ) {
-		return false;
+	const value = block.attributes[ edit.attribute ];
+	if ( undefined === value ) {
+		return '';
 	}
-	let text = current ?? '';
-	const at = Math.min( edit.offset, text.length );
-	if ( edit.removed.length > 0 && text.startsWith( edit.removed, at ) ) {
-		text = text.slice( 0, at ) + text.slice( at + edit.removed.length );
-	}
-	text = text.slice( 0, at ) + edit.inserted + text.slice( at );
-	if ( text === ( current ?? '' ) ) {
-		return false;
-	}
-	block.attributes[ edit.attribute ] = text;
-	return true;
+	return 'string' === typeof value ? value : null;
 }
 
 /**
@@ -1538,17 +1546,26 @@ export function createIntentLogManager( debug = false ): SyncManager {
 		} );
 
 		/**
-		 * Carries the text typed before the snapshot onto the document the
-		 * editor shows now, and authors it as an ordinary capture.
+		 * Sends the text typed before the snapshot as an ordinary edit of
+		 * the version the person was looking at: the saved post.
 		 *
-		 * Each rich-text change between the saved post and the buffered
-		 * tree is applied to the same block, found by its saved identity
-		 * (else by position): the removed characters come out only where
-		 * the document still holds them, the typed ones go in at the same
-		 * offset, or at the end of a shorter text. A tree that differs from
-		 * the saved post in any other way (a block added or removed, a
-		 * non-text attribute) is dropped, as before; so is a buffer that a
-		 * newer editor tree superseded.
+		 * The buffered tree is the saved post plus the keystrokes, so its
+		 * rich-text changes over the saved post (findTypedTextSinceSave)
+		 * are what the person typed. They are authored against the NEWEST
+		 * retained version whose texts for those blocks equal the saved
+		 * ones, at that version's seq: the planner (here, and the same one
+		 * on the server) then moves them past everything that landed
+		 * since, and a clash with a peer's change to the same text is set
+		 * aside for review like any other. Applying them at the same
+		 * offsets in the CURRENT text instead garbles the paragraph when a
+		 * peer typed earlier in it.
+		 *
+		 * Dropped, as before issue #100: a tree that differs from the
+		 * saved post in more than text (a block added or removed, a
+		 * non-text attribute), a buffer a newer editor tree superseded,
+		 * and text whose saved version this replica no longer holds (it
+		 * bootstrapped from a checkpoint newer than the save) — there is
+		 * no version to author it against, and a guess would garble.
 		 */
 		const replayPreInitText = (): void => {
 			const buffered = state.preInitTree;
@@ -1562,27 +1579,62 @@ export function createIntentLogManager( debug = false ): SyncManager {
 				return;
 			}
 			const edits = findTypedTextSinceSave( recordContent, buffered );
-			const shown = state.pendingPushes.at( -1 ) ?? state.observed;
-			if ( ! edits?.length || ! shown ) {
+			if ( ! edits?.length ) {
 				return;
 			}
-			const tree = documentBlocks( state, shown.doc );
-			let applied = false;
-			for ( const edit of edits ) {
-				applied = applyTypedText( tree, edit ) || applied;
-			}
-			if ( ! applied ) {
+			const floor = session.getRetainedFloor();
+			for ( let seq = session.getSeq(); seq >= floor; seq-- ) {
+				const doc = session.getDocumentAt( seq );
+				if ( ! doc ) {
+					continue;
+				}
+				const tree = documentBlocks( state, doc );
+				if (
+					! edits.every(
+						( edit ) => typedBlockText( tree, edit ) === edit.before
+					)
+				) {
+					continue;
+				}
+				for ( const edit of edits ) {
+					findTypedBlock( tree, edit )!.attributes[ edit.attribute ] =
+						edit.before.slice( 0, edit.offset ) +
+						edit.inserted +
+						edit.before.slice( edit.offset + edit.removed.length );
+				}
+				const derived = deriveIntents( doc, tree, {
+					removableIds: state.editorIds,
+					excludeIds: state.docTombstones,
+					richTextFields: state.fieldsResolver,
+					rawContent: state.rawContent,
+					saveMarkup: saveMarkupAdapter,
+				} );
+				if ( ! derived?.intents.length ) {
+					return;
+				}
+				state.capturing = true;
+				try {
+					// `observe: false`: authored at the saved version
+					// without moving the editor's own observed version.
+					const envelopes = session.authorBatch( derived.intents, {
+						baseSeq: seq,
+						observe: false,
+					} );
+					undoManager?.noteAuthored( session, envelopes );
+				} finally {
+					state.capturing = false;
+				}
+				// The editor has not seen the typed text since the bootstrap
+				// push replaced it; this runs outside update(), so it lands.
+				syncEditor( state, true );
 				return;
 			}
-			manager.update(
-				objectType,
-				objectId,
-				{ blocks: tree },
-				'pre-init-capture'
+			log(
+				'pre-init text dropped: no retained version matches the saved post',
+				{
+					key,
+				}
 			);
-			// The editor has not seen the typed text since the bootstrap
-			// push replaced it; this runs outside update(), so it lands.
-			syncEditor( state, true );
 		};
 
 		/**

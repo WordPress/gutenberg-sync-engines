@@ -110,6 +110,7 @@ test.describe( 'Collaboration - intent-log late join (issue #100) @engine-intent
 		title: string;
 		typeDuringHold: boolean;
 		savedBeforeJoin: boolean;
+		peerTypesAtStart?: boolean;
 	} > = [
 		{
 			title: 'a window whose first sync response is delayed does not revert a peer’s unsaved text',
@@ -126,9 +127,25 @@ test.describe( 'Collaboration - intent-log late join (issue #100) @engine-intent
 			typeDuringHold: true,
 			savedBeforeJoin: true,
 		},
+		{
+			title: 'the typed text lands in the right place when the peer typed EARLIER in the same paragraph',
+			typeDuringHold: true,
+			savedBeforeJoin: false,
+			peerTypesAtStart: true,
+		},
 	];
 
-	for ( const { title, typeDuringHold, savedBeforeJoin } of CASES ) {
+	for ( const {
+		title,
+		typeDuringHold,
+		savedBeforeJoin,
+		peerTypesAtStart = false,
+	} of CASES ) {
+		// The peer's unsaved text, and the paragraph once it lands.
+		const peerText = peerTypesAtStart ? 'Big ' : PEER_TEXT;
+		const withPeerText = peerTypesAtStart
+			? `${ peerText }Existing content`
+			: `Existing content${ peerText }`;
 		test(
 			title,
 			async ( { collaborationUtils, requestUtils, editor, page } ) => {
@@ -160,14 +177,14 @@ test.describe( 'Collaboration - intent-log late join (issue #100) @engine-intent
 					.locator( '[data-type="core/paragraph"]' )
 					.first()
 					.click();
-				await page.keyboard.press( 'End' );
-				await page.keyboard.type( PEER_TEXT, { delay: 30 } );
+				await page.keyboard.press( peerTypesAtStart ? 'Home' : 'End' );
+				await page.keyboard.type( peerText, { delay: 30 } );
 
 				// The room holds it: user 2 sees it before reloading.
 				await expect( async () => {
 					const blocks = await editor2.getBlocks();
 					expect( blocks[ 0 ].attributes.content ).toBe(
-						`Existing content${ PEER_TEXT }`
+						withPeerText
 					);
 				} ).toPass( { timeout: 10000 } );
 
@@ -218,14 +235,18 @@ test.describe( 'Collaboration - intent-log late join (issue #100) @engine-intent
 				await waitForSyncQuiet( page );
 
 				// Both windows agree, the peer's text survives exactly once,
-				// and the typed text is kept. The two insertions were
-				// concurrent, so their order is the engine's call.
-				const acceptable = typeDuringHold
-					? [
-							`Existing content${ PEER_TEXT } B`,
-							`Existing content B${ PEER_TEXT }`,
-					  ]
-					: [ `Existing content${ PEER_TEXT }` ];
+				// and the typed text is kept where it was typed. Two
+				// insertions at the same spot were concurrent, so their
+				// order is the engine's call.
+				let acceptable = [ withPeerText ];
+				if ( typeDuringHold ) {
+					acceptable = peerTypesAtStart
+						? [ `${ peerText }Existing content B` ]
+						: [
+								`Existing content${ peerText } B`,
+								`Existing content B${ peerText }`,
+						  ];
+				}
 				await expect( async () => {
 					const text1 = String(
 						( await editor.getBlocks() )[ 0 ].attributes.content

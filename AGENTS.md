@@ -1104,16 +1104,22 @@ applies.
     (`npm run fuzz -- --combos=intent-log/http-polling --seed-list=6
     --steps=14 --profile=concurrency`) passes.
   - FIXED (issue #100): text typed during the join round trip on a
-    post WITH content used to vanish under the bootstrap push. Like
-    yjs-server's fix for #57 (the shared comparison lives in
-    `src/shared/typed-text.ts`), the buffered tree is compared with
-    the saved post as parsed, and only its rich-text changes are
-    applied to the document the editor shows after the delivery
-    burst, then captured as an ordinary edit
-    (`replayPreInitText`). A tree that differs in any other way is
-    still dropped. The comparison ignores `metadata.syncId`: the
-    stamper puts genesis ids on a post saved without them before
-    anybody types. Browser spec:
+    post WITH content used to vanish under the bootstrap push. After
+    the delivery burst the buffered tree is compared with the saved
+    post as parsed (`src/shared/typed-text.ts`, shared with
+    yjs-server's #57 fix), and its rich-text changes are authored
+    against the NEWEST retained version whose texts for those blocks
+    equal the saved ones, at that version's seq
+    (`replayPreInitText`, `authorBatch` with `observe: false`). The
+    planner moves them past later rows, so a peer's text earlier in
+    the paragraph is respected and a clash is set aside for review.
+    Do NOT apply the saved offsets to the current text instead (the
+    first attempt did): a peer's earlier insertion then garbles the
+    paragraph. Still dropped: a tree that differs in more than text,
+    and text whose saved version the replica no longer holds (a
+    checkpoint bootstrap newer than the save). The comparison
+    ignores `metadata.syncId`: the stamper puts genesis ids on a post
+    saved without them before anybody types. Browser spec:
     `collaboration-intent-log-late-join`.
 
 ## Deep history
