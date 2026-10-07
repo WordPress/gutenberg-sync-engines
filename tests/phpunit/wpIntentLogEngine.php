@@ -218,6 +218,45 @@ class Tests_Collaboration_WpIntentLogEngine extends WP_Test_REST_TestCase {
 		$this->assertSame( 'u' . self::$editor_id . 'c101', $stored['actorId'] );
 	}
 
+	public function test_accepted_row_the_transform_moved_keeps_the_authored_payload() {
+		$target = self::paragraph_id();
+		$typed  = function ( string $id, int $offset, string $text, int $base_seq ) use ( $target ): array {
+			return self::intent_update(
+				array(
+					'intentId' => $id,
+					'baseSeq'  => $base_seq,
+					'type'     => 'insert_text',
+					'payload'  => array(
+						'syncId' => $target,
+						'field'  => 'content',
+						'offset' => $offset,
+						'text'   => $text,
+					),
+				)
+			);
+		};
+
+		// A peer inserts at the start: log 0. The author, unaware, inserts
+		// further along: accepted, moved past the peer's text.
+		$this->poll( array( $typed( 'p-z', 0, 'Z', 0 ) ), array( 'client_id' => 202 ) );
+		$moved = $this->poll( array( $typed( 'a-x', 2, 'x', 0 ) ) );
+		$this->assertSame( 'applied', $moved['dispositions'][0]['status'] );
+		// A keystroke authored after observing the peer is stored as sent.
+		$this->poll( array( $typed( 'a-y', 4, 'y', 2 ) ) );
+
+		$rows = array();
+		foreach ( $this->poll( array(), array( 'client_id' => 303 ) )['updates'] as $update ) {
+			if ( WP_Intent_Log_Engine::UPDATE_TYPE_INTENT === $update['type'] ) {
+				$decoded                      = json_decode( $update['data'], true );
+				$rows[ $decoded['intentId'] ] = $decoded;
+			}
+		}
+		$this->assertSame( 3, $rows['a-x']['payload']['offset'] );
+		$this->assertSame( 2, $rows['a-x']['authoredPayload']['offset'] );
+		$this->assertArrayNotHasKey( 'authoredPayload', $rows['p-z'] );
+		$this->assertArrayNotHasKey( 'authoredPayload', $rows['a-y'] );
+	}
+
 	public function test_conflicting_intent_escalates_into_a_delivered_proposal() {
 		$target = self::paragraph_id();
 		$this->poll(

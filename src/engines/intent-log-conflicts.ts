@@ -33,7 +33,11 @@
  *   capture batch are expressed against the base plus the batch's earlier
  *   members, and a later batch at the same frame against the base plus
  *   the earlier batches, so applying them in order rebuilds what the
- *   author saw. An edit that no longer applies is skipped.
+ *   author saw. The log holds an accepted edit in the server's
+ *   transformed form, whose coordinates count a peer's edits the author
+ *   never saw; a row the transform moved carries the payload as the
+ *   author sent it (`authoredPayload`), and that form is the one replayed
+ *   here. An edit that no longer applies is skipped.
  * - `current`: the run in this client's optimistic document.
  *
  * Pure: the documents and the serializer come in through `deps`, so the
@@ -445,9 +449,32 @@ function applyIntents(
 }
 
 /**
+ * An accepted log entry as its author sent it. The server's transform may
+ * have moved the entry past a peer's edits (and split a range into
+ * slices); against the author's own view, which never held those edits,
+ * the authored payload is the one that applies.
+ *
+ * @param entry The log entry.
+ * @return The entry in its authored form.
+ */
+function asAuthored( entry: IntentEnvelope ): IntentEnvelope {
+	if ( ! entry.authoredPayload ) {
+		return entry;
+	}
+	const authored: IntentEnvelope = {
+		...entry,
+		payload: entry.authoredPayload,
+	};
+	delete authored.authoredPayload;
+	delete authored.textSlices;
+	return authored;
+}
+
+/**
  * The edits the record's author got accepted from the frames the members
  * were authored at, touching the record's blocks: the part of the
- * author's own view the parked members are expressed against.
+ * author's own view the parked members are expressed against. Each comes
+ * back in its authored form (see asAuthored()).
  *
  * @param draft The record draft.
  * @param deps  The documents and the log.
@@ -482,7 +509,8 @@ function acceptedSiblings(
 				blockIdsOf( intent ).some( ( id ) =>
 					draft.blockIds.includes( id )
 				)
-		);
+		)
+		.map( asAuthored );
 }
 
 /**

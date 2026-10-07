@@ -40,6 +40,12 @@ export interface EngineDocument {
 export interface IntentEnvelope {
 	/** Server-generated ranges of one edit; never accepted from a client. */
 	textSlices?: Record< string, unknown >[];
+	/**
+	 * On an accepted row the server's transform moved: the payload as the
+	 * author sent it (never accepted from a client). Absent when the row
+	 * holds the authored form already.
+	 */
+	authoredPayload?: Record< string, unknown >;
 	intentId: string;
 	actorId: string;
 	baseSeq: number;

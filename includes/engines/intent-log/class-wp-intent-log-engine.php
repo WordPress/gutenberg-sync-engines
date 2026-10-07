@@ -76,7 +76,8 @@ if ( ! class_exists( 'WP_Intent_Log_Engine' ) ) {
 		const PROTOCOL_VERSION = 2;
 
 		/**
-		 * Update type: client-authored intent (stored transformed).
+		 * Update type: client-authored intent (stored transformed; when the
+		 * transform moved it, `authoredPayload` keeps the payload as sent).
 		 *
 		 * @since 7.2.0
 		 * @var string
@@ -418,6 +419,7 @@ if ( ! class_exists( 'WP_Intent_Log_Engine' ) ) {
 				 */
 				$envelope_ok = null !== $intent_id &&
 					! array_key_exists( 'textSlices', $intent ) &&
+					! array_key_exists( 'authoredPayload', $intent ) &&
 					is_int( $intent['baseSeq'] ?? null ) && $intent['baseSeq'] >= 0 &&
 					$intent['baseSeq'] <= $head_seq &&
 					is_string( $intent['type'] ?? null ) &&
@@ -651,7 +653,21 @@ if ( ! class_exists( 'WP_Intent_Log_Engine' ) ) {
 			foreach ( $plan['rows'] as $row ) {
 				$intent_id = $row['intent']['intentId'];
 				if ( null !== $row['accepted'] ) {
-					$stored = $this->add_row( $room, $client_id, self::UPDATE_TYPE_INTENT, $row['accepted'] );
+					$accepted = $row['accepted'];
+
+					/*
+					 * The row stores the transformed form (its coordinates
+					 * hold at its log position). When the transform moved
+					 * it, the row also keeps the payload as the author sent
+					 * it: a set-aside edit by the same author is expressed
+					 * against the author's own view, which held this one at
+					 * its authored place, and the review lane rebuilds that
+					 * view from the log (see intent-log-conflicts.ts).
+					 */
+					if ( $accepted['payload'] !== $row['intent']['payload'] || isset( $accepted['textSlices'] ) ) {
+						$accepted['authoredPayload'] = $row['intent']['payload'];
+					}
+					$stored = $this->add_row( $room, $client_id, self::UPDATE_TYPE_INTENT, $accepted );
 				} elseif ( null !== $row['proposal'] ) {
 					/*
 					 * Review context, captured while the document is at hand:

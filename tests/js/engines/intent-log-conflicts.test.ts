@@ -229,6 +229,55 @@ describe( 'intent-log conflict records', () => {
 		expect( record.conflict.current ).toBe( 'p1:XHello my' );
 	} );
 
+	it( 'replays an accepted keystroke the transform moved at its authored place', () => {
+		// "A sentence.": a peer typed "abc " at the start while the author
+		// typed " 123" before the period. The author's space got through,
+		// moved past the peer's text; "1", "2", "3" were set aside. The
+		// proposed side is the author's own version, so the space belongs
+		// where the author put it, not where the log holds it.
+		const base = createDocument( [
+			{ syncId: 'p1', blockType: 'core/paragraph', text: 'A sentence.' },
+		] );
+		const typed = ( offset: number, text: string ) =>
+			intent( 'insert_text', {
+				syncId: 'p1',
+				field: 'content',
+				offset,
+				text,
+			} );
+		const peer = intent(
+			'insert_text',
+			{ syncId: 'p1', field: 'content', offset: 0, text: 'abc ' },
+			{ actorId: 'u9c9' }
+		);
+		const space: IntentEnvelope = {
+			...typed( 14, ' ' ),
+			authoredPayload: {
+				syncId: 'p1',
+				field: 'content',
+				offset: 10,
+				text: ' ',
+			},
+		};
+		const log = [ peer, space ];
+		const current = log.reduce(
+			( doc, envelope ) => applyIntent( doc, envelope ).doc,
+			base
+		);
+
+		const [ record ] = buildConflictRecords(
+			[
+				parked( typed( 11, '1' ) ),
+				parked( typed( 12, '2' ), 'dependent-on-escalated' ),
+				parked( typed( 13, '3' ), 'dependent-on-escalated' ),
+			],
+			depsFor( current, { 0: base }, log )
+		);
+		expect( record.conflict.base ).toBe( 'p1:A sentence.' );
+		expect( record.conflict.proposed ).toBe( 'p1:A sentence 123.' );
+		expect( record.conflict.current ).toBe( 'p1:abc A sentence .' );
+	} );
+
 	it( 'rebuilds held markup whose placeholder was accepted', () => {
 		// Custom HTML: the placeholder character is an ordinary insertion
 		// (accepted), the markup a format over it (held for approval).
