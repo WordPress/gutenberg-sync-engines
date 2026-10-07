@@ -26,14 +26,14 @@ runs:
       shell: bash
       run: npm ci
 
-    # Built files only. Without the subtree's node_modules, the e2e
-    # fixtures load Playwright from the plugin's node_modules.
-    - name: Read the Gutenberg subtree's tree ID
+    - name: Read the Gutenberg tree ID
       id: subtree
       shell: bash
       run: echo "tree=$(git rev-parse HEAD:gutenberg)" >> "$GITHUB_OUTPUT"
 
-    - name: Restore the built Gutenberg subtree
+    # Built files only. Without the subtree's node_modules, the e2e
+    # fixtures load Playwright from the plugin's node_modules.
+    - name: Restore the Gutenberg build
       id: subtree-build
       uses: actions/cache@v4
       with:
@@ -45,7 +45,7 @@ runs:
         key: gutenberg-build-${{ runner.os }}-${{ hashFiles('.nvmrc') }}-${{ steps.subtree.outputs.tree }}
 
     # --ignore-scripts skips a husky hook that fails outside a git root.
-    - name: Install and build the vendored Gutenberg subtree
+    - name: Build Gutenberg
       if: steps.subtree-build.outputs.cache-hit != 'true'
       shell: bash
       run: |
@@ -53,23 +53,17 @@ runs:
         npm ci --ignore-scripts
         npm run build
 
-    - name: Read the Playwright version
-      if: inputs.playwright == 'true'
-      id: playwright
-      shell: bash
-      run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
-
-    - name: Restore the Playwright browser
+    - name: Restore Chromium
       if: inputs.playwright == 'true'
       id: playwright-browser
       uses: actions/cache@v4
       with:
         path: ~/.cache/ms-playwright
-        key: playwright-chromium-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+        key: playwright-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
 
     # No --with-deps: the runner already has Chromium's libraries, and
     # that flag's apt step once took ten minutes.
-    - name: Install Playwright browser
+    - name: Install Chromium
       if: inputs.playwright == 'true' && steps.playwright-browser.outputs.cache-hit != 'true'
       shell: bash
       run: npx playwright install chromium
