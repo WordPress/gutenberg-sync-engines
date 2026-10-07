@@ -18,10 +18,7 @@ import { getBlockType, getSaveContent } from '@wordpress/blocks';
  * Internal dependencies
  */
 import { createAwarenessDoc } from '../shared/awareness-sync';
-import {
-	findTypedTextSinceSave,
-	type TypedTextEdit,
-} from '../shared/typed-text';
+import { parseSavedPost, showsSavedPost } from '../shared/typed-text';
 import { registerAwareness } from '../awareness/registry';
 import {
 	applyDerivedIntents,
@@ -192,8 +189,9 @@ interface EntityState {
 	 * least reconcile the trees) is skipped too. A bootstrap schedules a
 	 * deferred recovery of it (see the bootstrap branch for why
 	 * deferred): captured as is while the document is still empty,
-	 * otherwise only its typed text (replayPreInitText, issue #100). Any
-	 * newer post-init editor tree discards it.
+	 * otherwise against the version that shows the saved post
+	 * (replayPreInitTree, issue #100). Any newer post-init editor tree
+	 * discards it.
 	 */
 	preInitTree: BridgeBlock[] | null;
 	/**
@@ -895,72 +893,6 @@ function scheduleEditorSync( state: EntityState, force = false ): void {
 }
 
 /**
- * The block a typed change (see findTypedTextSinceSave) was made in: the
- * block with the change's saved identity, else the block at its position.
- *
- * @param blocks A bridge tree.
- * @param edit   The change.
- */
-function findTypedBlock(
-	blocks: BridgeBlock[],
-	edit: TypedTextEdit
-): BridgeBlock | undefined {
-	const findById = ( list: BridgeBlock[] ): BridgeBlock | undefined => {
-		for ( const block of list ) {
-			const metadata = block.attributes?.metadata as
-				| { syncId?: string }
-				| undefined;
-			if ( metadata?.syncId === edit.syncId ) {
-				return block;
-			}
-			const inner = findById( block.innerBlocks );
-			if ( inner ) {
-				return inner;
-			}
-		}
-		return undefined;
-	};
-	if ( edit.syncId ) {
-		const block = findById( blocks );
-		if ( block ) {
-			return block;
-		}
-	}
-	let block: BridgeBlock | undefined;
-	let list = blocks;
-	for ( const index of edit.path ) {
-		block = list[ index ];
-		if ( ! block ) {
-			return undefined;
-		}
-		list = block.innerBlocks;
-	}
-	return block;
-}
-
-/**
- * A block's text for a typed change's attribute, or null when the block
- * is missing or the attribute is not text.
- *
- * @param blocks A bridge tree.
- * @param edit   The change.
- */
-function typedBlockText(
-	blocks: BridgeBlock[],
-	edit: TypedTextEdit
-): string | null {
-	const block = findTypedBlock( blocks, edit );
-	if ( ! block ) {
-		return null;
-	}
-	const value = block.attributes[ edit.attribute ];
-	if ( undefined === value ) {
-		return '';
-	}
-	return 'string' === typeof value ? value : null;
-}
-
-/**
  * Resolves which state an arriving editor tree was authored against, and
  * makes it the observed baseline.
  *
@@ -1435,8 +1367,8 @@ export function createIntentLogManager( debug = false ): SyncManager {
 				 * every block duplicates (found by fuzz:quick when this
 				 * recovery ran synchronously). A still-empty document after
 				 * the burst means the room truly holds only its genesis —
-				 * exactly the stranded case; a filled one carries over only
-				 * the typed text, like a non-empty bootstrap below. Any
+				 * exactly the stranded case; a filled one is replayed against
+				 * the saved version, like a non-empty bootstrap below. Any
 				 * post-init editor tree supersedes the buffer (update()
 				 * clears it).
 				 */
@@ -1452,8 +1384,8 @@ export function createIntentLogManager( debug = false ): SyncManager {
 								).length > 0
 							) {
 								// History filled the room: the tree is the
-								// saved post plus keystrokes, as below.
-								replayPreInitText();
+								// saved post plus edits, as below.
+								replayPreInitTree();
 								return;
 							}
 							const buffered = state.preInitTree;
@@ -1477,19 +1409,19 @@ export function createIntentLogManager( debug = false ): SyncManager {
 				}
 				pushDocument( state, bootstrap, blocks );
 				/*
-				 * Text typed during the join round trip on a post that has
+				 * Edits made during the join round trip on a post that has
 				 * content (issue #100). The push above replaces the canvas,
-				 * so the buffered tree is the only record of it. That tree
-				 * is the SAVED post plus the keystrokes, and the saved post
+				 * so the buffered tree is the only record of them. That
+				 * tree is the SAVED post plus the edits, and the saved post
 				 * may be newer than this snapshot (a save mid-room), so it
-				 * is never captured as is: only its rich-text changes over
-				 * the saved post carry over, onto the document the editor
-				 * now shows. Deferred past the delivery burst for the same
-				 * reason as the empty-post recovery above: the room's later
-				 * rows land right behind this snapshot.
+				 * is never captured against the head: replayPreInitTree
+				 * authors it against the version that shows the saved post.
+				 * Deferred past the delivery burst for the same reason as
+				 * the empty-post recovery above: the room's later rows land
+				 * right behind this snapshot.
 				 */
 				if ( state.preInitTree?.length ) {
-					setTimeout( replayPreInitText, 0 );
+					setTimeout( replayPreInitTree, 0 );
 				}
 				return;
 			}
@@ -1546,28 +1478,28 @@ export function createIntentLogManager( debug = false ): SyncManager {
 		} );
 
 		/**
-		 * Sends the text typed before the snapshot as an ordinary edit of
-		 * the version the person was looking at: the saved post.
+		 * Sends what the person did before the snapshot as an ordinary
+		 * edit of the version they were looking at: the saved post.
 		 *
-		 * The buffered tree is the saved post plus the keystrokes, so its
-		 * rich-text changes over the saved post (findTypedTextSinceSave)
-		 * are what the person typed. They are authored against the NEWEST
-		 * retained version whose texts for those blocks equal the saved
-		 * ones, at that version's seq: the planner (here, and the same one
-		 * on the server) then moves them past everything that landed
-		 * since, and a clash with a peer's change to the same text is set
-		 * aside for review like any other. Applying them at the same
-		 * offsets in the CURRENT text instead garbles the paragraph when a
-		 * peer typed earlier in it.
+		 * The buffered tree is the saved post plus their edits (typing, a
+		 * new or removed block, anything the editor captures). It is
+		 * derived against the NEWEST retained version that shows the saved
+		 * post (showsSavedPost) and authored at that version's seq: the
+		 * planner (here, and the same one on the server) then moves the
+		 * edits past everything that landed since, and a clash with a
+		 * peer's change is set aside for review like any other. Diffing
+		 * the tree against the CURRENT document instead would read every
+		 * peer change since the save as the person's own undoing of it,
+		 * and applying saved offsets to the current text garbles a
+		 * paragraph a peer typed earlier in.
 		 *
-		 * Dropped, as before issue #100: a tree that differs from the
-		 * saved post in more than text (a block added or removed, a
-		 * non-text attribute), a buffer a newer editor tree superseded,
-		 * and text whose saved version this replica no longer holds (it
-		 * bootstrapped from a checkpoint newer than the save) — there is
-		 * no version to author it against, and a guess would garble.
+		 * Dropped, as before issue #100: a buffer a newer editor tree
+		 * superseded, and a tree whose saved version this replica no
+		 * longer holds (it bootstrapped from a checkpoint newer than the
+		 * save) — there is no version to author it against, and a guess
+		 * would destroy a peer's work.
 		 */
-		const replayPreInitText = (): void => {
+		const replayPreInitTree = (): void => {
 			const buffered = state.preInitTree;
 			state.preInitTree = null;
 			if (
@@ -1578,31 +1510,20 @@ export function createIntentLogManager( debug = false ): SyncManager {
 			) {
 				return;
 			}
-			const edits = findTypedTextSinceSave( recordContent, buffered );
-			if ( ! edits?.length ) {
+			const saved = parseSavedPost( recordContent );
+			if ( ! saved ) {
 				return;
 			}
 			const floor = session.getRetainedFloor();
 			for ( let seq = session.getSeq(); seq >= floor; seq-- ) {
 				const doc = session.getDocumentAt( seq );
-				if ( ! doc ) {
-					continue;
-				}
-				const tree = documentBlocks( state, doc );
 				if (
-					! edits.every(
-						( edit ) => typedBlockText( tree, edit ) === edit.before
-					)
+					! doc ||
+					! showsSavedPost( saved, documentBlocks( state, doc ) )
 				) {
 					continue;
 				}
-				for ( const edit of edits ) {
-					findTypedBlock( tree, edit )!.attributes[ edit.attribute ] =
-						edit.before.slice( 0, edit.offset ) +
-						edit.inserted +
-						edit.before.slice( edit.offset + edit.removed.length );
-				}
-				const derived = deriveIntents( doc, tree, {
+				const derived = deriveIntents( doc, buffered, {
 					removableIds: state.editorIds,
 					excludeIds: state.docTombstones,
 					richTextFields: state.fieldsResolver,
@@ -1624,16 +1545,15 @@ export function createIntentLogManager( debug = false ): SyncManager {
 				} finally {
 					state.capturing = false;
 				}
-				// The editor has not seen the typed text since the bootstrap
-				// push replaced it; this runs outside update(), so it lands.
+				// The editor has not seen these edits since the bootstrap
+				// push replaced them; this runs outside update(), so it
+				// lands.
 				syncEditor( state, true );
 				return;
 			}
 			log(
-				'pre-init text dropped: no retained version matches the saved post',
-				{
-					key,
-				}
+				'pre-init edits dropped: no retained version shows the saved post',
+				{ key }
 			);
 		};
 

@@ -455,7 +455,7 @@ describe( 'intent-log manager', () => {
 			);
 		} );
 
-		it( 'drops a tree that differs from the saved post in more than text', async () => {
+		it( 'keeps a block added before the snapshot, with the text typed into the saved one', async () => {
 			mockParse.mockImplementation( () => [
 				paragraph( 'Existing content', 'p1' ),
 			] );
@@ -463,6 +463,7 @@ describe( 'intent-log manager', () => {
 				content: 'saved post',
 			} );
 
+			// Typed " B", pressed Enter, typed a new paragraph.
 			manager.update(
 				'postType/post',
 				'1',
@@ -478,10 +479,65 @@ describe( 'intent-log manager', () => {
 			transport.captured.session!.receiveUpdate( peerAppend );
 			jest.advanceTimersByTime( 1 );
 
-			expect( transport.captured.sent ).toHaveLength( 0 );
-			expect( lastPushedContent( handlers ) ).toBe(
-				'Existing content plus user one'
+			const sent = transport.captured.sent.map( ( update ) =>
+				JSON.parse( update.data )
 			);
+			// Authored against the saved version (the genesis).
+			expect( sent.every( ( intent ) => 0 === intent.baseSeq ) ).toBe(
+				true
+			);
+			const pushed = (
+				handlers.edits.at( -1 ) as {
+					blocks: Array< { attributes: Record< string, unknown > } >;
+				}
+			 ).blocks.map( ( block ) => block.attributes.content );
+			expect( pushed ).toHaveLength( 2 );
+			expect( [
+				'Existing content B plus user one',
+				'Existing content plus user one B',
+			] ).toContain( pushed[ 0 ] );
+			expect( pushed[ 1 ] ).toBe( 'A new block' );
+		} );
+
+		it( 'keeps the deletion of a saved block, and a peer’s edit elsewhere', async () => {
+			mockParse.mockImplementation( () => [
+				paragraph( 'Existing content', 'p1' ),
+				paragraph( 'Second', 'p2' ),
+			] );
+			const { manager, handlers, transport } = await loadManagedEntity( {
+				content: 'saved post',
+			} );
+
+			// The person deleted the second paragraph.
+			manager.update(
+				'postType/post',
+				'1',
+				{ blocks: [ paragraph( 'Existing content', 'p1' ) ] },
+				'gutenberg'
+			);
+			transport.captured.session!.receiveUpdate(
+				snapshotRow( [
+					{
+						syncId: 'p1',
+						blockType: 'core/paragraph',
+						text: 'Existing content',
+					},
+					{
+						syncId: 'p2',
+						blockType: 'core/paragraph',
+						text: 'Second',
+					},
+				] )
+			);
+			transport.captured.session!.receiveUpdate( peerAppend );
+			jest.advanceTimersByTime( 1 );
+
+			const pushed = (
+				handlers.edits.at( -1 ) as {
+					blocks: Array< { attributes: Record< string, unknown > } >;
+				}
+			 ).blocks.map( ( block ) => block.attributes.content );
+			expect( pushed ).toEqual( [ 'Existing content plus user one' ] );
 		} );
 
 		it( 'removes typed-over characters only where the document still holds them', async () => {

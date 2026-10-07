@@ -5,17 +5,91 @@
 import { getBlockType, parse } from '@wordpress/blocks';
 
 /*
- * What a person TYPED before a window's first sync response arrived.
+ * What a person did before a window's first sync response arrived.
  *
  * Until the room's document arrives, the editor shows the saved post as it
- * parsed it, and any keystroke hands the engine that whole tree. The tree
- * is the saved post plus the keystrokes, while the room's document may be
+ * parsed it, and any edit hands the engine that whole tree. The tree is
+ * the saved post plus the person's edits, while the room's document may be
  * older or newer than the saved post, so treating the tree as an edit of
  * the document counts every difference between the two as the person's
- * work (issue #57). The engines instead compare the tree with the saved
- * post and carry over only the rich-text changes; any other difference is
- * dropped.
+ * work (issues #57 and #100). An engine either authors the tree against
+ * the version of the room that shows the saved post (showsSavedPost), so
+ * its own merge moves the edits past what landed since, or carries over
+ * only the rich-text changes (findTypedTextSinceSave).
  */
+
+/**
+ * The saved post as the editor parsed it, or null when it cannot be
+ * parsed.
+ *
+ * @param savedContent The loaded record's raw content.
+ */
+export function parseSavedPost( savedContent: string ): EditorBlock[] | null {
+	try {
+		return parse( savedContent ) as EditorBlock[];
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Whether a version of the room's document shows the saved post: the same
+ * block types in the same order and nesting, with the same rich text.
+ * Block identity is compared only where both sides carry one (the saved
+ * post may predate identities). Other attributes are not compared: each
+ * engine stores them in its own form, and parsing adds defaults.
+ *
+ * @param saved   The saved post (parseSavedPost).
+ * @param version A version of the room's document, as editor blocks.
+ */
+export function showsSavedPost(
+	saved: EditorBlock[],
+	version: EditorBlock[]
+): boolean {
+	if ( saved.length !== version.length ) {
+		return false;
+	}
+	return saved.every( ( before, i ) => {
+		const block = version[ i ];
+		if ( before.name !== block.name ) {
+			return false;
+		}
+		const savedId = syncIdOf( before );
+		const versionId = syncIdOf( block );
+		if ( savedId && versionId && savedId !== versionId ) {
+			return false;
+		}
+		const names = new Set( [
+			...Object.keys( before.attributes ?? {} ),
+			...Object.keys( block.attributes ?? {} ),
+		] );
+		for ( const name of names ) {
+			if (
+				isRichText( block.name, name ) &&
+				richTextToString( before.attributes?.[ name ] ) !==
+					richTextToString( block.attributes?.[ name ] )
+			) {
+				return false;
+			}
+		}
+		return showsSavedPost(
+			before.innerBlocks ?? [],
+			block.innerBlocks ?? []
+		);
+	} );
+}
+
+/**
+ * A block's identity (`metadata.syncId`), if it carries one.
+ *
+ * @param block A block.
+ */
+function syncIdOf( block: EditorBlock ): string | undefined {
+	const syncId = (
+		block.attributes?.metadata as { syncId?: unknown } | undefined
+	 )?.syncId;
+	return 'string' === typeof syncId ? syncId : undefined;
+}
 
 /**
  * The rich-text changes a tree carries over the saved post, or null when
@@ -28,14 +102,8 @@ export function findTypedTextSinceSave(
 	savedContent: string,
 	tree: EditorBlock[]
 ): TypedTextEdit[] | null {
-	try {
-		return findTypedTextEdits(
-			parse( savedContent ) as EditorBlock[],
-			tree
-		);
-	} catch {
-		return null;
-	}
+	const saved = parseSavedPost( savedContent );
+	return saved ? findTypedTextEdits( saved, tree ) : null;
 }
 
 /** A block as the editor holds it, as far as this comparison reads it. */
@@ -96,14 +164,10 @@ export function findTypedTextEdits(
 				const oldText = richTextToString( oldValue );
 				const newText = richTextToString( newValue );
 				if ( oldText !== newText ) {
-					const syncId = (
-						block.attributes?.metadata as
-							| { syncId?: unknown }
-							| undefined
-					 )?.syncId;
+					const syncId = syncIdOf( block );
 					edits.push( {
 						path: [ ...path, i ],
-						...( 'string' === typeof syncId ? { syncId } : {} ),
+						...( syncId ? { syncId } : {} ),
 						attribute: name,
 						before: oldText,
 						...diffText( oldText, newText ),

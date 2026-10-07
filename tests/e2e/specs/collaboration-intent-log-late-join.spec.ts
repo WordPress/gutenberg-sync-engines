@@ -111,6 +111,7 @@ test.describe( 'Collaboration - intent-log late join (issue #100) @engine-intent
 		typeDuringHold: boolean;
 		savedBeforeJoin: boolean;
 		peerTypesAtStart?: boolean;
+		newParagraph?: boolean;
 	} > = [
 		{
 			title: 'a window whose first sync response is delayed does not revert a peer’s unsaved text',
@@ -133,6 +134,18 @@ test.describe( 'Collaboration - intent-log late join (issue #100) @engine-intent
 			savedBeforeJoin: false,
 			peerTypesAtStart: true,
 		},
+		{
+			title: 'a new paragraph started before the delayed first sync response is kept too',
+			typeDuringHold: true,
+			savedBeforeJoin: false,
+			newParagraph: true,
+		},
+		{
+			title: 'the same after user 1 SAVED',
+			typeDuringHold: true,
+			savedBeforeJoin: true,
+			newParagraph: true,
+		},
 	];
 
 	for ( const {
@@ -140,6 +153,7 @@ test.describe( 'Collaboration - intent-log late join (issue #100) @engine-intent
 		typeDuringHold,
 		savedBeforeJoin,
 		peerTypesAtStart = false,
+		newParagraph = false,
 	} of CASES ) {
 		// The peer's unsaved text, and the paragraph once it lands.
 		const peerText = peerTypesAtStart ? 'Big ' : PEER_TEXT;
@@ -219,6 +233,10 @@ test.describe( 'Collaboration - intent-log late join (issue #100) @engine-intent
 						.click();
 					await page2.keyboard.press( 'End' );
 					await page2.keyboard.type( ' B' );
+					if ( newParagraph ) {
+						await page2.keyboard.press( 'Enter' );
+						await page2.keyboard.type( 'New paragraph' );
+					}
 					expect( Date.now() ).toBeLessThan( releaseAt );
 					expect(
 						String(
@@ -256,6 +274,17 @@ test.describe( 'Collaboration - intent-log late join (issue #100) @engine-intent
 					);
 					expect( text2 ).toBe( text1 );
 					expect( acceptable ).toContain( text1 );
+					const rest = async ( currentEditor: typeof editor ) =>
+						( await currentEditor.getBlocks() )
+							.slice( 1 )
+							.map( ( block ) =>
+								String( block.attributes.content )
+							);
+					const expectedRest = newParagraph
+						? [ 'New paragraph' ]
+						: [];
+					expect( await rest( editor ) ).toEqual( expectedRest );
+					expect( await rest( editor2 ) ).toEqual( expectedRest );
 				} ).toPass( { timeout: 10000 } );
 			}
 		);
