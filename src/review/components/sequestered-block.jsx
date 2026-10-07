@@ -113,7 +113,9 @@ export function SequesteredBlockBody( { sequestration, canReview, onReview } ) {
  * @param {Array}  props.conflicts The block's held records.
  */
 export default function SequesteredBlock( { conflicts } ) {
-	const blockProps = useBlockProps();
+	// A selected paragraph makes the whole canvas root contentEditable, and
+	// the card would inherit it. Opt out so it cannot be typed over.
+	const blockProps = useBlockProps( { contentEditable: false } );
 	const decide = useDecideConflict();
 	const [ isReviewing, setIsReviewing ] = useState( false );
 	const [ conflict ] = conflicts;

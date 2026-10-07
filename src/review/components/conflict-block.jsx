@@ -189,7 +189,9 @@ export function ConflictBlockBody( {
  * @param {Array}  props.conflicts The block's open merge conflicts.
  */
 export default function ConflictBlock( { clientId, blockName, conflicts } ) {
-	const blockProps = useBlockProps();
+	// A selected paragraph makes the whole canvas root contentEditable, and
+	// the card would inherit it. Opt out so it cannot be typed over.
+	const blockProps = useBlockProps( { contentEditable: false } );
 	const decide = useDecideConflict();
 	const [ isReviewing, setIsReviewing ] = useState( false );
 	const [ conflict ] = conflicts;
