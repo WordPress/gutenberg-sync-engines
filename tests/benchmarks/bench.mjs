@@ -110,9 +110,18 @@ Suites (--suite=; default: host):
                                     (0 = the plugin's defaults; default:
                                     leave the site's setting alone)
                --metrics=    comma list of table rows to print:
-                             requests,traffic,cpu,workers,memory,cache,queries,diskio (default all)
+                             requests,traffic,cpu,workers,memory,cache,queries,fsyncs,editor (default all)
+               --post-size=  empty | medium | large (default empty)
+               --pattern=    own-paragraph | new-blocks
                --json=       write full results as JSON to this path
+               --record=     append this run's result line to a
+                             results file
                --headed      visible browser (debugging)
+  sweep      Runs the host report once per run of a plan file and
+             collects the result lines into a data set, with a CSV export
+             and a chart page (tests/benchmarks/host/sweep.mjs). Arguments:
+             --plan= (quick | scaling | spread | transports, or a path), --out=,
+             --dry-run, --max-runs=, --headed.
   engines    The engine-decision matrix and invariant sweeps (in-process,
              wp-env cli). Arguments: --engines=, --scenarios=, --seed=,
              --out=, --certify=N (invariant sweep across N seeds),
@@ -137,6 +146,7 @@ WP_USERNAME/WP_PASSWORD.
 Examples:
   npm run bench
   npm run bench -- --engine=de-rtc --peers=3 --polling-interval=2
+  npm run bench -- --suite=sweep --plan=scaling
   npm run bench -- --suite=engines --scenarios=editorial-session
   npm run bench -- --certify=10
 `;
@@ -168,6 +178,7 @@ if ( positionals.length ) {
 const SUITE_SCRIPTS = {
 	'text-slices': 'tests/benchmarks/text-slices.mjs',
 	host: 'tests/benchmarks/host/host-benchmark.mjs',
+	sweep: 'tests/benchmarks/host/sweep.mjs',
 	transport: 'tests/benchmarks/transport/benchmark-transport.mjs',
 };
 // The soak and replay lanes are debugging/analysis tools, not
@@ -201,7 +212,7 @@ if ( 'engines' !== SUITE ) {
 			);
 		} else {
 			console.error(
-				`unknown suite "${ SUITE }" — known: host (default), engines, transport, text-slices`
+				`unknown suite "${ SUITE }" — known: host (default), sweep, engines, transport, text-slices`
 			);
 		}
 		process.exit( 1 );
