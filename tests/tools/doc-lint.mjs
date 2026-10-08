@@ -3,7 +3,7 @@
  * filter or class, a broken link, or a stale number is caught in CI.
  *
  *   node tests/tools/doc-lint.mjs            # every prose file
- *   node tests/tools/doc-lint.mjs docs/a.md  # just these files
+ *   node tests/tools/doc-lint.mjs docs/README.md  # just these files
  *
  * What it checks (from the 2026-10-07 documentation review, section 6.3;
  * the review itself lives in the git history, commit 510bbcbdaa):

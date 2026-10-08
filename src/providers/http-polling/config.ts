@@ -123,7 +123,7 @@ export const POLLING_INTERVAL_WITH_COLLABORATORS_IN_MS =
 	);
 
 /*
- * Advisory-channel cadences (docs/advisory-channel.md). While every
+ * Advisory-channel cadences (docs/transports.md). While every
  * known peer is reachable over the channel there is no timer at all;
  * polls happen on demand — shortly after the first queued local update,
  * shortly after a peer announces new rows (coalesced, with a floor that

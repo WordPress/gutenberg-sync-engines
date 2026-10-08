@@ -24,6 +24,12 @@ release, which the release script generates from the commit history.
 
 ### Changed
 
+- The Settings → Collaboration screen now explains every option in
+  plain words, shows the sync daemon's address for the daemon-served
+  event stream as well as the WebSocket transport, and shows its
+  "access-token secret is not set" notice when a relay would need one.
+  The settings reference page in `docs/` is gone; the screen is the
+  reference.
 - The default collaboration join limit is five editor tabs per post,
   including the joining tab. The same limit now applies to WebSocket,
   HTTP polling, SSE, and SSE-daemon connections.

@@ -403,7 +403,7 @@ let repollImmediately = false;
 let syncRequestBodySizeLimit = MAX_SYNC_REQUEST_BODY_SIZE_IN_BYTES;
 
 /*
- * THE CADENCE RULES (docs/advisory-channel.md).
+ * THE CADENCE RULES (docs/transports.md).
  *
  * Short polling is the base transport everyone has. What changes is WHEN
  * the loop polls:
@@ -1251,7 +1251,7 @@ function createPayloadRoom(
 			  }
 			: {} ),
 		// This tab's presence token, on its post's room only: the first
-		// request carrying it is the tab's join (docs/room-lifetime.md).
+		// request carrying it is the tab's join (docs/transports.md).
 		...( getPresenceRoom() === state.room && getPresenceToken()
 			? { presence_token: getPresenceToken()! }
 			: {} ),

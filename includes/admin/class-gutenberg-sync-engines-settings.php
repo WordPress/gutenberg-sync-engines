@@ -143,7 +143,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
 		 * Option holding the unsaved-changes policy: `discard` (the saved post
 		 * is the only durable copy; a room nobody is in is reset to it) or
 		 * `keep` (rooms live on as a shared working copy). See
-		 * docs/room-lifetime.md.
+		 * docs/transports.md.
 		 *
 		 * @since 0.0.1
 		 * @var string
@@ -159,7 +159,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
 		 * switches every editor tab to block-level presence exchanged once
 		 * per interval: each tab names the block its selection is in and
 		 * peers draw an outline and an avatar on it. See
-		 * docs/awareness-high-latency.md.
+		 * docs/transports.md.
 		 *
 		 * @since 0.0.1
 		 * @var string

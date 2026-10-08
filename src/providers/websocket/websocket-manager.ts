@@ -43,7 +43,7 @@ import {
  * (`/wp-sync/v1/ws-token`); the daemon validates it against the logged-in
  * cookie on handshake.
  *
- * A PREFERRED TRANSPORT (docs/advisory-channel.md): the socket
+ * A PREFERRED TRANSPORT (docs/transports.md): the socket
  * carries everything while it is open, and short polling, the base
  * transport, is the fallback whenever it is not — the daemon unreachable, the token
  * refused, the socket dropped. A room the socket cannot serve is PARKED

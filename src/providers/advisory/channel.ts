@@ -27,7 +27,7 @@ export type { PresenceEntry } from './link';
  * rows on the server, go and poll". No document content ever crosses it,
  * and nothing that arrives on it is trusted for anything but display and a
  * decision to poll sooner. Every correctness property comes from the poll
- * the notice triggers (see docs/advisory-channel.md).
+ * the notice triggers (see docs/transports.md).
  *
  * The messages travel over a LINK (`link.ts`), chosen on the settings
  * screen: a WebRTC mesh between the tabs (`webrtc-link.ts`, the default)

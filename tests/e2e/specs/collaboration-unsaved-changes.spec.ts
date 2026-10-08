@@ -10,7 +10,7 @@ import type { RequestUtils } from '@wordpress/e2e-test-utils-playwright';
 import { test, expect } from '../config/collaboration-fixtures';
 
 /**
- * The unsaved-changes policy (docs/room-lifetime.md), once per engine:
+ * The unsaved-changes policy (docs/transports.md), once per engine:
  * the room lifetime rules live in the transport and the presence lane,
  * above the engine choice.
  *

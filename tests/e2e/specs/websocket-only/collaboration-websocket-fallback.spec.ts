@@ -12,7 +12,7 @@ import { SECOND_USER } from '../../../../gutenberg/test/e2e/specs/editor/collabo
 /**
  * WebSocket is a PREFERRED transport: it carries everything while its
  * socket is open, and short polling, the base transport, is the fallback
- * whenever it is not (docs/advisory-channel.md). Here the socket can
+ * whenever it is not (docs/transports.md). Here the socket can
  * never open — the one-time token route is blocked for both tabs — so both
  * tabs must fall back to short polling and still converge.
  */

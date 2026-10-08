@@ -28,7 +28,7 @@ import {
  * one-time token handshake the websocket TRANSPORT uses) — or, in
  * access-token mode, to any relay a host runs that verifies the signed access token
  * (`examples/advisory-relay/`; the format is in
- * docs/advisory-channel.md). The server relays presence and "go
+ * docs/transports.md). The server relays presence and "go
  * and poll" notices between the tabs in a room. The socket carries no
  * rows and the server does no engine work for it: it keeps an in-memory
  * roster per room and fans out what a tab sends (the plugin's daemon

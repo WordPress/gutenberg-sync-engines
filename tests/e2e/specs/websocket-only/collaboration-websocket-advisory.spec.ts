@@ -11,7 +11,7 @@ import type { Page } from '@playwright/test';
 import { test, expect } from '../../config/collaboration-fixtures';
 
 /**
- * The advisory channel over its WebSocket link (docs/advisory-channel.md):
+ * The advisory channel over its WebSocket link (docs/transports.md):
  * short polling stays the transport, and each tab opens a socket to the
  * sync daemon, which relays presence and "go and poll" notices between
  * the tabs in a room and never a row. Two tabs see each other in the
