@@ -185,7 +185,7 @@ prevents.
 
 ## The batch planner (shared client/server core)
 
-`planBatch( units, log, docAt )` in `src/rebase.js` is a pure function that
+`planBatch( units, log, docAt )` in `rebase.js` is a pure function that
 plans one client's batch against a log: frame checks, rebase, rule-4 unit
 settlement, and the apply phase. The server commits a plan at ingest; a
 caught-up client runs the SAME function over its verbatim log copy to
@@ -194,7 +194,7 @@ therefore by construction, and the simulator's prediction oracle guards the
 construction (any server-only state or client-side shortcut surfaces as a
 mismatch). The PHP twin must mirror exactly this function.
 
-Client model (`src/client.js`): a replica keeps `log` (observed prefix),
+Client model (`client.js`): a replica keeps `log` (observed prefix),
 `baseDoc` (acked state), and `outbox` (pending intents exactly as authored —
 the server always receives originals and re-derives transforms itself). On
 every catch-up it replans; escalated/voided pending intents drop out of the
@@ -251,7 +251,7 @@ concurrent merge into a DIFFERENT survivor, or any other identity-addressed
 intent on a merge-absorbed block, escalates (`target-deleted`): the
 absorption must never silently swallow another actor's work.
 
-`ESCALATION_REASONS` in `src/rebase.js` is the closed set of reasons; the
+`ESCALATION_REASONS` in `rebase.js` is the closed set of reasons; the
 escalation-soundness oracle rejects anything else.
 
 ## Server policy escalations (outside the planner)

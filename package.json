@@ -48,6 +48,7 @@
     "fuzz:quick": "node ./tests/fuzzer/run.mjs --transports=http-polling --seeds=2 --no-faults --no-reload",
     "lint:js": "wp-scripts lint-js src tests examples/advisory-relay/relay.mjs",
     "lint:js:fix": "npm run lint:js -- --fix",
+    "lint:docs": "node tests/tools/doc-lint.mjs",
     "lint:php": "composer lint",
     "playground": "wp-playground-cli server --mount=.:/wordpress/wp-content/plugins/gutenberg-sync-engines --blueprint=blueprint.local.json --login --workers=1",
     "plugin-zip": "bash bin/build-plugin-zip.sh",

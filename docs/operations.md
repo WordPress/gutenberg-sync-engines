@@ -128,7 +128,7 @@ port (8787 by default), and answers `GET /health` with `OK`.
   TLS and pass one path to the daemon's local port, so no new port is
   open to the internet and no plain `ws://` leaves the machine. On that
   path, turn off response buffering, allow reads longer than the
-  daemon's 45-second idle timeout, and pass the WebSocket upgrade
+  daemon's <!-- const:IDLE_TIMEOUT_S -->45<!-- /const -->-second idle timeout, and pass the WebSocket upgrade
   headers. Enter the public `wss://` address as the "WebSocket transport
   server" setting; the daemon's event stream uses the same address (or
   the `wp_sync_sse_daemon_url` filter).

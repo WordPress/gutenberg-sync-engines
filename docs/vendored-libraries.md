@@ -26,7 +26,7 @@ Two deliberate local changes. Preserve both when re-vendoring:
 - `composer.json` pins `config.platform.php` to 7.4, with the lock file
   resolved for it, so the suite installs on the PHP versions WordPress
   supports.
-- `src/Lib0/StringDecoder.php` is rewritten to read forward through the
+- `includes/lib/y-php/src/Lib0/StringDecoder.php` is rewritten to read forward through the
   data once. The direct port re-walked the buffer from the start on
   every read, so decoding slowed down sharply as documents grew (PR
   #29; the file's header explains the change). This is the change
@@ -82,7 +82,7 @@ Two things to know before blaming the library for a failure:
   old. Locally, check `php -r 'echo PCRE_VERSION;'` first.
 - **The runner leaves `PORTING_STATUS.json` alone by default.** Upstream
   rewrote it, timestamp included, on every run, which dirtied the tree;
-  a marked `DELTA` in `tests/run.php` skips that. Set
+  a marked `DELTA` in `includes/lib/automerge-php/tests/run.php` skips that. Set
   `AUTOMERGE_PHP_UPDATE_STATUS=1` to refresh it on purpose.
 
 The 11 upstream fixture files the runner reads live under

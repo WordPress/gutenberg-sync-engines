@@ -59,7 +59,7 @@ nothing there.
 | Cookie + REST nonce | Polling, the web-tier stream, the review route, the leave beacon | The WordPress session | Ordinary REST authentication. |
 | One-time token | The daemon's socket and stream | Two minutes, spent on first use | Minted at `POST /wp-sync/v1/ws-token` and stored as a transient bound to the user. |
 | Access token | The daemon and a host's own relay, when `WP_SYNC_WEBSOCKET_ACCESS_TOKEN_SECRET` is set | Two minutes, with 30 seconds of clock skew allowed | A JSON Web Token signed with HMAC-SHA256 over the shared secret. |
-| Presence token | Finding the other tabs on a post | Five minutes after the last heartbeat | Stamped when the editor page renders, refreshed by every heartbeat and poll, removed by the leave beacon. Bound to its user. |
+| Presence token | Finding the other tabs on a post | <!-- const:PRESENCE_TTL -->300<!-- /const --> seconds after the last heartbeat | Stamped when the editor page renders, refreshed by every heartbeat and poll, removed by the leave beacon. Bound to its user. |
 
 The one-time token and the access token:
 
@@ -111,9 +111,9 @@ under the checks above.
 
 - Request body 16 MB, 50 rooms per request, 1 MB per encoded update
   (polling and the stream).
-- Daemon: 512 connections, 20 per IP, 200 messages per socket per five
+- Daemon: <!-- const:DEFAULT_MAX_CONNECTIONS -->512<!-- /const --> connections, <!-- const:DEFAULT_MAX_CONNECTIONS_PER_IP -->20<!-- /const --> per IP, <!-- const:MESSAGE_RATE_LIMIT -->200<!-- /const --> messages per socket per five
   seconds, 200-byte room names, 64-byte presence tokens, 16 KB of
   advisory presence.
 - yjs-server refuses to start a session for a post over 1 MB, and stops
   accepting writes to a room over 8 MB.
-- Awareness entries expire 30 seconds after their last write.
+- Awareness entries expire <!-- const:AWARENESS_TIMEOUT -->30<!-- /const --> seconds after their last write.

@@ -48,6 +48,12 @@ jobs:
       - name: Lint
         run: npm run lint:js
 
+      # The prose against the code: paths, option and filter names,
+      # links and anchors, the docs index, retired names, and the
+      # numbers marked as constants (tests/tools/doc-lint.mjs).
+      - name: Doc-lint
+        run: npm run lint:docs
+
       - name: Typecheck
         run: npm run typecheck
 

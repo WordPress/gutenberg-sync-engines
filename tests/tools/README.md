@@ -14,6 +14,12 @@ a usage block in its header.
   `generate-sync-id-vectors.js`, `generate-de-rtc-descriptor-vectors.mjs`
   and `.php` — the test-vector generators. The intent-log vectors are
   written to two places (Jest and PHPUnit); always update both.
+- `doc-lint.mjs` — checks the prose files against the code
+  (`npm run lint:docs`, run by CI): backticked paths exist, documented
+  option, filter, class and constant names appear in the code, links
+  and anchors resolve, `docs/README.md` lists every page, retired names
+  appear only beside a word like "retired", and numbers marked with a
+  `const:` comment match the source. Its header lists the rules.
 - `check-presence-api.php` — checks the Presence API awareness backend
   against the real plugin instead of the test stand-in.
 - `dump-yjs-room-blocks.php`, `trace-yjs-room-rows.php` — yjs-server

@@ -83,7 +83,7 @@ release, which the release script generates from the commit history.
 
 ### Removed
 
--   The long-polling transport (`http-long-polling`). Server-sent events
+-   The long-polling transport (`http-long-polling`) was removed. Server-sent events
     replace it: the same held request, now a stream with keepalives, up to
     five minutes long, and woken by Redis when available. A site that had
     chosen long polling is moved to server-sent events; the

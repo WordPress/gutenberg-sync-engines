@@ -11,7 +11,7 @@ defaults. Nothing else needs configuring.
   plugin, active before this one. This plugin refuses to activate
   without it.
 - A database user that may create tables. If it cannot, the plugin
-  still works on the slower post-meta storage and shows an admin notice
+  still works on the slower post-meta fallback and shows an admin notice
   with the command to run once the privilege is granted.
 
 ## Install

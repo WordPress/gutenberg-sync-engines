@@ -358,7 +358,7 @@ registered. This plugin registers three:
   merges each proposal with the ported DE-RTC merge core and announces
   each accepted version; genuine conflicts escalate.
 
-(A fourth engine, `yjs-relay` — a dumb relay whose merge happened in each
+(A fourth engine, the retired `yjs-relay` — a relay whose merge happened in each
 client's CRDT — has been removed; historical numbers for it remain below
 as context.)
 

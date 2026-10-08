@@ -620,6 +620,16 @@ they exist so a failure is observable without re-instrumenting:
   under that version, each linked to its pull request, so nothing is
   lost by leaving an entry out (`npm run release -- --dry-run` previews
   that list).
+- **If a change alters a default, an option name, a filter, a
+  transport slug, a REST route, or a row type, update
+  `docs/settings.md` or `docs/protocol.md` in the same commit.** Name
+  the page in the CHANGELOG entry. `npm run lint:docs` runs in CI. It
+  checks that every path, option, filter, class and constant the docs
+  name exists in the code. It also checks links, anchors, and the page
+  list in `docs/README.md`, and that a number wrapped in a `const:`
+  HTML comment (see `docs/settings.md`) matches the code. It cannot
+  tell when a changed default leaves a sentence stale; you must check
+  that.
 - This repo has commit **signing disabled locally**. Commit with `--no-verify`
   (the pre-commit hook is heavy/flaky).
 - Do **not** open PRs / push to shared branches / take other outward-facing
