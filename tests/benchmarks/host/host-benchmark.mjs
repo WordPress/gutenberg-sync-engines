@@ -956,6 +956,18 @@ async function measurePhase(
 		},
 		saveOk: true,
 		contentVerified: true,
+		// The worst delay between when a word was due and when the
+		// browser typed it, for every phase: the plugin-off phase has
+		// no session report, but its editors time their input too.
+		typingLagMaxMs: Math.max(
+			0,
+			...( await readEditors( wins.map( ( win ) => win.page ) ) ).flatMap(
+				( editor ) =>
+					Object.values( editor.sent ?? {} ).map(
+						( sent ) => sent.lagMs
+					)
+			)
+		),
 		session:
 			tag.approach === 'baseline'
 				? null
@@ -2137,7 +2149,16 @@ async function main() {
 					report.engine,
 					roomSize,
 					IDLE_SECONDS > 0,
-					phase.session.delivery
+					phase.session.delivery,
+					baseline.sessions.every(
+						( session ) => undefined !== session.typingLagMaxMs
+					)
+						? Math.max(
+								...baseline.sessions.map(
+									( session ) => session.typingLagMaxMs
+								)
+						  )
+						: null
 				),
 			} );
 			console.log( `result line appended: ${ RECORD_PATH }` );

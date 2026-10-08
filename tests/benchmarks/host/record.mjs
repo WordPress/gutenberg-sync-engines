@@ -125,7 +125,6 @@ export const METRICS = [
 		metric: 'php_peak_memory_mib',
 		unit: 'MiB',
 		kind: 'counted',
-		spans: [ 'editing' ],
 		from: ( s ) => s.server?.peakMemoryMaxMb,
 	},
 	{
@@ -264,13 +263,21 @@ export const DELIVERY_METRICS = [
 /**
  * Builds the result rows for a whole run.
  *
- * @param {Object}      engine   The report's engine entry ({ spans, job }).
- * @param {Object|null} roomSize Room storage at rest ({ rows, bytes }).
- * @param {boolean}     withIdle Whether an idle span was measured.
- * @param {Object|null} delivery The session's delivery measurements.
+ * @param {Object}      engine              The report's engine entry ({ spans, job }).
+ * @param {Object|null} roomSize            Room storage at rest ({ rows, bytes }).
+ * @param {boolean}     withIdle            Whether an idle span was measured.
+ * @param {Object|null} delivery            The session's delivery measurements.
+ * @param {number|null} baselineTypingLagMs Worst typing delay in the
+ *                                          plugin-off phase.
  * @return {Array<Object>} Result rows.
  */
-export function resultsOf( engine, roomSize, withIdle, delivery = null ) {
+export function resultsOf(
+	engine,
+	roomSize,
+	withIdle,
+	delivery = null,
+	baselineTypingLagMs = null
+) {
 	const rows = [ ...spanResults( 'editing', engine.spans.editing ) ];
 	if ( withIdle ) {
 		rows.push( ...spanResults( 'idle', engine.spans.idle ) );
@@ -300,6 +307,13 @@ export function resultsOf( engine, roomSize, withIdle, delivery = null ) {
 			definition.from( delivery )
 		);
 	}
+	pushRow(
+		rows,
+		'editing',
+		'baseline',
+		DELIVERY_METRICS.find( ( d ) => 'typing_lag_max_ms' === d.metric ),
+		baselineTypingLagMs
+	);
 	if ( roomSize ) {
 		pushRow(
 			rows,

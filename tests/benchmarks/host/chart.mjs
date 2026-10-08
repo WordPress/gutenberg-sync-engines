@@ -2,13 +2,16 @@
  * Builds a self-contained chart page from host benchmark result lines.
  * Deliberately simple: one drop-down picks the metric; the chart puts
  * the number of peers along the bottom and the metric's unit up the
- * side, and draws up to seven lines:
+ * side, and draws up to eight lines:
  *
- *   - without the plugin: a flat dotted line. The plugin-off phase is
- *     one person at a time, so it has one value per person, not one per
- *     peer count. It is the median of every plugin-off measurement
- *     (editing, or idle for a metric measured only while idle).
+ *   - without the plugin, while editing (gray dotted) and while idle
+ *     (gray dash-dot). The plugin-off phase is one person at a time, so
+ *     each is one value (the median of every plugin-off measurement),
+ *     drawn flat across every peer count.
  *   - each engine while editing (solid) and while idle (dashed).
+ *
+ * A metric about typing has no idle lines (nobody types while idle),
+ * and edit delivery has no plugin-off line (nobody receives edits).
  *
  * Each point is the median of the repeats. When the results hold more
  * than one value of another variable (post size, pattern, …), the page
@@ -44,14 +47,12 @@ const HELD = [
 // Metrics not listed here (whole-job totals, room size) are left out:
 // they have no editing or idle value to draw.
 export const CHART_METRICS = [
-	[ 'php_cpu_ms_per_person_min', 'PHP CPU time', 'ms per person per minute' ],
-	[ 'php_peak_memory_mib', 'Peak PHP memory', 'MiB per request' ],
 	[
 		'php_worker_share_per_person',
-		'PHP worker time',
-		'share of one worker per person',
+		'PHP worker share',
+		'share of one PHP worker per person',
 	],
-	[ 'requests_per_person_min', 'HTTP requests', 'per person per minute' ],
+	[ 'php_peak_memory_mib', 'Peak PHP memory', 'MiB per request' ],
 	[ 'php_requests_per_person_min', 'PHP requests', 'per person per minute' ],
 	[
 		'payload_kib_per_person_min',
@@ -63,24 +64,16 @@ export const CHART_METRICS = [
 		'Database queries',
 		'per person per minute',
 	],
-	[ 'db_queries_per_php_request', 'Database queries', 'per PHP request' ],
 	[ 'db_fsyncs_per_person_min', 'Database fsyncs', 'per person per minute' ],
 	[
 		'option_writes_per_person_min',
 		'Options-cache invalidations',
 		'per person per minute',
 	],
-	[ 'ws_frames_per_person_min', 'WebSocket frames', 'per person per minute' ],
-	[ 'editor_longest_task_ms', 'Longest editor freeze', 'ms' ],
-	[
-		'editor_long_task_ms_per_person_min',
-		'Editor freeze time',
-		'ms per person per minute',
-	],
+	[ 'typing_lag_max_ms', 'Longest typing delay', 'ms' ],
 	[ 'delivery_p50_ms', 'Edit delivery, median', 'ms' ],
 	[ 'delivery_p95_ms', 'Edit delivery, 95th percentile', 'ms' ],
 	[ 'delivery_max_ms', 'Edit delivery, slowest', 'ms' ],
-	[ 'typing_lag_max_ms', 'Typing delay, worst', 'ms' ],
 ];
 
 /**
@@ -277,12 +270,13 @@ const niceMax = ( v ) => {
 // Lines for one metric: the flat baseline, then engine × phase.
 function linesFor( metric ) {
 	const lines = [];
-	const base =
-		valuesOf( DATA.runs, 'editing|' + metric + '|baseline' ).length
-			? valuesOf( DATA.runs, 'editing|' + metric + '|baseline' )
-			: valuesOf( DATA.runs, 'idle|' + metric + '|baseline' );
-	if ( base.length ) {
-		lines.push( { label: 'Without the plugin', color: 'var(--baseline)', dash: '2 4', flat: median( base ) } );
+	// Without the plugin: measured one person at a time, so one value
+	// per phase, drawn flat across every peer count.
+	for ( const [ phase, label, dash ] of [ [ 'editing', 'editing', '2 4' ], [ 'idle', 'idle', '8 4 2 4' ] ] ) {
+		const base = valuesOf( DATA.runs, phase + '|' + metric + '|baseline' );
+		if ( base.length ) {
+			lines.push( { label: 'Without the plugin, ' + label, color: 'var(--baseline)', dash, flat: median( base ) } );
+		}
 	}
 	const engines = [
 		...ENGINES.filter( ( e ) => DATA.runs.some( ( r ) => r.engine === e ) ),

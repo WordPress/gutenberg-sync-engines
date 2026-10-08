@@ -288,12 +288,31 @@ describe( 'result lines', () => {
 		expect( find( 'db_queries_per_php_request' ).value ).toBe( 20 );
 	} );
 
-	it( 'reports peak memory for editing only', () => {
+	it( 'reports peak memory while idle too', () => {
 		expect(
 			spanResults( 'idle', span ).some(
 				( r ) => r.metric === 'php_peak_memory_mib'
 			)
-		).toBe( false );
+		).toBe( true );
+	} );
+
+	it( 'records the plugin-off typing delay beside the sync one', () => {
+		const rows = resultsOf(
+			{
+				spans: { editing: span, idle: span },
+				job: { base: {}, sync: {} },
+			},
+			null,
+			false,
+			{ scheduleLagMs: { max: 300 } },
+			40
+		).filter( ( r ) => r.metric === 'typing_lag_max_ms' );
+		expect(
+			rows.map( ( r ) => [ r.phase, r.side, r.value ] ).sort()
+		).toEqual( [
+			[ 'editing', 'baseline', 40 ],
+			[ 'editing', 'sync', 300 ],
+		] );
 	} );
 
 	it( 'adds whole-job and room rows', () => {
