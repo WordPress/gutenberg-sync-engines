@@ -103,7 +103,7 @@ const BANNED = [
 	/\bTODO-[0-9]/,
 	/post[- ]meta storage/,
 ];
-const AGENTS_MAX_LINES = 700;
+const AGENTS_MAX_LINES = 500;
 
 const problems = [];
 function report( file, line, message ) {
