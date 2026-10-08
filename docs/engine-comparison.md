@@ -10,7 +10,11 @@ interleave, and you accept that some clashes get resolved silently with
 nobody told.
 
 The engines are judged against the seven principles in
-[principles.md](principles.md). This guide carries no measured numbers,
+[principles.md](principles.md). The engine is chosen on Settings →
+Collaboration, where each choice is explained; under de-rtc the "commit
+cadence" there (<!-- const:DE_RTC_COMMIT_INTERVAL_DEFAULT -->10<!-- /const --> seconds
+by default) decides how soon others see an edit. This guide carries no
+measured numbers,
 because they go stale and mislead: run `npm run bench -- --suite=engines`
 against a running tests env for the whole comparison on your own
 hardware. It fails loudly if any engine loses work, and

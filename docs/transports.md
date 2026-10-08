@@ -14,11 +14,15 @@ for measured latency and idle traffic on your hardware.
 | `sse-daemon` | within about a second | one connection in the sync daemon, no PHP worker | the daemon |
 | `websocket` | tens of milliseconds | a few frames per heartbeat, plus the daemon | the daemon, and a proxy that passes the WebSocket upgrade |
 
-A post admits five editor tabs by default, including the joining tab,
-checked on a tab's first connection
-(`sync.pollingProvider.maxClientsPerRoom`). Every transport falls back
-to polling when its connection fails, and comes back when it can. The
-settings and their overrides are in [settings.md](settings.md).
+A post admits <!-- const:DEFAULT_CLIENT_LIMIT_PER_ROOM -->5<!-- /const --> editor
+tabs by default, including the joining tab, checked on a tab's first
+connection (`sync.pollingProvider.maxClientsPerRoom`). Every transport
+falls back to polling when its connection fails, and comes back when it
+can. Every setting is explained on the Settings → Collaboration screen
+itself; the options are plain WordPress options, so WP-CLI and the REST
+settings endpoint can set them. `WP_COLLABORATION_TRANSPORT` (constant
+or environment variable) takes priority over the stored transport
+choice, and the `wp_sync_websocket_url` filter over the daemon address.
 
 ## Polling and the advisory channel
 
@@ -43,7 +47,8 @@ The channel decides how often a tab polls:
    newest row, so a script or WP-CLI saving the post still wakes the
    tab.
 2. **When a peer cannot be reached, the tab polls on a timer**: the
-   "Polling interval" setting, 5 seconds by default.
+   "Polling interval" setting, <!-- const:POLLING_INTERVAL_DEFAULT -->5<!-- /const --> seconds
+   by default.
 3. **When every peer can be reached, the tab polls only when needed**:
    when it has edits to send, when a peer says it stored new rows, or
    when the heartbeat reports rows it has not seen. No timer.
@@ -55,7 +60,7 @@ The channel decides how often a tab polls:
    are down.
 
 If the channel fails (it never connects, a peer drops off it, or more
-than eight tabs are on one post), the tab polls on its timer as if
+than <!-- const:DEFAULT_MAX_PEERS -->8<!-- /const --> tabs are on one post), the tab polls on its timer as if
 there were no channel. Nothing is lost. A hidden tab polls every 25
 seconds. The relay a host can run in place of the daemon is in
 `examples/advisory-relay/README.md`.
@@ -184,12 +189,13 @@ does not hold yet shows nothing until the block arrives.
   `GET /health`. Keep it out of the web worker pool. Start it with a
   process manager that restarts it, put the web server in front of it
   for TLS and pass one path to its local port (unbuffered, reads longer
-  than its 45-second idle timeout, WebSocket upgrade headers passed).
+  than its <!-- const:IDLE_TIMEOUT_S -->45<!-- /const -->-second idle timeout, WebSocket upgrade headers passed).
   It needs only the database (and the object cache, if any): web
   requests and the daemon share the room tables and never talk to each
   other. Restart it now and then; tabs reconnect from the last row they
-  received. Run one daemon per site. Limits: 512 connections, 20 per IP,
-  200 messages per socket per five seconds. A host that cannot run its
+  received. Run one daemon per site. Limits: <!-- const:DEFAULT_MAX_CONNECTIONS -->512<!-- /const --> connections,
+  <!-- const:DEFAULT_MAX_CONNECTIONS_PER_IP -->20<!-- /const --> per IP,
+  <!-- const:MESSAGE_RATE_LIMIT -->200<!-- /const --> messages per socket per five seconds. A host that cannot run its
   own processes should use polling or the web-tier stream.
 
 Upgrading, deactivating and uninstalling the plugin are described in

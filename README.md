@@ -37,8 +37,8 @@ environments and both Playground blueprints install it.
    set aside.
 
 The defaults (the intent-log engine, polling with a WebRTC advisory
-channel) need nothing from the host. Every option is in
-[docs/settings.md](docs/settings.md). Deactivating the plugin turns
+channel) need nothing from the host. Every option is explained on the
+settings screen itself. Deactivating the plugin turns
 collaboration off and keeps the storage tables; deleting it drops them.
 
 ## What it provides

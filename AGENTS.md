@@ -241,7 +241,8 @@ Test traps:
   with the issue linked. Not bug fixes, tests, tooling, refactors or
   docs; the release script lists every merged commit anyway.
 - **A change to a default, an option name, a filter, a transport slug,
-  a REST route or a row type updates `docs/settings.md` or
+  a REST route or a row type updates the settings screen's text
+  (`includes/admin/class-gutenberg-sync-engines-settings.php`) or
   `docs/protocol.md` in the same commit.** `npm run lint:docs` (CI)
   checks that every path, option, filter, class and constant the docs
   name exists in the code, that links and anchors resolve, that
