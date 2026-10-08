@@ -19,7 +19,9 @@ shared editing session.
   rules. Use a model that is skilled at summarizing.
 - If a word is defined in `docs/glossary.md`, it is one of our invented
   words and belongs in code and design pages, not in an issue's title,
-  problem, or example (`CONTRIBUTING.md` has the rule).
+  problem, or example (`CONTRIBUTING.md` has the rule). Code
+  identifiers in backticks are always fine, and this file and the
+  docs may use a glossary word once it is explained nearby.
 
 ## Repo layout
 
@@ -155,7 +157,13 @@ Test traps:
   - `sse-only` under `test:e2e:sse`; it refuses to run without the
     tests Redis.
   - `sse-daemon-only` under `test:e2e:sse-daemon`.
-  - `sse-framing` under both SSE suites.
+  - `sse-framing` under both SSE suites: how a tab behaves around an
+    open stream (sends beside it, hidden tabs, the settle second).
+  - The cadence and stream rules also have Jest coverage in
+    `tests/js/providers/http-polling/polling-manager-cadence.test.ts`
+    and `tests/js/providers/sse/sse-exchange.test.js`; iterate there
+    first. Playwright cannot hide a tab, so the specs override
+    `document.visibilityState` in the page and fire `visibilitychange`.
   - `@y/websocket-server` stays pinned to 0.1.1 (0.1.5 crashes with a
     13.x client); the old y-websocket fixture is used by no suite.
 - `npm run rtc:ws` starts the real websocket transport for manual
@@ -199,12 +207,16 @@ before a big change. A durable lesson from an issue goes here.
 
 ### Rules that must not be undone
 
-- **De-rtc's sync channel must never carry the document.** It used to,
+- **De-rtc's notices must never carry the document.** They used to,
   and long sessions ran the server out of memory as messages grew with
   the post. A notice now carries a version number and a content hash,
   and a client that already matches downloads nothing. Never put a
   `content` entry into de-rtc's list of synced properties: it silently
-  re-sends the whole document with every notice.
+  re-sends the whole document with every notice
+  (`tests/js/engines/de-rtc/record.test.ts` pins that the record never
+  stores content). The one place whole content still travels on the
+  transport is a `proposal` row for collections and unsupported post
+  types; posts and pages commit through the autosave endpoint.
 - **A de-rtc tab waits for the merged version before it sends its next
   change.** When the server merges other people's work into a tab's
   change, a newer version exists that the tab does not hold yet
@@ -295,9 +307,9 @@ before a big change. A durable lesson from an issue goes here.
   (`src/providers/advisory/announce.ts`) sends it beside the stream.
   Under the Heartbeat channel an advisory channel must be selected. The
   e2e spec turns the advisory channel off for its duration.
-- **A page whose post already has five tabs is refused** ("Too many
-  editors connected"), checked once on the page's first connection.
-  Give extra test tabs their own post, or raise
+- **A post admits five editor tabs, so the sixth is refused** ("Too
+  many editors connected"), checked once on the page's first
+  connection. Give extra test tabs their own post, or raise
   `sync.pollingProvider.maxClientsPerRoom`.
 - **The daemon authenticates a stream once per connection.** A stream's
   POST body can arrive across several reads and the one-time token is
@@ -367,10 +379,12 @@ before a big change. A durable lesson from an issue goes here.
   checks that every path, option, filter, class and constant the docs
   name exists in the code, that links and anchors resolve, that
   `docs/README.md` lists every page, and that a number wrapped in a
-  `const:` HTML comment matches the code. It cannot tell when a changed
-  default leaves a sentence stale.
-- Commit signing is disabled locally; commit with `--no-verify` (the
-  pre-commit hook is heavy).
+  `const:` HTML comment matches the code. It checks the docs against
+  the code, not the other way round: it cannot tell when a changed
+  default leaves a sentence stale, or when a new filter is documented
+  nowhere.
+- Commit with `--no-verify` (the pre-commit hook is heavy). Signing
+  follows the checkout's git config; do not turn it off.
 - Do **not** open PRs, push to shared branches, or take other
   outward-facing actions unless the user names that specific action.
 - **Releasing is human-only.** Never run `npm run release`, trigger a

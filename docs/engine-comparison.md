@@ -11,7 +11,8 @@ nobody told.
 
 The engines are judged against the seven principles in
 [principles.md](principles.md). The engine is chosen on Settings →
-Collaboration, where each choice is explained; under de-rtc the "commit
+Collaboration (the `wp_sync_engine` option), where each choice is
+explained; under de-rtc the "commit
 cadence" there (<!-- const:DE_RTC_COMMIT_INTERVAL_DEFAULT -->10<!-- /const --> seconds
 by default) decides how soon others see an edit. This guide carries no
 measured numbers,

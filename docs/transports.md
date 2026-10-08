@@ -19,10 +19,13 @@ tabs by default, including the joining tab, checked on a tab's first
 connection (`sync.pollingProvider.maxClientsPerRoom`). Every transport
 falls back to polling when its connection fails, and comes back when it
 can. Every setting is explained on the Settings → Collaboration screen
-itself; the options are plain WordPress options, so WP-CLI and the REST
-settings endpoint can set them. `WP_COLLABORATION_TRANSPORT` (constant
-or environment variable) takes priority over the stored transport
-choice, and the `wp_sync_websocket_url` filter over the daemon address.
+itself. The options are plain WordPress options, so WP-CLI and the REST
+settings endpoint can set them: the engine is `wp_sync_engine`, the
+transport `gutenberg_sync_engines_transport`, the advisory channel
+`gutenberg_sync_engines_advisory_channel`, and the rest start with
+`gutenberg_sync_engines_`. `WP_COLLABORATION_TRANSPORT` (constant or
+environment variable) takes priority over the stored transport choice,
+and the `wp_sync_websocket_url` filter over the daemon address.
 
 ## Polling and the advisory channel
 
@@ -42,8 +45,9 @@ The channel decides how often a tab polls:
 1. **When you are alone, the tab stops polling**, except for 30
    seconds after the page loads or regains focus. Its edits stay in the
    browser until someone else arrives, until a save (the edits go
-   through the room first), or until the tab is hidden. De-rtc keeps
-   sending its commits anyway. The heartbeat's answer names the room's
+   through the room first), or until the tab is hidden. A reload loses
+   them, which is what the editor's own unsaved-changes warning says.
+   De-rtc keeps sending its commits anyway. The heartbeat's answer names the room's
    newest row, so a script or WP-CLI saving the post still wakes the
    tab.
 2. **When a peer cannot be reached, the tab polls on a timer**: the

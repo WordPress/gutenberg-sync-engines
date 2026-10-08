@@ -67,7 +67,10 @@ is at most 1 MB. Shapes: `src/providers/http-polling/types.ts`.
 Other statuses: 403 `rest_cannot_edit`, 413 when a body or a room is
 too large (yjs-server also for a document over its size limits), 503
 when the intent-log room lock or a de-rtc version claim could not be
-taken in time, which the client retries.
+taken in time, which the client retries. A different 409 comes from
+the ordinary post save route: under de-rtc a save that names a base
+version and genuinely conflicts is refused with one, and the conflict
+is set aside for review.
 
 Over the socket the same envelope travels as `{ "type": "sync", "rooms": [ … ] }`
 frames both ways, plus `type: "advisory"` frames on the advisory link
