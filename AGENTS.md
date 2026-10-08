@@ -393,8 +393,19 @@ before a big change. A durable lesson from an issue goes here.
 
 ## Issues and the loop
 
-Open work lives in GitHub Issues (`gh issue list --label "agent:ready"`);
-`CONTRIBUTING.md` has the labels and the filing rules. The loop is
-`/loop /shape-issue` then `/loop /solve-issue` (either takes an issue
-number). Notes about what one cycle did go on the issue as a comment;
+Open work lives in GitHub Issues (`gh issue list --label "agent:ready"`).
+A new issue needs two things: what happened, and what you expected. It
+arrives labelled `agent:needs shaping`. An agent investigates and
+rewrites it into the shape in `.github/ISSUE_TEMPLATE/shaped-issue.md`
+(what happens now, an example with numbered steps, what should happen,
+how we will know it is done, notes), then moves the label to
+`agent:ready`. An `agent:in progress` label means someone claimed it
+(add the label and assign yourself in one step, and release it when
+you stop); `agent:parked` means it cannot move and a comment says
+what it needs.
+
+Notes about what one cycle did go on the issue as a comment;
 a durable lesson goes in the Traps section of this file.
+
+One issue is one thing. Do not hard-wrap issue bodies: GitHub shows
+every newline, so one paragraph is one line.
