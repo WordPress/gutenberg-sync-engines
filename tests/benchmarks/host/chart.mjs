@@ -321,7 +321,8 @@ function render() {
 	const W = Math.max( 320, fig.clientWidth || 900 );
 	const H = Math.round( Math.min( 400, Math.max( 260, W * 0.45 ) ) );
 	const M = { l: 56, r: 16, t: 24, b: 44 };
-	const top = niceMax( Math.max( ...ys ) );
+	// A round step between ticks (1, 2, 2.5, or 5 × a power of 10), four ticks high.
+	const top = niceMax( Math.max( ...ys ) / 4 ) * 4;
 	const decimals = Math.max( 0, -Math.floor( Math.log10( top / 4 ) ) );
 	const tick = ( v ) => v.toFixed( Math.min( decimals, 3 ) );
 	const y = ( v ) => M.t + ( H - M.t - M.b ) * ( 1 - v / top );
