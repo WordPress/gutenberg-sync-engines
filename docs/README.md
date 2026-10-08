@@ -5,18 +5,28 @@ is listed here.
 
 ## Use it
 
+- **Install it and see two people editing one post** →
+  [getting-started.md](getting-started.md).
 - **Pick an engine or transport** →
   [engine-comparison.md](engine-comparison.md) — what each engine is,
   how they score against the principles, feature parity, resource
   shapes, and each engine's known gaps.
+- **Look up a setting** → [settings.md](settings.md) — every option on
+  Settings → Collaboration, with its default, range, and effect.
 
 ## Run it
 
+- **Operate it on a host** → [operations.md](operations.md) — upgrade,
+  deactivate, uninstall, switch engines, proxies, Redis, the sync
+  daemon, what to monitor.
 - **Compare transports** → [transports.md](transports.md) — polling vs
   server-sent events vs websocket, and the operational notes for each.
 - **Serve the event stream from the sync daemon** →
   [sse-daemon.md](sse-daemon.md) — how the `sse-daemon` transport
   works and how it differs from `sse`.
+- **Understand the security model** → [security.md](security.md) — who
+  may join a room, what each engine checks, the credentials and their
+  lifetimes, and what the daemon, a relay, and Redis are trusted with.
 
 ## Understand it
 
@@ -57,6 +67,9 @@ is listed here.
 
 ## Change it
 
+- **Add an engine or a transport** → [extending.md](extending.md) —
+  the server interface, the client interface, the registration
+  filters, and the hooks and filters the plugin offers.
 - **Touch a vendored library** →
   [vendored-libraries.md](vendored-libraries.md) — y-php, automerge-php,
   the de-rtc merge core, and the frozen intent-log core: where each
