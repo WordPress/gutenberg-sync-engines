@@ -16,138 +16,46 @@ Operational guide for working in this repo. Read this first.
 
 ## What this is
 
-`gutenberg-sync-engines` is a WordPress plugin that supplies the pluggable
-**engines** (how concurrent edits merge) and **transports** (how updates move)
-for Gutenberg's real-time collaboration (RTC) **framework**. The framework
-itself lives in Gutenberg core (`@wordpress/sync` client + the
-`lib/experimental/collaboration/` server): it is a generic, engine-neutral
-substrate — a `createSyncManager` shell, two registries (engines + transports)
-with client/server negotiation, the `SyncEngine` SPI, and a shared `Y` export
-(`wp.sync.Y`). **Without this plugin active, RTC is disabled** — the framework
-registers no engine or transport, so a session finds nothing to negotiate and
-the editor falls back to the classic exclusive post lock.
+`gutenberg-sync-engines` is a WordPress plugin that supplies the
+**engines** (how edits from several people merge) and the **transports**
+(how updates move) for Gutenberg's real-time collaboration framework.
+The framework lives in Gutenberg: its client is the `@wordpress/sync`
+package and its server is `lib/experimental/collaboration/`. It knows no
+particular engine. It provides a sync manager (`createSyncManager`), a
+registry of engines and a registry of transports that the client and
+server agree on at startup, the `SyncEngine` interface an engine
+implements, and the Yjs library as `wp.sync.Y`. Without this plugin
+active, the framework has nothing to negotiate and the editor falls back
+to the classic one-person post lock. The split is complete: the
+framework ships neither engines nor transports.
 
 This plugin provides:
 
-- **Engines:** `intent-log` (server-authoritative log of typed intents; merges
-  by transform, sets genuine conflicts aside for review), `yjs-server`
-  (server-authoritative CRDT: the vendored y-php library merges every update
-  into a canonical room document server-side and compacts by itself —
-  lock-free ingest; the editor saves its own serialized blocks, and the
-  server-side `materialize()` serves only the rooms CLI, benchmarks, and
-  tests; it inherited the retired naive-relay yjs-relay engine's client
-  CRDT machinery and wire format), and
-  `de-rtc` (Distributed Editing's save-centric model on the room protocol:
-  clients propose whole content against a named base version; the server
-  three-way-merges every proposal with the merge core ported verbatim from
-  the wordpress-develop `add/distributed-editing` branch and announces
-  each accepted version; genuine conflicts escalate instead of silently
-  merging).
-  The framework's conventional default engine
-  (`WP_Sync_Engine_Registry::DEFAULT_ENGINE`) is **intent-log** — that's
-  what runs when the `wp_sync_engine` option is unset. Registration order
-  only matters when a CONFIGURED slug isn't registered (misconfiguration
-  degrades to the first registered engine: yjs-server).
-- **Transports:** `http-polling` (default), `sse`, `sse-daemon`,
-  `websocket`. `sse` and `sse-daemon` are two framings of the same
-  receive stream, and differ only in who
-  holds it: the web tier (a PHP worker per stream) or the sync daemon
-  (its own process, on the port the websocket transport already uses).
-  A stream request names the daemon instead of a REST route and
-  authenticates with a one-time token in an `Authorization` header,
-  minted per stream open at `/wp-sync/v1/ws-token`.
-  SSE uses normal PHP requests: one held worker per stream, woken by
-  Redis Pub/Sub notices when `WP_SYNC_SSE_REDIS_URL` is set or a Redis
-  object cache is detected (`WP_REDIS_*` constants), and otherwise by
-  half-second checks of a per-room VERSION COUNTER
-  (`WP_Sync_Table_Storage::get_room_versions`, bumped atomically on every
-  storage write; in the object cache when persistent, else a `_version`
-  room-meta row; snapshot taken BEFORE each read; awareness held by the
-  Presence API bumps no counter, so each check then also reads the
-  stream's rooms' awareness and compares it with what was last sent —
-  `awareness_changed()`; the Presence API backend fires
-  `gutenberg_sync_engines_room_changed` itself, so Redis notices still
-  go out) through
-  `WP_Sync_Storage_Change_Waiter`, the retired long-polling transport's
-  wait; a storage without counters is read the long way. Bounded
-  reconnects from durable cursors. A stored `http-long-polling` choice reads as
-  `sse`. wp-env lifecycle hooks start and remove Redis for each checkout
-  and config on its own network. Setup, the proxy/buffering caveat, and
-  failure behavior: `docs/transports.md`.
-  Short polling is the BASE transport; beside it every editor tab opens an
-  **advisory channel** (`src/providers/advisory/`) that carries presence
-  and "go and poll" notices, never content. It runs over one of two
-  LINKS, chosen on the settings screen: `webrtc-advisory` (default; a
-  WebRTC mesh signaled over the WordPress heartbeat by
-  `includes/class-gutenberg-sync-engines-advisory-presence.php`) or
-  `websocket-advisory` (one socket per tab to the websocket transport's
-  daemon, which relays presence and notices in memory —
-  `handle_advisory_message` in the daemon — and never carries rows). It
-  decides the polling cadence: quiet when alone, timer cadence when a
-  peer is unreachable, on demand (with the heartbeat carrying the room's
-  head cursor) when every peer is reachable. SSE turns it off while its
-  stream is up (its handshake signals ride the heartbeat, never a poll),
-  and a solo SSE tab goes quiet like short polling, closing its stream.
-  A HIDDEN tab holds its stream or drops it depending on who holds it.
-  A stream the web tier serves keeps a PHP worker up for as long as the
-  tab lives, so `sseStreaming()` is false
-  while `document.visibilityState` is hidden, and `handleVisibilityChange`
-  drops the stream on hide through the deliberate-abort path
-  (`abortParkedStream()` then `sseExchange.close()`, as `handlePageHide`
-  does, so no failure is logged or backed off); the tab then receives
-  over ordinary requests under short polling's own rules (the background
-  cadence, `POLLING_INTERVAL_BACKGROUND_TAB_IN_MS`, with the channel
-  left off) and polls at once on return, which reopens the stream.
-  A stream the sync daemon serves holds no worker, so the `sse-daemon`
-  transport calls `setSseStreamHoldsWorker( false )` and a hidden tab
-  keeps its stream, staying live to rows it cannot see yet.
-  A tab that TYPES keeps its stream: edits (and awareness changes,
-  checked once a second) go out on the updates request BESIDE the
-  stream, marked `rows_received_separately: true`, which the server answers with the
-  verdicts and the room's head cursor but no stored rows
-  (`READ_FROM_HEAD` in `process_room_request`). The stream is the only
-  path that delivers stored rows and moves a room's cursor; the manager
-  holds such an answer (`heldTails`) until the stream has carried the
-  cursor to that head, then applies it rows-first, so no engine had to
-  change (issue #106). One send at a time (`updatesInFlight`): a stream
-  receive never takes updates, and a poll takes none while a send is in
-  flight.
-  For the first second after a room registers the tab receives over
-  ordinary requests (`SSE_SETTLE_MS`), so the rooms registering one by
-  one at load open ONE stream, not one per room. Rules and failure
-  cases: `docs/advisory-channel.md`.
-  The websocket link can end at a host's OWN relay instead of the
-  daemon: with a `WP_SYNC_WEBSOCKET_ACCESS_TOKEN_SECRET` configured
-  (constant, env, or the `wp_sync_websocket_access_token_secret` filter),
-  the token route mints a signed two-minute access token (JWT HS256, claims
-  `user_id`/`blog_id`/`iss`/`rooms`/`iat`/`exp`, `WP_WebSocket_Access_Token`)
-  that a relay verifies with the secret alone; the daemon accepts
-  access tokens too. `iss` is the network site URL without its scheme;
-  a relay shared by several installs (one secret) keys rosters by
-  `iss`, `blog_id`, and room (issue #126). The daemon does not check
-  `iss`.
-  The relay's address goes in the "WebSocket advisory server" setting (`gutenberg_sync_engines_advisory_websocket_url`;
-  empty = the transport server, `gutenberg_sync_engines_websocket_url`,
-  itself empty = the HOST/PORT constants; the `wp_sync_websocket_url`
-  filter wins for the transport). The screen shows ONE "Transport"
-  radio list of (transport, advisory) pairs — the form field
-  `gutenberg_sync_engines_delivery` is never stored; its sanitize
-  callback writes the two real options, which WP-CLI, the fuzzer, and
-  the e2e specs keep setting directly. The polling interval defaults
-  to 5 s (0 means the default); e2e global setup pins the tests site
-  to 1 s so the suite's timing is unchanged. The
-  DEV wp-env config defines a development secret
-  (`wp-env-development-secret-not-for-production`), so the dev daemon
-  and a local relay run in access-token mode out of the box; the TESTS
-  config does not, so the daemon lane keeps certifying the cookie path
-  and only the relay spec (through its fixture plugin) uses access
-  tokens. `examples/advisory-relay/relay.mjs` is the reference
-  relay (Node + `ws`); the access token and frame formats are in the
-  advisory-channel doc's "Bring your own relay" section.
-  The same presence lane decides a per-post room's LIFETIME under the
-  "Unsaved changes" setting (default: an empty room is reset to the
-  saved post; the room's generation token tells clients to start over).
-  Reasoning and the switch: `docs/room-lifetime.md`.
+- **Three engines:** `intent-log` (the default when the `wp_sync_engine`
+  option is unset; the server keeps a log of typed edits and sets
+  genuine conflicts aside for review), `yjs-server` (the server merges
+  Yjs updates with the vendored y-php library and has no conflict review),
+  and `de-rtc` (Distributed Editing: clients send the whole post plus
+  the version they started from, and the server merges it with the
+  other changes). A
+  configured engine that is not registered falls back to the first
+  registered one, yjs-server. The decision guide and each engine's
+  known gaps: `docs/engine-comparison.md`.
+- **Four transports:** `http-polling` (the default), `sse`, `sse-daemon`,
+  and `websocket`. Beside polling, every editor tab opens an **advisory
+  channel** to the other tabs on its post (`src/providers/advisory/`,
+  over WebRTC by default or a WebSocket to the daemon or a host's own
+  relay) that carries presence and "go and poll" notices, never content,
+  and decides the polling cadence. Behavior: `docs/transports.md` and
+  `docs/advisory-channel.md`; the room envelope and routes:
+  `docs/protocol.md`; what a host needs: `docs/operations.md`; the
+  credentials: `docs/security.md`.
+- **Settings:** one "Transport" radio list of (transport, advisory
+  channel) pairs plus the engine, the server addresses, the polling
+  interval (5 s default), the de-rtc commit cadence (10 s), the
+  awareness interval, and "Unsaved changes" (default: a room nobody is
+  in is reset to the saved post; `docs/room-lifetime.md`). Every option,
+  default and override: `docs/settings.md`.
 - **Storage:** rooms live in two plugin-owned tables, `{$prefix}sync_updates`
   (the update log; the row id is the cursor) and `{$prefix}sync_room_meta`
   (lineage, presence, engine bookkeeping), through `WP_Sync_Table_Storage`,
@@ -156,153 +64,101 @@ This plugin provides:
   and the lifecycle commands: `docs/storage.md`.
 - **Awareness:** who is in a room, read and written only through
   `WP_Sync_Awareness`; held in the required Presence API's `wp_presence`
-  table when it is recording, else with the room's other data. `docs/storage.md`
-  (Presence).
+  table when it is recording, else with the room's other data.
+  `docs/storage.md` (Presence).
 
-It registers through the framework's extension points: PHP `wp_sync_engines` /
-`wp_sync_transports` filters; JS `registerSyncEngine` / `registerSyncTransport`
-(via `@wordpress/sync`'s unlockable private APIs). The active engine/transport
-are chosen on the **Settings → Collaboration** screen (`wp_sync_engine` option +
-the `WP_COLLABORATION_TRANSPORT` config value).
-
-The framework/plugin split is complete: the framework ships **neither** engines
-**nor** transports; both come solely from here.
+It registers through the framework's extension points: the PHP
+`wp_sync_engines` and `wp_sync_transports` filters, and the JavaScript
+`registerSyncEngine` and `registerSyncTransport` functions, unlocked
+from `@wordpress/sync`'s private APIs. The engine and transport are
+chosen on **Settings → Collaboration** (the `wp_sync_engine` option and
+the `WP_COLLABORATION_TRANSPORT` config value). How to add one:
+`docs/extending.md`.
 
 ## Repo layout
 
-- `gutenberg-sync-engines.php` — plugin entry.
-- `includes/` — server PHP: `engines/{intent-log,yjs-server,de-rtc}/`
-  (one folder per engine; none uses another's classes), `shared/` (code
-  the base provides to more than one engine: `WP_Sync_Block_Identity`,
-  the genesis block-id scheme; the editor-side block-id stamper
-  `sync-id.js`; the genesis property seed `WP_Sync_Post_Genesis_Props`),
-  `transports/{sse/,websocket/}` plus the polling server, `admin/` (the
-  Collaboration settings screen), `storage/` (the room tables: schema,
-  storage, and the `wp collaboration storage` CLI), `diagnostics/`
-  (session capture, the request log, the rooms CLI; dev-only), and
-  `lib/` (the vendored libraries and their loaders).
-  - `engines/de-rtc/merge-core.php` — the DE-RTC merge core, ported
-    verbatim and frozen. `docs/vendored-libraries.md`.
-  - `lib/y-php/` — vendored y-php (two local deltas, preserve both when
-    re-vendoring). `lib/automerge-php/` — vendored automerge-php (the
-    shipping de-rtc path never calls it). Both frozen, excluded from
-    phpcs, each with its own conformance suite in CI. Provenance,
-    deltas, commands, and the PCRE2 trap: `docs/vendored-libraries.md`.
-- `src/` — client JS/TS (webpack entry `src/index.ts` → `build/sync-engines.js`,
-  externalizes `@wordpress/sync`→`wp.sync` and `yjs`→`wp.sync.Y`):
-  - `engines/intent-log/` — the frozen intent-log core, kept identical
-    to its PHP twin and the JSON vectors (two copies, Jest and PHPUnit,
-    always update both). Plain JavaScript typed through JSDoc; excluded
-    from prettier. Its Jest harness, simulator, and the client-only
-    `client.js`: `docs/vendored-libraries.md`.
-  - `engines/yjs-server/` — the yjs-server engine, WITH its Yjs client
-    modules (CRDT doc schema, snapshot helpers, `undo.ts`, vendored
-    `y-utilities/` — the latter ignored by eslint), inherited from the
-    retired yjs-relay engine. No other engine uses Yjs: de-rtc keeps a
-    plain record (`engines/de-rtc/record.ts`), intent-log its own
-    document.
-  - `shared/` — client code the base provides to more than one engine
-    (no engine folder imports another engine's folder):
-    `shared/awareness-sync.ts` — presence bridging used by all three
-    engines.
-  - `providers/{http-polling,sse,sse-daemon,websocket}/` — transports
-    (sse and sse-daemon reuse the polling manager, swapping only its
-    receive half for the stream).
-  - `awareness/` — SLOW AWARENESS (`docs/awareness-high-latency.md`),
-    on when the "Awareness interval" setting is above 0: each tab
-    publishes the block its selection is in (`metadata.syncId`, else the
-    editor clientId, or null) once per interval, over the sync
-    transport's awareness state (field `gseBlock`) or WordPress
-    Heartbeat (`channels/`), and peers draw Gutenberg's block outline and
-    avatar badge on that block (`ui/`, through the public
-    `editor.BlockListBlock` filter plus a badge layer drawn into the
-    canvas document). `registry.ts` installs the field's equality check
-    on EVERY awareness instance the engines create, in every mode: a
-    peer can carry the field at any time and core-data throws on an
-    unknown field. Jest: `tests/js/awareness/`.
-  - `entity-sync/` — registers the default entity sync adapter after engines
-    and transports. It wraps the vendored core-data bridge and flushes held
-    HTTP updates through `beforeSave`. There is no opt-in bundle. Upstream
-    commit and retained framework changes: `docs/entity-sync-adapter.md`.
-  - `framework.ts` — unlocks `@wordpress/sync` private APIs once and re-exports
-    the framework runtime the adapters use.
-- `gutenberg/` — a **pinned, squashed Git subtree of Gutenberg** (source only;
-  see below). The BUNDLED runtime framework: the plugin entry loads
-  `gutenberg/gutenberg.php` itself whenever no standalone Gutenberg is
-  active (wp-env no longer mounts it as a separate plugin).
-- `tests/` — ALL tests, fixtures, and test tooling: `tests/phpunit/` (PHPUnit,
-  boots via `tests/bootstrap.php`), `tests/js/` (Jest unit tests + setup files,
-  mirroring `src/`; `tests/js/engines/intent-log/` is the frozen core's
-  harness), `tests/e2e/` (Playwright specs + config; `specs/http-only/` and
-  `specs/websocket-only/` are the transport-specific suites relocated from the
-  framework, `plugins/` holds the test WebSocket provider fixture plugin,
-  `bin/` the y-websocket sync-server daemon + the `rtc:ws`/`rtc:http` dev
-  switcher for the real websocket transport; see Testing),
-  `tests/benchmarks/` (the BENCHMARKS behind one command, `npm run
-  bench` — by default the HOST COST REPORT in `tests/benchmarks/host/`,
-  what the plugin adds to a server vs the same site with the plugin
-  deactivated; `--suite=engines` is the engine-decision matrix (`wp
-  eval-file tests/benchmarks/benchmark.php` per run) and
-  `--suite=transport` the browser-driven transport-experience benchmark
-  in `tests/benchmarks/transport/`),
-  `tests/debugging/` (the debugging/analysis TOOLS, deliberately NOT
-  behind `npm run bench` — run directly: the N-window soak
-  (`tests/debugging/soak-transport.mjs`) and the
-  capture→sanitize→replay session tools in `tests/debugging/replay/` —
-  community-harness fixture format; see `tests/debugging/README.md`),
-  `tests/fuzzer/` (the seeded browser fuzzer swept across every
-  engine × transport combo — `npm run fuzz`; see its README for strategy,
-  replay, and triage), and
-  `tests/tools/` (Node CLI scripts: vector generators, the simulator sweep,
-  the manual two-tab observer). The frozen intent-log vectors exist as TWO
-  deliberate copies — `tests/js/engines/intent-log/test-vectors/` (replayed by
-  Jest) and `tests/phpunit/test-vectors/` (replayed by PHPUnit) — kept
-  byte-identical by `tests/js/engines/intent-log/vector-parity.test.js`;
-  regenerate with the `tests/tools/` scripts and always update both.
+Paths only; what each piece does is in the docs it points at.
+
+- `gutenberg-sync-engines.php` — plugin entry (activation creates the
+  tables and turns the RTC experiment on; loads the bundled Gutenberg).
+- `includes/` — server PHP.
+  - `engines/{intent-log,yjs-server,de-rtc}/` — one folder per engine;
+    none uses another's classes. `engines/de-rtc/merge-core.php` is the
+    frozen merge core (`docs/vendored-libraries.md`).
+  - `shared/` — code more than one engine uses: `WP_Sync_Block_Identity`
+    (the block-id scheme for a post's first load), the editor-side
+    block-id stamper `sync-id.js`, and `WP_Sync_Post_Genesis_Props` (a
+    post's starting field values).
+  - `transports/` — the polling server, `sse/`, and `websocket/` (the
+    daemon, its CLI command, the token route, the access token).
+  - `admin/` — the Settings → Collaboration screen (`docs/settings.md`).
+  - `storage/` — the room tables: schema, storage, and the
+    `wp collaboration storage` CLI (`docs/storage.md`).
+  - `diagnostics/` — session capture, the request log, the rooms CLI;
+    loaded on local/development sites only (see Diagnostics).
+  - `lib/` — vendored y-php and automerge-php with their loaders
+    (`docs/vendored-libraries.md`).
+  - `class-wp-sync-awareness.php` and the `*-backend.php` interfaces —
+    the replaceable presence, lock, and atomic-update backends.
+- `src/` — client TypeScript; webpack entry `src/index.ts` builds
+  `build/sync-engines.js` with `@wordpress/sync` and `yjs` external
+  (`wp.sync`, `wp.sync.Y`).
+  - `engines/intent-log/` — the frozen intent-log core: plain JavaScript
+    typed through JSDoc, excluded from prettier, kept identical to its
+    PHP twin and the vectors (`docs/vendored-libraries.md`).
+  - `engines/yjs-server/` — the yjs-server engine with its Yjs client
+    modules and the vendored `y-utilities/` (ignored by eslint). No
+    other engine uses Yjs: de-rtc keeps a plain record
+    (`engines/de-rtc/record.ts`), intent-log its own document.
+  - `shared/awareness-sync.ts` — presence bridging all three engines
+    use; no engine folder imports another engine's folder.
+  - `providers/{http-polling,sse,sse-daemon,websocket}/` and
+    `providers/advisory/` — the transports and the advisory channel
+    (sse and sse-daemon reuse the polling manager).
+  - `awareness/` — slow awareness (`docs/awareness-high-latency.md`).
+    `registry.ts` installs the `gseBlock` field's equality check on
+    EVERY awareness instance the engines create, in every mode. A peer
+    can carry the field at any time, and core-data throws on an unknown
+    field.
+  - `entity-sync/` — registers the default entity sync adapter after
+    engines and transports (`docs/entity-sync-adapter.md`).
+  - `framework.ts` — unlocks `@wordpress/sync`'s private APIs once.
+  - `debug/inspector.ts` — the `window.wpSync` wire inspector.
+- `gutenberg/` — the pinned, squashed Gutenberg subtree (source only;
+  see below).
+- `tests/` — all tests, fixtures, and tooling: `phpunit/` (boots via
+  `tests/bootstrap.php`), `js/` (Jest, mirroring `src/`;
+  `js/engines/intent-log/` is the frozen core's harness), `e2e/`
+  (Playwright specs, config, fixture plugins, and the `bin/` launchers),
+  `benchmarks/` (`npm run bench`; its README), `debugging/` (the soak
+  and the capture/replay tools; its README), `fuzzer/` (`npm run fuzz`;
+  its README), and `tools/` (vector generators, the simulator sweep, the
+  two-tab observer; its README).
 - `bin/` — repo scripts, not shipped: `build-plugin-zip.sh` (the release
   zip) and `release.mjs` (humans only, see Releasing).
 - `blueprint.json` / `blueprint.local.json` — WordPress Playground
-  blueprints: the public one for playground.wordpress.net (installs the
-  latest release zip) and the one `npm run playground` applies to the
-  mounted checkout (see Environment).
-- `examples/` — code a host copies rather than the plugin runs:
-  `advisory-relay/` (the bring-your-own WebSocket relay for the
-  advisory channel, Node + `ws`, plus its README). Linted with
-  `npm run lint:js`; the websocket e2e config runs it for the
-  advisory-relay spec.
-- `docs/` — the conceptual docs, indexed by `docs/README.md`:
-  `engine-comparison.md` (the decision guide: scorecard, parity table,
-  resource profiles, per-engine known gaps), `principles.md` (P1-P7),
-  `scenarios.md` (the A-G wire narratives), `transports.md`,
-  `de-rtc-fidelity.md` (the audit against the upstream vision),
-  `architecture-decisions.md`, and `glossary.md` (the project's
-  vocabulary in plain words). The set is the interpretation layer over
-  both benchmark harnesses; deliberately number-free (run `npm run
-  bench` for numbers) — keep the SHAPES current when engine
-  capabilities or benchmarks change.
-- `docs/plan/` — how we plan work. `README.md` (the rules, the labels, the
-  flow), `history.md` (why the code is shaped this way and what has
-  already been tried and failed), `wontfix.md` (looked at, set aside,
-  with reasons). The work itself lives in GitHub Issues, not here.
+  blueprints: the public one for playground.wordpress.net and the one
+  `npm run playground` applies to the checkout (see Environment).
+- `examples/advisory-relay/` — the bring-your-own WebSocket relay a host
+  copies (Node + `ws`); linted with `npm run lint:js`.
+- `docs/` — the documentation, indexed by reader in `docs/README.md`
+  (every page is listed there). The pages are deliberately number-free:
+  run `npm run bench` for numbers, and keep the SHAPES current when
+  engine capabilities or benchmarks change. `docs/plan/` holds how we
+  plan work (`README.md`), why the code is shaped this way
+  (`history.md`), and what we set aside (`wontfix.md`); the work itself
+  lives in GitHub Issues.
 
 ## The `gutenberg/` subtree
 
-The plugin includes Gutenberg source as a squashed Git subtree. Framework
-changes are visible in this repository and are also maintained as commits
-on the separate Gutenberg `try/sync-engines` branch. Rebase that branch onto
-upstream trunk, test it, then import the reviewed version here.
-
-The plugin loads `gutenberg/gutenberg.php` when no standalone Gutenberg is
-active. Dependencies and built assets are generated locally. A normal clone
-includes the source; CI needs no submodule setup. Release ZIPs include the
-built framework.
-
-`gutenberg-pin.json` records the bundled framework commit, the trunk it
-sits on, and its source tree ID; it is the only place that names them. The
-framework includes PR #83410 and the default adapter integration. Retain
-the private API exports, post-lock fallback, and conflict-review
-integration on updates.
-See `docs/gutenberg-subtree.md` and `docs/entity-sync-adapter.md`.
+`gutenberg/` is a squashed Git subtree of Gutenberg, pinned by
+`gutenberg-pin.json` (the only place that names the bundled commit).
+The plugin loads `gutenberg/gutenberg.php` when no standalone Gutenberg
+is active; a normal clone includes the source, and the build is
+generated locally. Framework changes are maintained on the Gutenberg
+`try/sync-engines` branch and imported here after review. Procedure and
+what to retain on an update: `docs/gutenberg-subtree.md` and
+`docs/entity-sync-adapter.md`.
 
 ## Setup (from a clean checkout)
 
@@ -502,57 +358,32 @@ conformance suites run separately:
 y-php (`composer --working-dir=includes/lib/y-php test`) and
 automerge-php (`php includes/lib/automerge-php/tests/run.php`).
 
-The transport-specific e2e suites live here (relocated from the framework):
-`tests/e2e/specs/http-only/` runs in the default suite; `tests/e2e/specs/
-websocket-only/` runs only under `test:e2e:websocket`, which since the
-V1 A3 rework runs against the plugin's REAL websocket transport:
-`playwright.rtc-websocket.config.ts` launches
-`tests/e2e/bin/rtc-real-ws-daemon.mjs` as a second webServer, which
-selects the websocket transport on the tests site, publishes the
-`wp collaboration sync-server` PHP daemon from the tests env's cli
-image on host port 8787 (health-checked on the daemon's own /health),
-and restores the previous transport at teardown. No spec is skipped.
-The same config also runs the example advisory relay
+The transport-specific e2e suites (relocated from the framework):
+`tests/e2e/specs/http-only/` runs in the default suite.
+`tests/e2e/specs/websocket-only/` runs only under `test:e2e:websocket`
+(`playwright.rtc-websocket.config.ts`), against the plugin's REAL
+websocket transport. Its launcher, `tests/e2e/bin/rtc-real-ws-daemon.mjs`,
+selects the websocket transport on the tests site. It publishes the
+`wp collaboration sync-server` daemon from the tests env's cli image on
+host port 8787, health-checked on `/health`. It restores the previous
+transport at teardown. The same config runs the example relay
 (`examples/advisory-relay/relay.mjs`) on port 8790 with a fixed test
-secret; `collaboration-websocket-advisory-relay.spec.ts` activates
-the `tests/e2e/plugins/advisory-relay-access-token.php` fixture (same
-secret, socket URL aimed at the relay) for its duration, so the
-relay lane never touches the daemon's auth path.
-`tests/e2e/specs/sse-framing/` holds how a tab behaves around an open
-receive stream, and both SSE lanes run it — the web tier under
-`test:e2e:sse`, the sync daemon under `test:e2e:sse-daemon` — because
-the framing and the send path are the same for both, and only the
-process writing the stream differs.
-`tests/e2e/specs/sse-only/` runs only under `test:e2e:sse`
-(`playwright.rtc-sse.config.ts`): its global setup runs the default one
-and then `tests/e2e/bin/rtc-sse-transport.mjs --select`, which refuses
-to run without the tests env's Redis container and selects the SSE
-transport on the tests site; the global teardown restores the previous
-transport from the same state file. The specs read the exchange's
-`window.__wpSyncSseState` (open, events, rooms) the way the websocket
-specs read `__wpSyncWsState`. The fuzzer sweeps `sse` by default and
-refuses an sse combo without Redis.
-`tests/e2e/specs/sse-daemon-only/` runs only under
+secret for `collaboration-websocket-advisory-relay.spec.ts`, which
+activates the `tests/e2e/plugins/advisory-relay-access-token.php`
+fixture for its duration. `tests/e2e/specs/sse-only/` runs only under
+`test:e2e:sse` (`playwright.rtc-sse.config.ts`), whose setup runs
+`tests/e2e/bin/rtc-sse-transport.mjs --select`; it refuses to run
+without the tests env's Redis container, so it tests wake-ups through
+Redis rather than through storage checks (the fuzzer applies the same
+rule to `sse`). `tests/e2e/specs/sse-daemon-only/` runs only under
 `test:e2e:sse-daemon` (`playwright.rtc-sse-daemon.config.ts`), which
-launches the same `rtc-real-ws-daemon.mjs` with `--transport=sse-daemon`.
-The `sse-daemon` transport is the same receive stream the `sse`
-transport speaks, written by the sync daemon instead of a web request:
-the daemon serves the socket and the stream on one port, so this lane
-differs from the websocket lane only in the slug the tests site
-negotiates, and both daemon lanes share
-`tests/e2e/config/rtc-daemon-teardown.ts`, which replays the launcher's
-persisted transport restore.
-A receive stream is a POST whose body can arrive across several reads,
-and the daemon's handshake handler runs once per read. The one-time
-token it authenticates with is spent on first sight, so the daemon
-authenticates once per connection and keeps the result; a second pass
-over the same connection otherwise spends the token again and refuses a
-stream that was already accepted. Symptoms of getting that wrong: the
-daemon logs `Handshake rejected: Missing, expired, or mismatched
-token.`, the browser reports the stream POST as a CORS failure (a 403
-carries no CORS headers, so the status is hidden), and the client logs
-`Error posting sync update, will retry with backoff` — then succeeds on
-the retry with a fresh token, so the suite still passes.
+launches `rtc-real-ws-daemon.mjs` with `--transport=sse-daemon`; both
+daemon suites share `tests/e2e/config/rtc-daemon-teardown.ts`.
+`tests/e2e/specs/sse-framing/` runs under both SSE suites. The specs read
+`window.__wpSyncSseState` and `window.__wpSyncWsState`. How the daemon
+authenticates a stream, and the symptoms when that is wrong:
+`docs/transports.md` ("Server-sent events from the sync daemon").
+
 Every tab on a post joins that post's awareness roster, and a page whose
 roster exceeds `DEFAULT_CLIENT_LIMIT_PER_ROOM` (5) is refused the room:
 Gutenberg shows "Too many editors connected" and the real-time path stops
@@ -560,23 +391,21 @@ for that tab. The check runs once, on the page's first connection, so a
 spec that opens a sixth tab on one post fails for this reason and not
 because of a transport fault. Give extra tabs their own post, or raise
 the limit with the `sync.pollingProvider.maxClientsPerRoom` filter.
-(The old y-websocket PEER-relay fixture lane — the test WS provider
-plugin plus `rtc-test-ws-sync-server.mjs` — only demonstrated
-client-merging engines and none remains; the fixture files are kept
-for reference but no suite uses them.) `.wp-env.json` maps
-`tests/e2e/plugins` (that fixture) and
-`gutenberg/packages/e2e-tests/plugins` (framework fixtures like
-sync-connection-error-filter) as plugin dirs. `@y/websocket-server` is pinned
-EXACTLY to 0.1.1 — 0.1.5 switched to the yjs-14 (`@y/y`) family and its daemon
-crashes (`store.getClock is not a function`) when a 13.x client connects.
-`npm run rtc:ws` is the one-command start for the REAL websocket transport
-(manual two-window testing): it ensures the dev wp-env is running, activates
-the right plugins, selects the websocket transport, and runs the
-`wp collaboration sync-server` daemon in the wp-env cli container with port
-8787 published to the host (wp-env alone cannot publish extra ports, and
-the daemon must bind 0.0.0.0 — a loopback-bound daemon is unreachable even
-through a published port). `npm run rtc:http` switches the site back to
-HTTP polling and stops the daemon.
+The old y-websocket peer-relay fixture lane (the test WS provider plugin
+plus `rtc-test-ws-sync-server.mjs`) is used by no suite; the files are
+kept for reference. `.wp-env.json` maps `tests/e2e/plugins` and
+`gutenberg/packages/e2e-tests/plugins` as plugin dirs.
+`@y/websocket-server` is pinned EXACTLY to 0.1.1: 0.1.5 switched to the
+yjs-14 family and its daemon crashes (`store.getClock is not a
+function`) when a 13.x client connects. `npm run rtc:ws` is the
+one-command start for the real websocket transport for manual two-window
+testing: it ensures the dev wp-env is running, activates the right
+plugins, selects the websocket transport, and runs the daemon in the
+wp-env cli container with port 8787 published to the host (wp-env alone
+cannot publish extra ports, and the daemon must bind 0.0.0.0; a
+loopback-bound daemon is unreachable even through a published port).
+`npm run rtc:http` switches the site back to HTTP polling and stops the
+daemon.
 
 The DEV config's `afterStart` lifecycle hook runs the same script as
 `--mode=daemon --detach || true`: every `npm run env start` brings the
@@ -665,22 +494,16 @@ they exist so a failure is observable without re-instrumenting:
 - **Jest scope:** `jest.config.js` sets `roots: [src, tests]`. Without it,
   `wp-scripts test-unit-js` recurses into the subtree's ~1030 monorepo suites.
 - **phpcs scope:** `phpcs.xml.dist` excludes `/gutenberg/*`.
-- **Slow awareness rides whatever carries awareness.** Over the sync
-  transport the block name goes out on the framework awareness state
-  (`gseBlock`), which is one of the BASE presence fields the advisory
-  channel's presence lane carries peer to peer, so under short polling
-  a new name reaches every reachable peer with no request at all. A
-  new name also raises `announceLocalAwarenessChange`
-  (`src/providers/advisory/announce.ts`), which the polling manager
-  uses only under SSE, to send the changed state on the updates
-  request beside the stream. The e2e
-  spec turns the advisory channel off for its duration. Under the
-  Heartbeat channel the block name is a field on the advisory channel's
-  discovery probe (`block`), kept on the tab's presence token by
-  `Gutenberg_Sync_Engines_Advisory_Presence` and answered back with
-  each peer's name and avatar, so it needs an advisory channel
-  selected; the plugin also SETS the admin Heartbeat interval on post
-  edit screens, so the probe's cadence follows the awareness interval.
+- **Slow awareness (the block name) goes out with whatever already
+  carries presence** (`docs/awareness-high-latency.md`):
+  - Over the sync transport it is a field on the framework awareness
+    state (`gseBlock`). Under short polling the advisory channel carries
+    it peer to peer. Under SSE `announceLocalAwarenessChange`
+    (`src/providers/advisory/announce.ts`) sends it beside the stream.
+  - Under the Heartbeat channel it is a field on the discovery probe, so
+    an advisory channel must be selected, and the plugin sets the admin
+    Heartbeat interval on post edit screens to match.
+  - The e2e spec turns the advisory channel off for its duration.
 - **wp-env is a devDep here.** `@wordpress/scripts` does NOT bundle it. It's
   pinned to `@wordpress/env@^11` (for auto-port) with a top-level `overrides`
   entry, because scripts@30 only *optionally* peer-depends on env 10 — the
@@ -733,17 +556,14 @@ they exist so a failure is observable without re-instrumenting:
 - **Subtree build layout** (Gutenberg 23.x): built package JS lands at
   `gutenberg/build/scripts/<pkg>/`, not `gutenberg/build/<pkg>/`.
 - **Engine switches vs room lineage:** rooms are stamped with the engine
-  that first wrote them, and the transport 409s mismatches
-  (`rest_sync_engine_mismatch`). Global collection/taxonomy rooms (e.g.
-  `taxonomy/wp_pattern_category`) outlive any engine flip, so the polling
-  transport RESETS those rooms (rows + lineage + room meta) when a client
-  speaking the newly-selected engine arrives — they're rebuildable
-  change-feeds. Per-post entity rooms keep the strict fence (they can hold
-  unsaved collaborative content; sessions degrade to the post lock).
+  that first wrote them and the transport 409s mismatches
+  (`rest_sync_engine_mismatch`); the shared rooms that are not tied to
+  one post are reset when a client speaking the new engine arrives,
+  per-post rooms are not (`docs/operations.md`, "Switching engines").
   Related trap: the storage's `get_cursor()`/`get_update_count()` are
-  per-request caches refreshed ONLY by `get_updates_after_cursor()` (the
-  table storage keeps the post-meta default's semantics here on purpose)
-  — never gate genesis (or anything) on them before a read has run.
+  per-request caches refreshed ONLY by `get_updates_after_cursor()`
+  (kept from the post-meta default on purpose); do not decide a room's
+  first load, or anything else, from them before a read has run.
 - **A push dispatched from inside `SyncManager.update()` never reaches the
   editor.** core-data's `editEntityRecord` hands the sync manager the edits
   BEFORE it commits them, and every editor edit carries the editor's own
@@ -830,9 +650,10 @@ Ideas we looked at and set aside are in `docs/plan/wontfix.md`.
 has already been tried and failed — read it before a big change, and
 before re-attempting anything that looks obvious.
 
-`LOOP.md` is the working ledger when the issue loop is running
-(`/loop /shape-issue` to work up what was filed, then `/loop /solve-issue`;
-either also takes a single issue number directly).
+The issue loop is `/loop /shape-issue` to work up what was filed, then
+`/loop /solve-issue`; either also takes a single issue number directly.
+Cycle notes go on the issue as a comment; durable lessons go in
+`docs/plan/history.md` under "Running the loop".
 
 Where the facts about each engine live now:
 

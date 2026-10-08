@@ -127,3 +127,31 @@ are now part of how the loop works:
 - **Three failed attempts means stop and write down what you learned.**
   Every dead end above came from that rule. None of them cost a fourth
   attempt.
+
+## Running the loop
+
+Lessons from running `/loop /shape-issue` and `/loop /solve-issue`,
+kept here because they outlive any one issue. Cycle notes go on the
+issue itself as a comment, where the next person looks and where two
+machines can write at once without colliding; the queue is GitHub
+Issues, and the rules are in [README.md](README.md).
+
+- Run an issue's stated check exactly as written before claiming it
+  passes. A test filter that matches nothing exits successfully and
+  looks green.
+- Check `git log <base>..<branch>` before asking for verification.
+  Another session can commit onto the branch you are on, and the
+  verifier will fail the whole issue for someone else's change.
+- Rebuild the plugin bundle before any browser-based check. Unit tests
+  do not need it; anything involving a real browser does, and a stale
+  bundle produces evidence for code you did not write.
+- Do not switch branches while a background build for that branch is
+  running. The build reads whatever is on disk when it gets there.
+- A Playwright wait timing out while the element sits in the DOM means
+  the page's main thread is stalled, not that the test tooling broke.
+  The test tool runs inside the page, so a frozen page freezes the tool
+  too. Before blaming the test, measure stalls. The collaboration
+  fixtures' `RTC_E2E_CPU_THROTTLE` and `RTC_E2E_CPU_PROFILE` settings
+  reproduce busy-machine flakes on an idle machine. They attach the
+  long-task timeline and a CPU profile to every failure (built for
+  issue #37).

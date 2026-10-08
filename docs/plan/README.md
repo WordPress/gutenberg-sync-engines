@@ -146,7 +146,8 @@ gh label create "agent:parked"        -c "#5319E7" -d "Cannot move forward; the 
 Either also takes a single issue number directly (e.g.
 `/shape-issue #60`) to work one issue without starting a loop.
 
-`LOOP.md` is the ledger while the loop runs. The queue itself is
+Cycle notes go on the issue as a comment; durable lessons go in
+[history.md](history.md) under "Running the loop". The queue itself is
 GitHub:
 
 ```bash
