@@ -366,7 +366,36 @@ their own (open work lives in GitHub Issues), grouped by engine.
     at that position in the log (see "THE OBSERVED BASELINE" in
     `src/engines/intent-log-manager.ts`). What remains is a _rate_
     problem, not a correctness one, and the escalation-criteria fixture
-    polices it. AGENTS.md lists the rest of the residuals.
+    polices it. The later keystrokes of such a burst go to the review
+    panel, held but never lost, and normal merging resumes as soon as
+    the editor has seen the other person's change.
+
+-   **The engine guesses which version the editor is showing.** When
+    the editor hands over its blocks, the engine matches them to the
+    nearest candidate among the confirmed document and its own
+    unconfirmed pushes (`documentDistance` in
+    `src/engines/intent-log-manager.ts`). A tie keeps the confirmed
+    document, so a wrong guess sends a block again rather than
+    destroying an edit.
+
+-   **The editor shows other people's merged edits about a second
+    late.** Pushes driven by the editor's own changes wait for typing to
+    pause (`CAPTURE_SYNC_DELAY`, 1.2 s), so block ids written back by
+    the server and other people's merged edits appear that late.
+    WordPress's data layer (core-data) forces this: a push made from
+    inside the sync manager's update call never reaches the editor (see
+    the gotcha in `AGENTS.md`).
+
+-   **An undo that has not reached the server is lost on reload.** Any
+    edit not yet sent is lost if the tab reloads. Undo makes this easy
+    to see: the edit it undid was already accepted, so it comes back
+    for everyone.
+
+-   **An edit typed during the join round trip.** On an empty post the
+    engine keeps it and merges it once the join finishes; on a post
+    with content it is still discarded, because the join's first push
+    replaces it (pre-existing behavior, unchanged; regression tests in
+    `tests/js/engines/intent-log-manager.test.ts`).
 
 -   **Recovery after history removal depends on the client's retained
     history.** When a connected client has that history, it retries only
@@ -418,6 +447,23 @@ their own (open work lives in GitHub Issues), grouped by engine.
     Materialization fidelity itself is fixed: each block now carries its
     own saved HTML, and the genesis rich-text defect was fixed by the
     selector-sourced split.
+-   **Unsafe markup is cleaned, not reviewed.** For an author without
+    `unfiltered_html`, the server replaces the touched blocks with their
+    cleaned form and broadcasts the correction. Nothing is held for a
+    person to look at; see [plan/wontfix.md](plan/wontfix.md).
+-   **Typing right after opening a post** (before the first copy of the
+    document arrives) gives the engine all of the editor's blocks, read
+    from the saved post, which may differ from what the room holds
+    ([#57](https://github.com/WordPress/gutenberg-sync-engines/issues/57)).
+    The engine never merges those blocks as a whole. It compares them
+    with the saved content it kept from loading and copies in only the
+    new characters, at the same block position. Any other difference (a
+    block added or removed, a non-text attribute, no saved content) is
+    dropped, except on an empty post, where nothing can collide and the
+    edit merges as is. The new characters are checked against the first
+    copy the tab received, so text typed after another person's
+    just-saved text can end up before or after it; the late-join
+    browser test accepts both.
 
 ### de-rtc
 
@@ -472,6 +518,22 @@ their own (open work lives in GitHub Issues), grouped by engine.
     pseudo-realtime cadence (bytes collapsed under the announce model;
     request counts did not), and collections plus unsupported post types
     keep the transport proposal lane as a fallback.
+-   **Two holds on the commit path must stay.** Posts and pages commit
+    through the ordinary autosave endpoint (`WP_De_RTC_Autosave_Commits`
+    reads the commit shape; the editor's own autosaves pass through).
+    First, an editor save waits for the session's in-flight commit to
+    finish (`prepareForSave`), so a save can never conflict with the
+    session's own commit (the fuzzer found that one). Second, the server
+    sometimes merges other people's work into a tab's proposal
+    (`pendingOwnMergeSeq` is then set). Until the tab has that merged
+    version, it must not send another proposal. A proposal built on the
+    old version makes the server treat the tab's own just-accepted
+    keystroke as a conflict and hold it back, so the end of what the
+    person typed was lost with no warning. It only happened on hosts
+    slow enough to split a typing burst across two commits. Pinned by
+    `tests/js/engines/de-rtc/announce.test.ts` and the de-rtc
+    browser concurrency test, which types with a per-keystroke delay so
+    the interleaving happens on every host.
 
 ### All engines
 

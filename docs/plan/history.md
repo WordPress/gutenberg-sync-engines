@@ -38,7 +38,19 @@ and long sessions ran the server out of memory as messages grew with
 the post. Now a notice carries a version number and a fingerprint, and
 a client that already matches downloads nothing. If you are ever
 tempted to add a document-sized field to that channel, this is the
-history that says do not.
+history that says do not. In particular, never put a `content` entry
+into de-rtc's list of synced properties: it silently re-sends the whole
+document with every update message (found by inspecting the traffic; it
+is now stripped on both sides).
+
+**A de-rtc tab waits for the merged version before it sends its next
+change.** When the server merges other people's work into a tab's
+change, a newer version exists that the tab does not hold yet. Until it
+arrives, the tab must not send another change. One built on the old
+version makes the server treat the tab's own accepted keystroke as a
+conflict and hold it back, and the end of what the person typed was lost
+with no warning on slow hosts. The test for it is deterministic
+(`tests/js/engines/de-rtc/announce.test.ts`).
 
 **yjs-server stores each block's saved HTML alongside the block.** The
 server used to rebuild a block's HTML from what it saw when the post

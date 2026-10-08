@@ -812,183 +812,22 @@ before re-attempting anything that looks obvious.
 (`/loop /shape-issue` to work up what was filed, then `/loop /solve-issue`;
 either also takes a single issue number directly).
 
-This section carries the operational facts and cites issues where one
-applies.
+Where the facts about each engine live now:
 
-- `composer lint` is clean (zero errors, zero warnings) — keep it
-  that way; the
-  excludes (`gutenberg/`, frozen cores, vendored libraries) are by
-  design and must not widen.
-- All three engines have **collaborative undo**: intent-log via inverse
-  intents over the accepted log (`src/engines/intent-log-undo.ts` — a
-  still-pending unit CANCELS with an outbox removal plus a wire-chasing
-  `cancel` row, a settled unit inverts; inverses derive only from
-  ACCEPTED rows), yjs-server via `src/engines/yjs-server/undo.ts`,
-  and de-rtc via revert-edit undo (reverts derived from the client's
-  own accepted canonical rows, proposed as ordinary new changes).
-- **Conflict review is cross-engine**: intent-log through its bespoke
-  manager; de-rtc parks escalations as durable `parked` rows and
-  presents them through the framework review panel via the engine's
-  optional `review` member (`SyncReviewSource` in the subtree's
-  `packages/sync/src/types.ts`, which createSyncManager drives for any
-  composed engine; the old `review-manager-decorator.ts` is gone since
-  #49); yjs-server has NO review lane by design (CRDT merge detects no
-  conflicts to park).
-- **Shared genesis property seed**: all three engines seed
-  `WP_Sync_Post_Genesis_Props::for_post()` (REST-shaped scalars,
-  taxonomies by rest_base, `meta.<key>`), so joiners see identical field
-  state under any engine and never open dirty.
-- **yjs-server known gaps** (docs/engine-comparison.md has the full list):
-  ingest cost is real y-php CPU — the canonical doc is
-  decoded/merged/re-encoded per request, the most expensive per-ingest
-  path of the three engines (run `npm run bench -- --suite=engines` for
-  numbers), no
-  review lane
-  (register conflicts LWW silently), kses is sanitize-and-compensate (no
-  human review of stripped markup), rooms are size-gated at both ends
-  (genesis refuses above `wp_sync_yjs_server_max_genesis_bytes`, 1 MB
-  default; a room grown past `wp_sync_yjs_server_max_room_bytes`, 8 MB
-  default, rejects further writes with 413 while reads/saves continue —
-  shrinking an over-limit room via epoch compaction stays post-v1).
-  Materialization fidelity is FIXED as of PR #35: every Y.Block carries
-  a `_save` mirror (its registered save() output, refreshed on attribute
-  merges; the subtree's `crdt-blocks.ts` writes it under the exported
-  `CRDT_BLOCK_SAVE_KEY`) and the engine prefers it over genesis
-  wrappers, so attribute-driven wrapper changes materialize. The genesis
-  rich-text defect (stripped inner markup landing in the first
-  rich-text-source attribute) was fixed separately by the selector-
-  sourced split. Genesis blocks must still set `isValid: true` or the
-  editor renders them as invalid-content recovery blocks (has bitten) —
-  and a container-shaped variant of exactly that symptom is open, see
-  issue #38. A LATE JOINER'S pre-bootstrap keystroke (typed before the
-  first snapshot lands) carries the editor's WHOLE tree, parsed from the
-  SAVED post; the engine never merges that tree (issue #57: it
-  re-inserted a peer's saved text or deleted a peer's unsaved text
-  whenever the first snapshot row differed from the saved post). It
-  compares the tree with `parse(savedContent)` kept from `hydrate`,
-  and applies only the rich-text differences straight to the
-  document's own `Y.Text` at the same block position (prefix/suffix
-  diff; a deletion only where the document still holds those
-  characters, an insertion clamped to the text's end). A tree that
-  differs in any other way (block added/removed, non-text attribute,
-  no saved content) is DROPPED — EXCEPT when the document holds no
-  blocks at the first snapshot row (an empty post): nothing can
-  collide, so the buffered edit merges as is and the first paragraph
-  typed into a new post survives (the verifier caught that regression;
-  the late-join spec's empty-post case pins it). The replay runs
-  against the first snapshot row, so a keystroke typed after a peer's
-  just-saved text can land before or after it (the merge's call; the
-  late-join e2e spec accepts both).
-- **de-rtc known gaps** (docs/engine-comparison.md has the full list):
-  every block carries a durable `metadata.syncId` (intent-log's scheme;
-  `WP_De_RTC_Block_Identity` stamps genesis deterministically and
-  engine-unaware writers' blocks, `adopt()` lines an id-less copy up
-  with its base by path, and the editor-side stamper in
-  `includes/shared/sync-id.js` serves de-rtc too) and
-  `WP_De_RTC_Identity_Merge` three-way merges by that identity at every
-  depth BEFORE the frozen positional core (which stays the fallback
-  whenever identity declines: id-less blocks, classic content between
-  blocks, irregular containers); parked rows carry `syncId` + `path`
-  beside `index`, the client restores/contests/anchors by syncId
-  (`DeRtcContestKey`), `blockBaseVersions` keys may be syncIds, kses
-  sequestration (`WP_De_RTC_Identity_Merge::sequester`), authorship
-  (`getBlockAuthorshipById`) and revert-undo all work by identity at
-  every depth with the positional rules as the id-less fallback;
-  truly concurrent SAME-block edits merge from their TRUE base
-  (`blockBaseVersions`) or raise a contested pending item
-  (Adopt/Reject) — the old silent client-side block LWW is
-  retired; sessions author the block-native `clientUpdate` descriptor
-  (tamper evidence, byte-parity with the PHP derivation pinned
-  by PHP-generated vectors in
-  `tests/js/engines/de-rtc/test-vectors/`; the engine validates once
-  against the plain declared base, then drops it), while machine
-  writers stay descriptor-less via the server's engine-unaware-writer
-  lane; kses SEQUESTERS per block (risky blocks revert to base and
-  park for review while the safe remainder lands; whole-proposal
-  escalation remains the fallback for freeform boundaries); ingest is
-  lock-free — each accepted
-  proposal atomically claims its version advancement (options-row CAS,
-  `WP_Sync_Atomic_Option`) and a lost claim reloads + re-merges, the
-  upstream optimistic model. Since protocol 2 the
-  transport carries ADVISORIES, not documents: accepted proposals
-  broadcast ~200-byte `announce` rows (version + canonicalized content
-  hash + merged property registers); canonical content lives once per
-  room in a CHAINED options row (`swap_prefixed` — writers CAS against
-  their predecessor's sequence prefix, so canonical persistence can
-  never regress), and a behind client's `fetch` row is answered with
-  one synthesized, never-stored snapshot. The active typist advances
-  by hash and downloads nothing; row bytes no longer scale with
-  document size (the hour soak's PHP-memory cliff, closed structurally;
-  re-measured at hour scale: request rate flat, peak PHP memory 9 MB).
-  Stage 2 completes the Save/Sync inversion: sessions COMMIT through
-  the ordinary autosave endpoint (`WP_De_RTC_Autosave_Commits`
-  intercepts the commit shape; editor-native autosaves pass through),
-  the transport carries ZERO proposals, and editor saves settle-and-
-  hold the commit lane (`prepareForSave`) so a save can never
-  self-conflict with the session's own in-flight commit (fuzzer-found).
-  Do NOT reintroduce a `content` entry into de-rtc's property lane —
-  it silently re-carries the whole document per announce (found by
-  wire inspection; stripped on both sides).
-  A second commit hold matters just as much: while `pendingOwnMergeSeq`
-  is set — the server merged peers' work into our proposal, so a newer
-  version exists whose content we do not hold yet — `maybePropose`
-  must NOT build a proposal. Its base would be the dead pre-merge
-  version, and the server would three-way-merge our OWN just-accepted
-  keystroke as a foreign concurrent change: both sides changed the
-  block, so it parks and canonical wins. That silently ate the rest of
-  every typing burst that straddled a commit round trip (" from two"
-  collapsing to " "), and it only showed up on hosts slow enough to
-  split a burst across commits — fast machines finish the burst before
-  the first commit leaves. Regression-tested deterministically in
-  `tests/js/engines/de-rtc/announce.test.ts`; the de-rtc e2e
-  concurrency spec now types with a per-keystroke delay so the
-  interleaving happens on every host, not just slow ones.
-- **Intent-log observed-baseline residuals** (the echo race is FIXED — capture
-  now diffs the editor tree against the document state that tree reflects and
-  authors at its seq; see the "THE OBSERVED BASELINE" note in
-  `src/engines/intent-log-manager.ts`). What remains:
-  - Which state the editor last displayed is inferred, not observed: an
-    arriving tree is matched to the nearest candidate (`documentDistance`)
-    among the confirmed baseline and the unconfirmed pushes. Ties keep the
-    confirmed baseline, so the failure direction is a re-pushed block rather
-    than a destroyed edit.
-  - Typing INTO a paragraph a peer is editing, while this editor is still
-    behind on their change, escalates the later keystrokes of the burst
-    (`frame-conflict`, engine rule 5) instead of merging them: their offsets
-    sit in a frame both an earlier own edit and a remote edit wrote. They go
-    to the review lane — parked, never lost — and normal merging resumes as
-    soon as the editor observes the remote change. (The related
-    one-keystroke DIVERGENCE this used to cause is FIXED: a settle that
-    bypasses `clientReceive` — parked rows, voided markers, disposition
-    acks — now replans the optimistic document, so a mispredicted escalated
-    keystroke can no longer linger on the author's canvas forever; found by
-    the fuzzer's concurrency profile, regression-tested in
-    `tests/js/engines/intent-log-manager.test.ts`.)
-  - Capture-driven pushes wait for the typing burst to fall quiet
-    (`CAPTURE_SYNC_DELAY`, 1.2 s), so identity write-backs and merged views
-    reach the canvas that late. This is forced by core-data (see the gotcha
-    on pushes from inside `update()`), not by choice.
-  - An undo whose inverse intents are still unacked when that tab reloads
-    loses them with the outbox: the undone edit (already accepted
-    server-side) resurrects for everyone. The general unacked-edit-loss
-    window, but undo makes it visible (the user watched the text vanish).
-  - FIXED: an edit made DURING the join
-    round trip used to stay local forever on an empty-genesis room
-    (found 2026-08-17 as a reload straddling a block insert — update()
-    dropped pre-init trees and the empty-genesis bootstrap pushes
-    nothing that would reconcile). update() now buffers the latest
-    pre-init tree and an empty-genesis bootstrap captures it via a
-    DEFERRED recovery that runs only if the document is still empty
-    after the delivery burst — a rejoiner's history replays right
-    behind the genesis row, and capturing against the bare genesis
-    baseline would duplicate every saved block (fuzz:quick caught the
-    synchronous variant). Regression tests in
-    `tests/js/engines/intent-log-manager.test.ts`; the old replay
-    (`npm run fuzz -- --combos=intent-log/http-polling --seed-list=6
-    --steps=14 --profile=concurrency`) passes. Pre-init edits on
-    NON-empty bootstraps are still discarded (reconciled by the
-    bootstrap push, which clobbers them) — pre-existing behavior,
-    unchanged.
+- Each engine's known gaps and accepted limits:
+  `docs/engine-comparison.md`, "Known gaps and qualifications".
+  Open defects are GitHub Issues; accepted limits are in
+  `docs/plan/wontfix.md`.
+- Rules that must not be undone (de-rtc's commit holds, the "no
+  `content` in the property list" rule, how often intent-log saves a
+  full snapshot): `docs/plan/history.md`.
+- What all three engines share (collaborative undo, the review panel
+  for intent-log and de-rtc, the same starting field values for a post
+  under every engine): the feature parity table in
+  `docs/engine-comparison.md`.
+- `composer lint` is clean (zero errors, zero warnings); keep it that
+  way. The excludes (`gutenberg/`, frozen cores, vendored libraries)
+  are by design and must not widen.
 
 ## Deep history
 
