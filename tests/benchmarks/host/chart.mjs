@@ -1,10 +1,19 @@
 /**
- * Builds a self-contained chart page from host benchmark result lines:
- * pick a metric, what goes along the bottom (people, post size, …), what
- * each line is (usually the engine), and the value every other variable
- * is held at. Each point is the median of the repeats; the bar through
- * it spans the lowest to the highest repeat. A table under the chart
- * holds the same numbers.
+ * Builds a self-contained chart page from host benchmark result lines.
+ * Deliberately simple: one drop-down picks the metric; the chart puts
+ * the number of peers along the bottom and the metric's unit up the
+ * side, and draws up to seven lines:
+ *
+ *   - without the plugin: a flat dotted line. The plugin-off phase is
+ *     one person at a time, so it has one value per person, not one per
+ *     peer count. It is the median of every plugin-off measurement
+ *     (editing, or idle for a metric measured only while idle).
+ *   - each engine while editing (solid) and while idle (dashed).
+ *
+ * Each point is the median of the repeats. When the results hold more
+ * than one value of another variable (post size, pattern, …), the page
+ * keeps the plan's center value (else the most common one) and says so
+ * under the title, so every point compares like with like.
  *
  *   node tests/benchmarks/host/chart.mjs results=<results.jsonl> [out=<chart.html>] [plan=<plan name|path>]
  *
@@ -18,45 +27,79 @@ import { fileURLToPath } from 'node:url';
 
 import { cliOptions, readRecords } from './record.mjs';
 
-// Variables a chart can put on an axis, as columns of each run.
-const DIMENSIONS = [
-	[ 'engine', 'Engine' ],
-	[ 'transport', 'Transport' ],
-	[ 'windows', 'People' ],
-	[ 'postSize', 'Post size' ],
-	[ 'pattern', 'Editing pattern' ],
-	[ 'editSeconds', 'Editing seconds' ],
-	[ 'idleSeconds', 'Idle seconds' ],
-	[ 'cache', 'Object cache' ],
-	[ 'pollingInterval', 'Polling interval' ],
-	[ 'commit', 'Plugin commit' ],
-	[ 'machine', 'Machine' ],
+// Variables held fixed (all but peers and engine), with their labels.
+const HELD = [
+	[ 'transport', 'transport' ],
+	[ 'postSize', 'post size' ],
+	[ 'pattern', 'editing pattern' ],
+	[ 'editSeconds', 'editing seconds' ],
+	[ 'idleSeconds', 'idle seconds' ],
+	[ 'cache', 'object cache' ],
+	[ 'pollingInterval', 'polling interval' ],
+	[ 'commit', 'plugin commit' ],
+	[ 'machine', 'machine' ],
+];
+
+// The metrics the drop-down offers, in order, with plain names and units.
+// Metrics not listed here (whole-job totals, room size) are left out:
+// they have no editing or idle value to draw.
+export const CHART_METRICS = [
+	[ 'php_cpu_ms_per_person_min', 'PHP CPU time', 'ms per person per minute' ],
+	[ 'php_peak_memory_mib', 'Peak PHP memory', 'MiB per request' ],
+	[
+		'php_worker_share_per_person',
+		'PHP worker time',
+		'share of one worker per person',
+	],
+	[ 'requests_per_person_min', 'HTTP requests', 'per person per minute' ],
+	[ 'php_requests_per_person_min', 'PHP requests', 'per person per minute' ],
+	[
+		'payload_kib_per_person_min',
+		'Data sent and received',
+		'KiB per person per minute',
+	],
+	[
+		'db_queries_per_person_min',
+		'Database queries',
+		'per person per minute',
+	],
+	[ 'db_queries_per_php_request', 'Database queries', 'per PHP request' ],
+	[ 'db_fsyncs_per_person_min', 'Database fsyncs', 'per person per minute' ],
+	[
+		'option_writes_per_person_min',
+		'Options-cache invalidations',
+		'per person per minute',
+	],
+	[ 'ws_frames_per_person_min', 'WebSocket frames', 'per person per minute' ],
+	[ 'editor_longest_task_ms', 'Longest editor freeze', 'ms' ],
+	[
+		'editor_long_task_ms_per_person_min',
+		'Editor freeze time',
+		'ms per person per minute',
+	],
+	[ 'delivery_p50_ms', 'Edit delivery, median', 'ms' ],
+	[ 'delivery_p95_ms', 'Edit delivery, 95th percentile', 'ms' ],
+	[ 'delivery_max_ms', 'Edit delivery, slowest', 'ms' ],
+	[ 'typing_lag_max_ms', 'Typing delay, worst', 'ms' ],
 ];
 
 /**
  * Reduces result lines to what the page needs.
  *
  * @param {Array<Object>} records Result lines.
- * @return {Object} { runs, metrics }.
+ * @return {Object} { runs }, each run's values keyed phase|metric|side.
  */
 export function chartData( records ) {
-	const metrics = {};
 	const runs = records.map( ( record ) => {
 		const values = {};
 		for ( const result of record.results ) {
-			const key = `${ result.phase }|${ result.metric }`;
-			metrics[ key ] ??= {
-				phase: result.phase,
-				metric: result.metric,
-				unit: result.unit,
-				kind: result.kind,
-			};
-			values[ `${ key }|${ result.side }` ] = result.value;
+			values[ `${ result.phase }|${ result.metric }|${ result.side }` ] =
+				result.value;
 		}
 		return {
 			engine: record.setup.engine,
+			peers: record.setup.windows,
 			transport: record.setup.transport,
-			windows: record.setup.windows,
 			postSize: record.setup.postSize,
 			pattern: record.setup.pattern,
 			editSeconds: record.setup.editSeconds,
@@ -68,7 +111,35 @@ export function chartData( records ) {
 			values,
 		};
 	} );
-	return { runs, metrics: Object.values( metrics ) };
+	return { runs };
+}
+
+/**
+ * Keeps the runs that match one value of every held variable: the plan's
+ * center value when the results have it, else the most common value.
+ *
+ * @param {Array<Object>} runs   chartData runs.
+ * @param {Object}        center The plan's center setup.
+ * @return {Object} { runs, held: [ [ label, value ] ] for varied variables }.
+ */
+export function holdFixed( runs, center = {} ) {
+	const held = [];
+	let kept = runs;
+	for ( const [ key, label ] of HELD ) {
+		const counts = new Map();
+		for ( const run of kept ) {
+			counts.set( run[ key ], ( counts.get( run[ key ] ) ?? 0 ) + 1 );
+		}
+		if ( counts.size < 2 ) {
+			continue;
+		}
+		const value = counts.has( center[ key ] )
+			? center[ key ]
+			: [ ...counts ].sort( ( a, b ) => b[ 1 ] - a[ 1 ] )[ 0 ][ 0 ];
+		kept = kept.filter( ( run ) => run[ key ] === value );
+		held.push( [ label, value ] );
+	}
+	return { runs: kept, held };
 }
 
 /**
@@ -76,16 +147,19 @@ export function chartData( records ) {
  *
  * @param {Array<Object>} records      Result lines.
  * @param {Object}        options
- * @param {Object|null}   options.plan The plan, whose center sets the defaults.
+ * @param {Object|null}   options.plan The plan, whose center is kept.
  * @return {string} HTML.
  */
 export function chartHtml( records, { plan = null } = {} ) {
+	const { runs, held } = holdFixed(
+		chartData( records ).runs,
+		plan?.center ?? {}
+	);
 	const data = {
-		...chartData( records ),
-		dimensions: DIMENSIONS,
-		center: plan?.center ?? {},
+		runs,
+		held,
+		metrics: CHART_METRICS,
 		title: plan?.name ? `Host benchmark: ${ plan.name }` : 'Host benchmark',
-		generated: new Date().toISOString(),
 	};
 	const json = JSON.stringify( data ).replace( /</g, '\\u003c' );
 	return `<!doctype html>
@@ -104,14 +178,10 @@ export function chartHtml( records, { plan = null } = {} ) {
 	--text-muted: #75746f;
 	--grid: #e6e5e1;
 	--axis: #b5b4ae;
+	--baseline: #75746f;
 	--series-1: #2a78d6;
 	--series-2: #eb6834;
 	--series-3: #1baf7a;
-	--series-4: #eda100;
-	--series-5: #e87ba4;
-	--series-6: #008300;
-	--series-7: #4a3aa7;
-	--series-8: #e34948;
 }
 @media (prefers-color-scheme: dark) {
 	:root:not([data-theme="light"]) {
@@ -123,14 +193,10 @@ export function chartHtml( records, { plan = null } = {} ) {
 		--text-muted: #9a998f;
 		--grid: #33332f;
 		--axis: #5c5b55;
+		--baseline: #9a998f;
 		--series-1: #3987e5;
 		--series-2: #d95926;
 		--series-3: #199e70;
-		--series-4: #c98500;
-		--series-5: #d55181;
-		--series-6: #008300;
-		--series-7: #9085e9;
-		--series-8: #e66767;
 	}
 }
 :root[data-theme="dark"] {
@@ -142,14 +208,10 @@ export function chartHtml( records, { plan = null } = {} ) {
 	--text-muted: #9a998f;
 	--grid: #33332f;
 	--axis: #5c5b55;
+	--baseline: #9a998f;
 	--series-1: #3987e5;
 	--series-2: #d95926;
 	--series-3: #199e70;
-	--series-4: #c98500;
-	--series-5: #d55181;
-	--series-6: #008300;
-	--series-7: #9085e9;
-	--series-8: #e66767;
 }
 * { box-sizing: border-box; }
 body {
@@ -158,297 +220,197 @@ body {
 	color: var(--text-primary);
 	font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
 }
-main { max-width: 1040px; margin: 0 auto; padding: 24px 16px 48px; }
+main { max-width: 960px; margin: 0 auto; padding: 24px 16px 48px; }
 h1 { font-size: 20px; margin: 0 0 4px; }
-.sub { color: var(--text-secondary); margin: 0 0 20px; }
-.controls { display: flex; flex-wrap: wrap; gap: 12px 16px; margin-bottom: 8px; }
-.controls label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-secondary); }
+.held { color: var(--text-muted); font-size: 12px; margin: 0 0 16px; }
 select {
 	font: inherit; color: var(--text-primary); background: var(--panel);
-	border: 1px solid var(--axis); border-radius: 6px; padding: 5px 8px; max-width: 100%;
+	border: 1px solid var(--axis); border-radius: 6px; padding: 6px 10px;
+	max-width: 100%; margin-bottom: 12px;
 }
-.held { color: var(--text-muted); font-size: 12px; margin: 4px 0 16px; }
-.held .controls label { color: var(--text-muted); }
 .figure { position: relative; }
-svg { display: block; width: 100%; height: auto; overflow: visible; }
+svg { display: block; overflow: visible; }
 svg text { fill: var(--text-secondary); font-size: 12px; }
-.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 8px 0 0; color: var(--text-secondary); font-size: 13px; }
-.legend span::before {
-	content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%;
-	background: var(--swatch); margin-right: 6px; vertical-align: -1px;
-}
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 10px; font-size: 13px; color: var(--text-secondary); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend svg { width: 28px; height: 10px; }
 .tip {
 	position: absolute; pointer-events: none; background: var(--panel); color: var(--text-primary);
 	border: 1px solid var(--axis); border-radius: 6px; padding: 6px 8px; font-size: 12px;
 	white-space: nowrap; display: none; box-shadow: 0 2px 8px rgb(0 0 0 / 0.12);
 }
-.note { color: var(--text-muted); font-size: 12px; margin-top: 12px; }
-table { border-collapse: collapse; width: 100%; margin-top: 20px; font-size: 13px; font-variant-numeric: tabular-nums; }
-th, td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--grid); }
-th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
-th { color: var(--text-secondary); font-weight: 600; }
 .empty { padding: 48px 0; text-align: center; color: var(--text-muted); }
-.scroll { overflow-x: auto; }
 </style>
 </head>
 <body>
 <main>
 <h1 id="title"></h1>
-<p class="sub" id="sub"></p>
-<div class="controls" id="controls"></div>
-<div class="held"><div class="controls" id="held"></div></div>
+<p class="held" id="held"></p>
+<select id="metric" aria-label="Metric"></select>
 <div class="figure" id="figure"><div class="tip" id="tip"></div></div>
 <div class="legend" id="legend"></div>
-<p class="note" id="note"></p>
-<div class="scroll"><table id="table"></table></div>
 </main>
 <script>
 const DATA = ${ json };
 const $ = ( id ) => document.getElementById( id );
-const label = Object.fromEntries( DATA.dimensions );
-const SIZE_ORDER = [ 'empty', 'medium', 'large' ];
+const ENGINES = [ 'intent-log', 'yjs-server', 'de-rtc' ];
+const PHASES = [ [ 'editing', 'editing', '' ], [ 'idle', 'idle', '6 5' ] ];
 
-const valuesOf = ( dim ) => {
-	const set = [ ...new Set( DATA.runs.map( ( run ) => run[ dim ] ) ) ];
-	return set.sort( ( a, b ) => {
-		if ( 'postSize' === dim ) return SIZE_ORDER.indexOf( a ) - SIZE_ORDER.indexOf( b );
-		if ( 'number' === typeof a && 'number' === typeof b ) return a - b;
-		return String( a ).localeCompare( String( b ) );
-	} );
-};
-const varying = DATA.dimensions.map( ( [ d ] ) => d ).filter( ( d ) => valuesOf( d ).length > 1 );
-// Colors follow the entity: a series keeps its slot whatever is filtered.
-const seriesSlot = ( dim, value ) => ( valuesOf( dim ).indexOf( value ) % 8 ) + 1;
-
-const state = {
-	metric: DATA.metrics.find( ( m ) => 'php_cpu_ms_per_person_min' === m.metric && 'editing' === m.phase )
-		? 'editing|php_cpu_ms_per_person_min'
-		: DATA.metrics[ 0 ] && DATA.metrics[ 0 ].phase + '|' + DATA.metrics[ 0 ].metric,
-	side: 'sync',
-	x: varying.includes( 'windows' ) ? 'windows' : varying[ 0 ] || 'engine',
-	series: varying.includes( 'engine' ) ? 'engine' : 'none',
-	held: {},
-};
-for ( const dim of varying ) {
-	const values = valuesOf( dim );
-	const center = DATA.center[ dim ];
-	if ( values.includes( center ) ) {
-		state.held[ dim ] = center;
-	} else {
-		// Most common value.
-		const counts = new Map();
-		DATA.runs.forEach( ( run ) => counts.set( run[ dim ], ( counts.get( run[ dim ] ) || 0 ) + 1 ) );
-		state.held[ dim ] = values.reduce( ( a, b ) => ( counts.get( b ) > counts.get( a ) ? b : a ) );
-	}
-}
-
-function select( name, options, value, onChange ) {
-	const wrap = document.createElement( 'label' );
-	wrap.textContent = name;
-	const el = document.createElement( 'select' );
-	for ( const [ v, text ] of options ) {
-		const opt = document.createElement( 'option' );
-		opt.value = JSON.stringify( v );
-		opt.textContent = text;
-		if ( v === value ) opt.selected = true;
-		el.append( opt );
-	}
-	el.addEventListener( 'change', () => { onChange( JSON.parse( el.value ) ); render(); } );
-	wrap.append( el );
-	return wrap;
-}
-
-const metricName = ( m ) => m.metric.replace( /_/g, ' ' );
-const SIDES = [ [ 'sync', 'With the plugin (sync)' ], [ 'baseline', 'Plugin off (baseline)' ], [ 'added', 'Added by the plugin' ] ];
-
-function renderControls() {
-	const metrics = DATA.metrics
-		.slice()
-		.sort( ( a, b ) => ( a.phase + a.metric ).localeCompare( b.phase + b.metric ) )
-		.map( ( m ) => [ m.phase + '|' + m.metric, m.phase + ': ' + metricName( m ) + ' (' + m.unit + ( 'timed' === m.kind ? ', timed' : '' ) + ')' ] );
-	const dims = varying.map( ( d ) => [ d, label[ d ] ] );
-	$( 'controls' ).replaceChildren(
-		select( 'Metric', metrics, state.metric, ( v ) => ( state.metric = v ) ),
-		select( 'Show', SIDES, state.side, ( v ) => ( state.side = v ) ),
-		select( 'Along the bottom', dims, state.x, ( v ) => {
-			state.x = v;
-			if ( state.series === v ) state.series = 'none';
-		} ),
-		select( 'One line per', [ [ 'none', 'Nothing (one line)' ], ...dims.filter( ( [ d ] ) => d !== state.x ) ], state.series, ( v ) => ( state.series = v ) )
-	);
-	const held = varying.filter( ( d ) => d !== state.x && d !== state.series );
-	$( 'held' ).replaceChildren(
-		...held.map( ( d ) => select( 'Hold ' + label[ d ].toLowerCase() + ' at', valuesOf( d ).map( ( v ) => [ v, String( v ) ] ), state.held[ d ], ( v ) => ( state.held[ d ] = v ) ) )
-	);
-}
-
-function valueOf( run ) {
-	const v = run.values;
-	if ( 'added' === state.side ) {
-		const s = v[ state.metric + '|sync' ];
-		const b = v[ state.metric + '|baseline' ];
-		return undefined === s || undefined === b ? undefined : s - b;
-	}
-	return v[ state.metric + '|' + state.side ];
-}
-
-function summarize( values ) {
+const median = ( values ) => {
 	const sorted = values.slice().sort( ( a, b ) => a - b );
 	const mid = Math.floor( sorted.length / 2 );
-	return {
-		n: sorted.length,
-		min: sorted[ 0 ],
-		max: sorted[ sorted.length - 1 ],
-		median: sorted.length % 2 ? sorted[ mid ] : ( sorted[ mid - 1 ] + sorted[ mid ] ) / 2,
-	};
-}
-
+	return sorted.length % 2 ? sorted[ mid ] : ( sorted[ mid - 1 ] + sorted[ mid ] ) / 2;
+};
+const valuesOf = ( runs, key ) =>
+	runs.map( ( run ) => run.values[ key ] ).filter( ( v ) => undefined !== v );
 const fmt = ( v ) => {
 	if ( 0 === v ) return '0';
 	const a = Math.abs( v );
 	return a >= 100 ? v.toFixed( 0 ) : a >= 10 ? v.toFixed( 1 ) : a >= 1 ? v.toFixed( 2 ) : v.toFixed( 3 );
 };
-
-function niceMax( v ) {
+const niceMax = ( v ) => {
 	if ( v <= 0 ) return 1;
 	const p = Math.pow( 10, Math.floor( Math.log10( v ) ) );
 	return [ 1, 2, 2.5, 5, 10 ].map( ( m ) => m * p ).find( ( m ) => m >= v );
+};
+
+// Lines for one metric: the flat baseline, then engine × phase.
+function linesFor( metric ) {
+	const lines = [];
+	const base =
+		valuesOf( DATA.runs, 'editing|' + metric + '|baseline' ).length
+			? valuesOf( DATA.runs, 'editing|' + metric + '|baseline' )
+			: valuesOf( DATA.runs, 'idle|' + metric + '|baseline' );
+	if ( base.length ) {
+		lines.push( { label: 'Without the plugin', color: 'var(--baseline)', dash: '2 4', flat: median( base ) } );
+	}
+	const engines = [
+		...ENGINES.filter( ( e ) => DATA.runs.some( ( r ) => r.engine === e ) ),
+		...[ ...new Set( DATA.runs.map( ( r ) => r.engine ) ) ].filter( ( e ) => ! ENGINES.includes( e ) ),
+	];
+	engines.forEach( ( engine, i ) => {
+		for ( const [ phase, label, dash ] of PHASES ) {
+			const runs = DATA.runs.filter( ( r ) => r.engine === engine );
+			const peers = [ ...new Set( runs.map( ( r ) => r.peers ) ) ].sort( ( a, b ) => a - b );
+			const points = peers
+				.map( ( p ) => {
+					const values = valuesOf( runs.filter( ( r ) => r.peers === p ), phase + '|' + metric + '|sync' );
+					return values.length ? { x: p, y: median( values ), n: values.length } : null;
+				} )
+				.filter( Boolean );
+			if ( points.length ) {
+				// A small sideways shift per engine keeps lines that sit on
+				// the same values (memory often does) from hiding each other.
+				lines.push( { label: engine + ', ' + label, color: 'var(--series-' + ( ( i % 3 ) + 1 ) + ')', dash, points, shift: ( i - ( engines.length - 1 ) / 2 ) * 6 } );
+			}
+		}
+	} );
+	return lines;
 }
 
 function render() {
-	renderControls();
-	const metric = DATA.metrics.find( ( m ) => m.phase + '|' + m.metric === state.metric );
-	const held = varying.filter( ( d ) => d !== state.x && d !== state.series );
-	const runs = DATA.runs.filter( ( run ) => held.every( ( d ) => run[ d ] === state.held[ d ] ) );
-	const xs = valuesOf( state.x ).filter( ( x ) => runs.some( ( r ) => r[ state.x ] === x ) );
-	const seriesValues = 'none' === state.series ? [ null ] : valuesOf( state.series ).filter( ( s ) => runs.some( ( r ) => r[ state.series ] === s ) );
-	const series = seriesValues.map( ( s ) => ( {
-		name: null === s ? metricName( metric ) : String( s ),
-		color: 'var(--series-' + ( null === s ? 1 : seriesSlot( state.series, s ) ) + ')',
-		points: xs.map( ( x ) => {
-			const values = runs
-				.filter( ( r ) => r[ state.x ] === x && ( null === s || r[ state.series ] === s ) )
-				.map( valueOf )
-				.filter( ( v ) => undefined !== v && null !== v );
-			return values.length ? { x, ...summarize( values ) } : null;
-		} ),
-	} ) );
-
-	$( 'title' ).textContent = DATA.title;
-	$( 'sub' ).textContent = ( metric ? metric.phase + ' · ' + metricName( metric ) + ' · ' + metric.unit : '' ) +
-		' — ' + DATA.runs.length + ' runs; dots are medians, bars span the lowest to highest repeat';
-	$( 'note' ).textContent = metric && 'timed' === metric.kind
-		? 'Timed metric: it depends on how fast the machine is, so compare it only between runs on the same machine.'
-		: 'Counted metric: decided by what the software does, so it can be compared across machines.';
-
+	const [ metric, name, unit ] = DATA.metrics.find( ( m ) => m[ 0 ] === $( 'metric' ).value );
+	const lines = linesFor( metric );
 	const fig = $( 'figure' );
 	fig.querySelectorAll( 'svg, .empty' ).forEach( ( el ) => el.remove() );
-	const all = series.flatMap( ( s ) => s.points.filter( Boolean ) );
-	if ( ! all.length ) {
+	const peers = [ ...new Set( DATA.runs.map( ( r ) => r.peers ) ) ].sort( ( a, b ) => a - b );
+	const ys = lines.flatMap( ( l ) => ( l.points ? l.points.map( ( p ) => p.y ) : [ l.flat ] ) );
+	if ( ! ys.length || ! peers.length ) {
 		const empty = document.createElement( 'div' );
 		empty.className = 'empty';
-		empty.textContent = 'No runs match these choices.';
+		empty.textContent = 'No results for this metric.';
 		fig.append( empty );
 		$( 'legend' ).replaceChildren();
-		$( 'table' ).replaceChildren();
 		return;
 	}
-	const W = 960, H = 380, M = { l: 64, r: 140, t: 12, b: 44 };
-	const lo = Math.min( 0, ...all.map( ( p ) => p.min ) );
-	const hi = niceMax( Math.max( ...all.map( ( p ) => p.max ) ) );
-	const y = ( v ) => M.t + ( H - M.t - M.b ) * ( 1 - ( v - lo ) / ( hi - lo ) );
-	const step = ( W - M.l - M.r ) / xs.length;
-	const x = ( i ) => M.l + step * ( i + 0.5 );
+	// Draw at the real width so text keeps its size on a phone.
+	const W = Math.max( 320, fig.clientWidth || 900 );
+	const H = Math.round( Math.min( 400, Math.max( 260, W * 0.45 ) ) );
+	const M = { l: 56, r: 16, t: 24, b: 44 };
+	const top = niceMax( Math.max( ...ys ) );
+	const decimals = Math.max( 0, -Math.floor( Math.log10( top / 4 ) ) );
+	const tick = ( v ) => v.toFixed( Math.min( decimals, 3 ) );
+	const y = ( v ) => M.t + ( H - M.t - M.b ) * ( 1 - v / top );
+	const lo = peers[ 0 ], hi = peers[ peers.length - 1 ];
+	const x = ( p ) => ( lo === hi ? ( M.l + W - M.r ) / 2 : M.l + 24 + ( ( W - M.l - M.r - 48 ) * ( p - lo ) ) / ( hi - lo ) );
 	const ns = 'http://www.w3.org/2000/svg';
-	const el = ( name, attrs, text ) => {
-		const node = document.createElementNS( ns, name );
+	const el = ( tag, attrs, text ) => {
+		const node = document.createElementNS( ns, tag );
 		for ( const [ k, v ] of Object.entries( attrs ) ) node.setAttribute( k, v );
 		if ( undefined !== text ) node.textContent = text;
 		return node;
 	};
-	const svg = el( 'svg', { viewBox: '0 0 ' + W + ' ' + H, role: 'img', 'aria-label': ( metric ? metricName( metric ) : '' ) + ' by ' + label[ state.x ] } );
+	const svg = el( 'svg', { width: W, height: H, viewBox: '0 0 ' + W + ' ' + H, role: 'img', 'aria-label': name + ' by number of peers' } );
 	for ( let i = 0; i <= 4; i++ ) {
-		const v = lo + ( ( hi - lo ) * i ) / 4;
-		svg.append( el( 'line', { x1: M.l, x2: W - M.r, y1: y( v ), y2: y( v ), stroke: 0 === v ? 'var(--axis)' : 'var(--grid)', 'stroke-width': 1 } ) );
-		svg.append( el( 'text', { x: M.l - 8, y: y( v ) + 4, 'text-anchor': 'end' }, fmt( v ) ) );
+		const v = ( top * i ) / 4;
+		svg.append( el( 'line', { x1: M.l, x2: W - M.r, y1: y( v ), y2: y( v ), stroke: 0 === i ? 'var(--axis)' : 'var(--grid)' } ) );
+		svg.append( el( 'text', { x: M.l - 8, y: y( v ) + 4, 'text-anchor': 'end' }, tick( v ) ) );
 	}
-	xs.forEach( ( v, i ) => svg.append( el( 'text', { x: x( i ), y: H - M.b + 20, 'text-anchor': 'middle' }, String( v ) ) ) );
-	svg.append( el( 'text', { x: M.l + ( W - M.l - M.r ) / 2, y: H - 6, 'text-anchor': 'middle' }, label[ state.x ] ) );
-	svg.append( el( 'text', { x: M.l, y: M.t - 2 + 0, 'text-anchor': 'start', dy: -2 }, metric ? metric.unit : '' ) );
+	svg.append( el( 'text', { x: M.l, y: M.t - 10 }, unit ) );
+	for ( const p of peers ) {
+		svg.append( el( 'text', { x: x( p ), y: H - M.b + 20, 'text-anchor': 'middle' }, String( p ) ) );
+	}
+	svg.append( el( 'text', { x: M.l + ( W - M.l - M.r ) / 2, y: H - 6, 'text-anchor': 'middle' }, 'Peers' ) );
 
-	// Small sideways offsets keep overlapping whiskers apart.
-	const offset = ( k ) => ( seriesValues.length > 1 ? ( k - ( seriesValues.length - 1 ) / 2 ) * Math.min( 14, step / ( seriesValues.length + 2 ) ) : 0 );
 	const tip = $( 'tip' );
-	const labels = [];
-	series.forEach( ( s, k ) => {
-		const pts = s.points.map( ( p, i ) => ( p ? { ...p, px: x( i ) + offset( k ), py: y( p.median ) } : null ) );
-		const path = pts.filter( Boolean ).map( ( p, i ) => ( i ? 'L' : 'M' ) + p.px + ' ' + p.py ).join( ' ' );
-		svg.append( el( 'path', { d: path, fill: 'none', stroke: s.color, 'stroke-width': 2, 'stroke-linejoin': 'round' } ) );
-		pts.forEach( ( p ) => {
-			if ( ! p ) return;
-			if ( p.max > p.min ) {
-				svg.append( el( 'line', { x1: p.px, x2: p.px, y1: y( p.min ), y2: y( p.max ), stroke: s.color, 'stroke-width': 2, 'stroke-linecap': 'round', opacity: 0.55 } ) );
-			}
-			svg.append( el( 'circle', { cx: p.px, cy: p.py, r: 5, fill: s.color, stroke: 'var(--surface)', 'stroke-width': 2 } ) );
-			const hit = el( 'circle', { cx: p.px, cy: p.py, r: 14, fill: 'transparent' } );
-			hit.addEventListener( 'pointerenter', () => {
-				tip.style.display = 'block';
-				tip.innerHTML = '';
-				const lines = [
-					( 'none' === state.series ? '' : s.name + ' · ' ) + label[ state.x ] + ' ' + p.x,
-					'median ' + fmt( p.median ) + ' ' + ( metric ? metric.unit : '' ),
-					p.n > 1 ? 'range ' + fmt( p.min ) + ' – ' + fmt( p.max ) + ' (' + p.n + ' runs)' : '1 run',
-				];
-				lines.forEach( ( line, i ) => {
-					const div = document.createElement( 'div' );
-					div.textContent = line;
-					if ( 0 === i ) div.style.fontWeight = '600';
-					tip.append( div );
-				} );
-				const box = svg.getBoundingClientRect();
-				const scale = box.width / W;
-				tip.style.left = Math.min( p.px * scale + 12, box.width - 180 ) + 'px';
-				tip.style.top = p.py * scale - 10 + 'px';
-			} );
-			hit.addEventListener( 'pointerleave', () => ( tip.style.display = 'none' ) );
-			svg.append( hit );
+	const hover = ( node, text, px, py ) => {
+		node.addEventListener( 'pointerenter', () => {
+			tip.textContent = text;
+			tip.style.display = 'block';
+			const scale = svg.getBoundingClientRect().width / W;
+			tip.style.left = Math.min( px * scale + 12, svg.getBoundingClientRect().width - 200 ) + 'px';
+			tip.style.top = py * scale - 10 + 'px';
 		} );
-		const last = pts.filter( Boolean ).pop();
-		if ( last && seriesValues.length <= 4 && null !== seriesValues[ 0 ] ) {
-			labels.push( { y: last.py, x: last.px, text: s.name } );
+		node.addEventListener( 'pointerleave', () => ( tip.style.display = 'none' ) );
+	};
+	for ( const line of lines ) {
+		if ( line.points ) {
+			const px = ( p ) => x( p.x ) + line.shift;
+			const d = line.points.map( ( p, i ) => ( i ? 'L' : 'M' ) + px( p ) + ' ' + y( p.y ) ).join( ' ' );
+			svg.append( el( 'path', { d, fill: 'none', stroke: line.color, 'stroke-width': 2, 'stroke-dasharray': line.dash, 'stroke-linejoin': 'round' } ) );
+			for ( const p of line.points ) {
+				svg.append( el( 'circle', { cx: px( p ), cy: y( p.y ), r: 4, fill: line.color, stroke: 'var(--surface)', 'stroke-width': 2 } ) );
+				const hit = el( 'circle', { cx: px( p ), cy: y( p.y ), r: 12, fill: 'transparent' } );
+				hover( hit, line.label + ', ' + p.x + ' peer' + ( 1 === p.x ? '' : 's' ) + ': ' + fmt( p.y ) + ' (median of ' + p.n + ')', px( p ), y( p.y ) );
+				svg.append( hit );
+			}
+		} else {
+			svg.append( el( 'line', { x1: M.l, x2: W - M.r, y1: y( line.flat ), y2: y( line.flat ), stroke: line.color, 'stroke-width': 2, 'stroke-dasharray': line.dash, 'stroke-linecap': 'round' } ) );
+			const hit = el( 'line', { x1: M.l, x2: W - M.r, y1: y( line.flat ), y2: y( line.flat ), stroke: 'transparent', 'stroke-width': 12 } );
+			hover( hit, line.label + ': ' + fmt( line.flat ) + ' per person', M.l + 40, y( line.flat ) );
+			svg.append( hit );
 		}
-	} );
-	// Direct labels at the line ends, nudged apart so they never overlap.
-	labels.sort( ( a, b ) => a.y - b.y );
-	for ( let i = 1; i < labels.length; i++ ) labels[ i ].y = Math.max( labels[ i ].y, labels[ i - 1 ].y + 16 );
-	labels.forEach( ( l ) => svg.append( el( 'text', { x: W - M.r + 14, y: l.y + 4, 'text-anchor': 'start', style: 'fill: var(--text-primary)' }, l.text ) ) );
+	}
 	fig.prepend( svg );
 
 	$( 'legend' ).replaceChildren(
-		...( null === seriesValues[ 0 ] ? [] : series.map( ( s ) => {
-			const span = document.createElement( 'span' );
-			span.style.setProperty( '--swatch', s.color );
-			span.textContent = s.name;
-			return span;
-		} ) )
+		...lines.map( ( line ) => {
+			const item = document.createElement( 'span' );
+			const swatch = el( 'svg', { viewBox: '0 0 28 10', 'aria-hidden': 'true' } );
+			swatch.append( el( 'line', { x1: 1, x2: 27, y1: 5, y2: 5, stroke: line.color, 'stroke-width': 2, 'stroke-dasharray': line.dash, 'stroke-linecap': 'round' } ) );
+			item.append( swatch, document.createTextNode( line.label ) );
+			return item;
+		} )
 	);
-
-	const table = $( 'table' );
-	const head = [ 'none' === state.series ? '' : label[ state.series ], label[ state.x ], 'runs', 'median', 'lowest', 'highest' ];
-	const rows = series.flatMap( ( s ) => s.points.filter( Boolean ).map( ( p ) => [ 'none' === state.series ? '' : s.name, String( p.x ), p.n, fmt( p.median ), fmt( p.min ), fmt( p.max ) ] ) );
-	table.replaceChildren();
-	const tr = ( cells, tag ) => {
-		const row = document.createElement( 'tr' );
-		cells.forEach( ( c ) => {
-			const cell = document.createElement( tag );
-			cell.textContent = c;
-			row.append( cell );
-		} );
-		return row;
-	};
-	table.append( tr( head, 'th' ), ...rows.map( ( r ) => tr( r, 'td' ) ) );
 }
 
+$( 'title' ).textContent = DATA.title;
+$( 'held' ).textContent = DATA.held.length
+	? 'Held at: ' + DATA.held.map( ( [ label, value ] ) => label + ' ' + value ).join( ' · ' )
+	: '';
+for ( const [ metric, name, unit ] of DATA.metrics ) {
+	if ( ! DATA.runs.some( ( run ) => Object.keys( run.values ).some( ( k ) => k.split( '|' )[ 1 ] === metric ) ) ) continue;
+	const option = document.createElement( 'option' );
+	option.value = metric;
+	option.textContent = name + ' (' + unit + ')';
+	$( 'metric' ).append( option );
+}
+$( 'metric' ).addEventListener( 'change', render );
+let resized = null;
+window.addEventListener( 'resize', () => {
+	clearTimeout( resized );
+	resized = setTimeout( render, 100 );
+} );
 render();
 </script>
 </body>

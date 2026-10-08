@@ -18,7 +18,11 @@ import {
 	setupArgs,
 } from '../../benchmarks/host/plan.mjs';
 import { toCsv } from '../../benchmarks/host/export.mjs';
-import { chartData, chartHtml } from '../../benchmarks/host/chart.mjs';
+import {
+	chartData,
+	chartHtml,
+	holdFixed,
+} from '../../benchmarks/host/chart.mjs';
 
 describe( 'post fixture', () => {
 	it.each( [
@@ -423,11 +427,41 @@ describe( 'readers', () => {
 
 	it( 'builds chart data keyed by phase, metric, and side', () => {
 		const data = chartData( [ record ] );
-		expect( data.metrics ).toHaveLength( 1 );
-		expect( data.runs[ 0 ].commit ).toBe( 'abcdef12' );
+		expect( data.runs[ 0 ] ).toMatchObject( {
+			engine: 'de-rtc',
+			peers: 2,
+			commit: 'abcdef12',
+		} );
 		expect(
 			data.runs[ 0 ].values[ 'editing|requests_per_person_min|baseline' ]
 		).toBe( 2 );
+	} );
+
+	it( 'holds every other variable at the plan center, else the most common value', () => {
+		const run = ( engine, peers, postSize, pattern ) => ( {
+			engine,
+			peers,
+			postSize,
+			pattern,
+			values: {},
+		} );
+		const { runs, held } = holdFixed(
+			[
+				run( 'de-rtc', 1, 'medium', 'own-paragraph' ),
+				run( 'de-rtc', 2, 'medium', 'own-paragraph' ),
+				run( 'de-rtc', 2, 'large', 'own-paragraph' ),
+				run( 'de-rtc', 2, 'large', 'own-paragraph' ),
+				run( 'de-rtc', 2, 'medium', 'new-blocks' ),
+			],
+			{ postSize: 'medium' }
+		);
+		// medium is the center (though large is as common); own-paragraph
+		// is the most common pattern among the medium runs.
+		expect( held ).toEqual( [
+			[ 'post size', 'medium' ],
+			[ 'editing pattern', 'own-paragraph' ],
+		] );
+		expect( runs.map( ( r ) => r.peers ) ).toEqual( [ 1, 2 ] );
 	} );
 
 	it( 'embeds the data so it cannot end the script early', () => {

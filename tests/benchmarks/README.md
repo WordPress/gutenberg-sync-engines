@@ -335,9 +335,10 @@ npm run bench -- --suite=sweep --plan=scaling             # run them
 
 The sweep writes to `bench-results/host/<plan>/`: `results.jsonl` (the
 data set), `results.csv` (one row per number, for spreadsheets, pandas, or
-R), `chart.html` (a chart page: pick a metric and what goes along the
-bottom; each dot is the median of the repeats and its bar spans the
-lowest to highest), plus each run's log and full JSON report. It
+R), `chart.html` (a chart page: one drop-down picks the metric; peers go
+along the bottom; a flat dotted line shows the site without the plugin,
+and each engine has a solid line while editing and a dashed one while
+idle; each point is the median of the repeats), plus each run's log and full JSON report. It
 resumes: rerunning the same command skips runs already recorded for the
 same commit. It shuffles the run order with a fixed seed, so slow drift
 on the machine does not line up with one variable. A sweep takes hours,
