@@ -244,12 +244,13 @@ Run the focused checks with `npm run test:js -- --runInBand collaboration-login`
   sync (currently none; all three engines sync titles) so lanes measure real
   defects, not known limitations. Extend the map when an engine's
   documented capabilities change.
-- Before filing anything, check the known-issue families in AGENTS.md —
-  e.g. intent-log escalating (rather than merging) later keystrokes typed
-  into a paragraph a peer is editing while this editor is behind on their
-  change, yjs-server's silent LWW on register conflicts, and the websocket
-  daemon's missing engine-stamp fencing. Finding these again validates the
-  harness; it does not need a new report.
+- Before filing anything, check the known gaps in
+  `docs/engine-comparison.md` ("Known gaps and qualifications"). Two
+  examples: intent-log holds later keystrokes for review when they are
+  typed into a paragraph a peer is editing and this editor has not yet
+  received their change; yjs-server silently lets the later of two
+  field changes win. Finding these again validates the harness; it does not
+  need a new report.
 
 ## Env knobs (spec level)
 

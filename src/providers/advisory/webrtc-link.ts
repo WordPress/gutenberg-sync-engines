@@ -29,7 +29,7 @@ import {
  * poll". No document content ever crosses it, and nothing that arrives on
  * it is trusted for anything but display and a decision to poll sooner.
  * Every correctness property comes from the poll the notice triggers (see
- * docs/plan/advisory-channel.md).
+ * docs/transports.md).
  *
  * Handshake: for each pair of discovered tabs, the one with the LOWER
  * presence token initiates. The offer or answer goes out at once and the

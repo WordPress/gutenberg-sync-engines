@@ -339,7 +339,7 @@ Divergences, each deliberate:
 Compares server sync engines **through the production seam** — the same
 `WP_Sync_Engine::handle_updates()` / `get_updates_since()` calls the polling
 transport makes — so the numbers are the real engine's, not a model's. It
-exists to make the architecture decision (which engine, or keep both) a
+exists to make the architecture decision (which of the three engines to keep) a
 matter of evidence.
 
 Engines are resolved through the framework's registry (the
@@ -358,7 +358,7 @@ registered. This plugin registers three:
   merges each proposal with the ported DE-RTC merge core and announces
   each accepted version; genuine conflicts escalate.
 
-(A fourth engine, `yjs-relay` — a dumb relay whose merge happened in each
+(A fourth engine, the retired `yjs-relay` — a relay whose merge happened in each
 client's CRDT — has been removed; historical numbers for it remain below
 as context.)
 
@@ -774,9 +774,12 @@ them up.
 
 ## Reading the results
 
-Representative run (`mixed-newsroom`, 150 rounds, 4 clients, 8 paragraphs;
-wp-env Docker, PHP 8.3 / MariaDB — quote your own `environment` +
-`calibration` stanzas with any numbers you report):
+Historical representative run, recorded in August 2026 before de-rtc
+moved to announce rows (`mixed-newsroom`, 150 rounds, 4 clients, 8
+paragraphs; wp-env Docker, PHP 8.3 / MariaDB). The de-rtc storage and
+join figures below describe the old full-content rows; today a de-rtc
+row is a small fixed-size notice and a joiner downloads one snapshot. Run the benchmark for current numbers, and quote your own
+`environment` + `calibration` stanzas with any numbers you report:
 
 | Metric              | intent-log       | yjs-relay (retired)    | yjs-server             | de-rtc                 |
 | ------------------- | ---------------- | ---------------------- | ---------------------- | ---------------------- |

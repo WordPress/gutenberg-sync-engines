@@ -12,7 +12,7 @@ import {
 import type { EngineSessionCodec } from '@wordpress/sync';
 
 /**
- * The cadence rules of docs/plan/advisory-channel.md, with the signaling
+ * The cadence rules of docs/transports.md, with the signaling
  * lane and the advisory channel replaced by controllable fakes.
  */
 

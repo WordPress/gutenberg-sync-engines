@@ -472,7 +472,7 @@ if ( ! class_exists( 'WP_HTTP_Polling_Sync_Server' ) ) {
 			 * room's unsaved content belongs to no one still here and is
 			 * reset to the saved post before anything else happens (lineage
 			 * included, so the mismatch check below sees a fresh room). See
-			 * docs/plan/room-lifetime.md.
+			 * docs/transports.md.
 			 */
 			$presence_token = $room_request['presence_token'] ?? '';
 			if ( null !== $this->presence && is_string( $presence_token ) && '' !== $presence_token ) {

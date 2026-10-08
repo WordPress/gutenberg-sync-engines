@@ -1,9 +1,12 @@
-# Sync Foundations — Prototype Spec
+# Intent-log core spec
 
-Status: prototype / investigation (originally branch
-`chriszarate/investigate-rtc-arch`; continued on `chriszarate/try-intent-log`).
-This directory is a standalone, dependency-free library. It is **not** wired
-into the Gutenberg build or npm workspaces, and nothing here is a shipping API.
+Status: this directory is the shipping intent-log core. It is kept
+identical in JavaScript and PHP (`includes/engines/intent-log/`), checked
+against shared JSON test vectors, and changed only in both at once. It began as a prototype (branch
+`chriszarate/investigate-rtc-arch`, continued on
+`chriszarate/try-intent-log`), and this spec keeps that vocabulary. It is
+a standalone, dependency-free library: the modules run under Node with no
+build step, and the plugin bundle imports them.
 
 ## Purpose
 
@@ -182,7 +185,7 @@ prevents.
 
 ## The batch planner (shared client/server core)
 
-`planBatch( units, log, docAt )` in `src/rebase.js` is a pure function that
+`planBatch( units, log, docAt )` in `rebase.js` is a pure function that
 plans one client's batch against a log: frame checks, rebase, rule-4 unit
 settlement, and the apply phase. The server commits a plan at ingest; a
 caught-up client runs the SAME function over its verbatim log copy to
@@ -191,7 +194,7 @@ therefore by construction, and the simulator's prediction oracle guards the
 construction (any server-only state or client-side shortcut surfaces as a
 mismatch). The PHP twin must mirror exactly this function.
 
-Client model (`src/client.js`): a replica keeps `log` (observed prefix),
+Client model (`client.js`): a replica keeps `log` (observed prefix),
 `baseDoc` (acked state), and `outbox` (pending intents exactly as authored —
 the server always receives originals and re-derives transforms itself). On
 every catch-up it replans; escalated/voided pending intents drop out of the
@@ -248,7 +251,7 @@ concurrent merge into a DIFFERENT survivor, or any other identity-addressed
 intent on a merge-absorbed block, escalates (`target-deleted`): the
 absorption must never silently swallow another actor's work.
 
-`ESCALATION_REASONS` in `src/rebase.js` is the closed set of reasons; the
+`ESCALATION_REASONS` in `rebase.js` is the closed set of reasons; the
 escalation-soundness oracle rejects anything else.
 
 ## Server policy escalations (outside the planner)

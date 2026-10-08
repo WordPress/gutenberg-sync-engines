@@ -1,54 +1,31 @@
 # Docs
 
-Start here if you want to:
+About an hour's reading, in this order.
 
-- **See the proposal in one page** → [data-flow.md](data-flow.md) —
-  how an edit reaches other editors in the Gutenberg trunk experiment
-  and under each engine and transport here, from the block editor's
-  side and from the network and security side.
-- **Pick an engine or transport** →
-  [engine-comparison.md](engine-comparison.md) — what each engine is,
-  how they score against the principles, feature parity, resource
-  shapes, and each engine's known gaps.
-- **Understand the rules the engines are judged by** →
-  [principles.md](principles.md) — the seven acceptance criteria
-  (P1–P7).
-- **See what actually happens on the wire** →
-  [scenarios.md](scenarios.md) — seven concrete situations (solo
-  typing, same-paragraph conflicts, machine writes, deep lag…) traced
-  through all three engines.
-- **Compare transports** → [transports.md](transports.md) — polling vs
-  server-sent events vs websocket, and the operational notes for each.
-- **Run the receive stream from the sync daemon** →
-  [sse-daemon.md](sse-daemon.md) — how the `sse-daemon` transport
-  shares the daemon with the websocket transport, and where it differs
-  from `sse`.
-- **Understand de-rtc's relationship to its upstream design** →
-  [de-rtc-fidelity.md](de-rtc-fidelity.md) — the audit of our port
-  against the Distributed Editing vision.
-- **See what we'd change with hindsight** →
-  [architecture-decisions.md](architecture-decisions.md) — four early
-  decisions worth revisiting, and what each change would cost.
-- **Show presence on a slow connection** →
-  [awareness-high-latency.md](awareness-high-latency.md) — the slow
-  awareness mode: which block each editor is in, once per interval, as an
-  outline and a badge instead of live cursors.
-- **Look up a term** → [glossary.md](glossary.md) — the project's own
-  vocabulary in plain words.
-- **Understand the entity sync integration** →
-  [entity-sync-adapter.md](entity-sync-adapter.md) — the default
-  adapter, its checks, and the remaining migration limits.
-- **Update the bundled Gutenberg framework** →
-  [gutenberg-subtree.md](gutenberg-subtree.md) — setup, rebasing,
-  updating the pin, and release packaging.
-- **See what we plan to build next** → [plan/](plan/README.md) — one
-  file per bug or feature, written in plain language with an example
-  and a way to tell when it is done.
+**Orientation**
 
-The docs above describe how things work today; `plan/` describes what
-we intend to change, and `docs/plan/history.md` says why things are the way
-they are. Notable shipped changes are recorded in `CHANGELOG.md`. To
-regenerate every number behind these docs on YOUR hardware, run
-`npm run bench -- --suite=engines` against a running tests env (see
-`tests/benchmarks/README.md`; plain `npm run bench` is the host cost
-report — what the plugin adds to a server).
+- [engine-comparison.md](engine-comparison.md) — which engine to pick,
+  how the three score against the principles, what happens in seven
+  situations, cost, and each engine's known gaps.
+- [data-flow.md](data-flow.md) — how one edit reaches the other
+  editors, in the Gutenberg experiment and under each engine.
+- [transports.md](transports.md) — how updates move: polling and the
+  advisory channel, server-sent events, the sync daemon's WebSocket,
+  what happens to unsaved changes, presence on slow connections, and
+  what a host must provide.
+- [protocol.md](protocol.md) — the routes, the room envelope, the row
+  types per engine, who may do what, and how to add an engine.
+- [storage.md](storage.md) — the two tables, the keys each engine
+  writes, the object cache, presence, and the lifecycle commands.
+
+**Rules and reference**
+
+- [principles.md](principles.md) — the seven principles the engines are
+  judged by, and the early decisions still open.
+- [wontfix.md](wontfix.md) — what we decided not to do, and why.
+- [glossary.md](glossary.md) — the project's own words, in plain words.
+
+The pages carry no measured numbers; `npm run bench` produces them on
+your hardware. Notable shipped changes are in `CHANGELOG.md`, how to
+work in the repo is in `AGENTS.md`, and open work lives in GitHub
+Issues (`CONTRIBUTING.md` has the filing rules).
