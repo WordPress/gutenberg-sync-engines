@@ -143,7 +143,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
 		 * Option holding the unsaved-changes policy: `discard` (the saved post
 		 * is the only durable copy; a room nobody is in is reset to it) or
 		 * `keep` (rooms live on as a shared working copy). See
-		 * docs/plan/room-lifetime.md.
+		 * docs/room-lifetime.md.
 		 *
 		 * @since 0.0.1
 		 * @var string

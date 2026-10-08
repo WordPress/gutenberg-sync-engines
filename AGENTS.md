@@ -115,7 +115,7 @@ This plugin provides:
   For the first second after a room registers the tab receives over
   ordinary requests (`SSE_SETTLE_MS`), so the rooms registering one by
   one at load open ONE stream, not one per room. Rules and failure
-  cases: `docs/plan/advisory-channel.md`.
+  cases: `docs/advisory-channel.md`.
   The websocket link can end at a host's OWN relay instead of the
   daemon: with a `WP_SYNC_WEBSOCKET_ACCESS_TOKEN_SECRET` configured
   (constant, env, or the `wp_sync_websocket_access_token_secret` filter),
@@ -147,7 +147,7 @@ This plugin provides:
   The same presence lane decides a per-post room's LIFETIME under the
   "Unsaved changes" setting (default: an empty room is reset to the
   saved post; the room's generation token tells clients to start over).
-  Reasoning and the switch: `docs/plan/room-lifetime.md`.
+  Reasoning and the switch: `docs/room-lifetime.md`.
 - **Storage:** `WP_Sync_Table_Storage`, substituted for the framework's
   post-meta default through the `__unstable_wp_sync_storage` filter. Rooms
   live in two plugin-owned tables, `{$prefix}sync_updates` (the update log;

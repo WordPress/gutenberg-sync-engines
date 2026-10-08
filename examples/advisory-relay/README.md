@@ -6,7 +6,7 @@ or already run WebSocket infrastructure elsewhere. It runs anywhere
 Node 20+ runs, needs no database and no connection to WordPress, and is
 short enough to copy or port to another language. The message formats
 and the access token it checks are described in
-[`docs/plan/advisory-channel.md`](../../docs/plan/advisory-channel.md)
+[`docs/advisory-channel.md`](../../docs/advisory-channel.md)
 under "Bring your own relay".
 
 What it does: editor tabs on short polling open one socket each. The

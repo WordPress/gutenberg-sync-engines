@@ -1,15 +1,28 @@
 # Docs
 
-Start here if you want to:
+Start with the page for what you want to do. Every page in this folder
+is listed here.
 
-- **See the proposal in one page** → [data-flow.md](data-flow.md) —
-  how an edit reaches other editors in the Gutenberg trunk experiment
-  and under each engine and transport here, from the block editor's
-  side and from the network and security side.
+## Use it
+
 - **Pick an engine or transport** →
   [engine-comparison.md](engine-comparison.md) — what each engine is,
   how they score against the principles, feature parity, resource
   shapes, and each engine's known gaps.
+
+## Run it
+
+- **Compare transports** → [transports.md](transports.md) — polling vs
+  server-sent events vs websocket, and the operational notes for each.
+- **Serve the event stream from the sync daemon** →
+  [sse-daemon.md](sse-daemon.md) — how the `sse-daemon` transport
+  works and how it differs from `sse`.
+
+## Understand it
+
+- **See how an edit travels, on one page** → [data-flow.md](data-flow.md) —
+  how an edit reaches other editors in the Gutenberg trunk experiment
+  and under each engine and transport here.
 - **Understand the rules the engines are judged by** →
   [principles.md](principles.md) — the seven acceptance criteria
   (P1–P7).
@@ -17,43 +30,69 @@ Start here if you want to:
   [scenarios.md](scenarios.md) — seven concrete situations (solo
   typing, same-paragraph conflicts, machine writes, deep lag…) traced
   through all three engines.
-- **Compare transports** → [transports.md](transports.md) — polling vs
-  server-sent events vs websocket, and the operational notes for each.
-- **Run the receive stream from the sync daemon** →
-  [sse-daemon.md](sse-daemon.md) — how the `sse-daemon` transport
-  shares the daemon with the websocket transport, and where it differs
-  from `sse`.
+- **Understand the advisory channel** →
+  [advisory-channel.md](advisory-channel.md) — the small extra connection
+  that tells open tabs when to check for new edits: its rules, failure
+  cases, and how to bring your own relay.
+- **Know what happens to unsaved changes** →
+  [room-lifetime.md](room-lifetime.md) — the "Unsaved changes" setting
+  and how a shared editing session is reset.
+- **Show who is where on a slow connection** →
+  [awareness-high-latency.md](awareness-high-latency.md) — each editor
+  reports which block they are in, once per interval, shown as an
+  outline and a badge instead of live cursors.
 - **Understand de-rtc's relationship to its upstream design** →
   [de-rtc-fidelity.md](de-rtc-fidelity.md) — the audit of our port
   against the Distributed Editing vision.
 - **See what we'd change with hindsight** →
   [architecture-decisions.md](architecture-decisions.md) — four early
   decisions worth revisiting, and what each change would cost.
-- **Show presence on a slow connection** →
-  [awareness-high-latency.md](awareness-high-latency.md) — the slow
-  awareness mode: which block each editor is in, once per interval, as an
-  outline and a badge instead of live cursors.
 - **Look up a term** → [glossary.md](glossary.md) — the project's own
   vocabulary in plain words.
-- **Understand the entity sync integration** →
+
+## Change it
+
+- **Read the intent-log spec** →
+  [../src/engines/intent-log/SPEC.md](../src/engines/intent-log/SPEC.md).
+- **Measure it** → [../tests/benchmarks/README.md](../tests/benchmarks/README.md)
+  (the host cost report and the tests that compare engines),
+  [../tests/benchmarks/transport/README.md](../tests/benchmarks/transport/README.md)
+  (how long an edit takes to show up, per transport),
+  [../tests/fuzzer/README.md](../tests/fuzzer/README.md) (random-input
+  browser tests), and
+  [../tests/debugging/README.md](../tests/debugging/README.md) (long-run
+  and session-replay tools).
+- **Run a relay of your own** →
+  [../examples/advisory-relay/README.md](../examples/advisory-relay/README.md).
+
+## Maintain the framework
+
+- **Understand how the editor's data reaches the engines** →
   [entity-sync-adapter.md](entity-sync-adapter.md) — the default
-  adapter, its checks, and the remaining migration limits.
+  adapter, its checks, and what still does not work.
 - **Update the bundled Gutenberg framework** →
   [gutenberg-subtree.md](gutenberg-subtree.md) — setup, rebasing,
   updating the pin, and release packaging.
-- **See what we plan to build next** → [plan/](plan/README.md) — one
-  file per bug or feature, written in plain language with an example
-  and a way to tell when it is done.
+
+## How we work
+
+- **File or shape an issue** → [plan/README.md](plan/README.md) — the
+  rules, the labels, and the flow. The work itself lives in GitHub
+  Issues.
+- **Learn why the code is shaped this way** →
+  [plan/history.md](plan/history.md) — decisions that are closed and
+  dead ends not worth retrying.
+- **See what we set aside** → [plan/wontfix.md](plan/wontfix.md) —
+  ideas we looked at and why they wait.
 - **Read the latest architecture and code review** →
   [review/2026-10-07-architecture-review.md](review/2026-10-07-architecture-review.md)
   — five questions answered against the code at one commit, with the
   defects found, ranked recommendations, and the five detailed reports
   beside it.
 
-The docs above describe how things work today; `plan/` describes what
-we intend to change, and `docs/plan/history.md` says why things are the way
-they are. Notable shipped changes are recorded in `CHANGELOG.md`. To
-regenerate every number behind these docs on YOUR hardware, run
-`npm run bench -- --suite=engines` against a running tests env (see
-`tests/benchmarks/README.md`; plain `npm run bench` is the host cost
-report — what the plugin adds to a server).
+The pages here describe how things work today. Notable shipped changes
+are recorded in `CHANGELOG.md`, and `AGENTS.md` says how to work in the
+repo. The pages carry no measured numbers: to produce them on your own
+hardware, run `npm run bench` (what the plugin adds to a server) or
+`npm run bench -- --suite=engines` (the engine comparison) against
+a running tests env; see `tests/benchmarks/README.md`.

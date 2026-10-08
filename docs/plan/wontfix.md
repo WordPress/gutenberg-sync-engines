@@ -98,7 +98,7 @@ each change durable sooner. The cost is one request per typing burst
 while alone.
 
 **Why it is waiting:** holding is the shape the "discard" unsaved-changes
-policy needs ([room-lifetime.md](room-lifetime.md)), where a room follows
+policy needs ([room-lifetime.md](../room-lifetime.md)), where a room follows
 saves and unsaved work is exactly what the editor's own warning says it
 is. Reviewers were right that sending is simpler; we chose holding on
 purpose. If the policy flips to "keep", take the simplification in the

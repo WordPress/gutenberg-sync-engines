@@ -1,7 +1,10 @@
-# Plan: a base transport, an advisory channel, and discovery on the heartbeat
+# The advisory channel
 
-Status: implemented on branch `transport-layers` (2026-09-02, revised 2026-09-03). This file
-keeps the reasoning; the code is the reference for details.
+How the tabs editing one post tell each other who is present and when
+to poll, beside the short-polling transport. Shipped September 2026;
+this file keeps the reasoning and the rules, and the code is the
+reference for details. The code pointers are at the end, because they
+go stale first.
 
 ## The idea
 
@@ -192,7 +195,7 @@ A lone tab holds its updates until company arrives. Two cases matter:
     while the room never saw the edits, and the reload bootstraps from
     the stale room over the freshly loaded post. So the queue is flushed
     BEFORE any save (the entity sync adapter's `beforeSave` step, see
-    [entity-sync-adapter.md](../entity-sync-adapter.md)), and when the
+    [entity-sync-adapter.md](entity-sync-adapter.md)), and when the
     tab goes hidden (a hidden tab cannot answer a joiner for up to
     120 s). An unsaved edit lost on reload is the editor's own
     unsaved-changes warning doing its job.
@@ -201,112 +204,12 @@ Cursors and selections stay on the base transport by decision: over the
 channel they would point at content positions the receiver has not yet
 polled for. Rethinking awareness for low-latency lanes is out of scope.
 The one exception is slow awareness's block name (`gseBlock`, see
-[awareness-high-latency.md](../awareness-high-latency.md)): it names a
+[awareness-high-latency.md](awareness-high-latency.md)): it names a
 block rather than a position, and a receiver that does not hold that
 block yet shows nothing until it arrives, so it rides the presence lane.
 
 What happens to the room when the last editor leaves is a separate
 switch, [room-lifetime.md](room-lifetime.md).
-
-## What exists now
-
-Server (`includes/class-gutenberg-sync-engines-advisory-presence.php`):
-
--   Per-tab presence tokens in a transient per room, or in the backend
-    the `wp_sync_tab_list_backend` filter returns: with the Presence API
-    plugin installed, one `gsetab-` row per tab in its table
-    (`WP_Sync_Presence_API_Tab_List_Backend`). Never in sync storage:
-    presence reads must not create a room's storage post.
-    Stamped at editor page render, refreshed on every heartbeat, removed
-    by a leave beacon on `pagehide`, expired after 300 s (a hidden tab's
-    heartbeat slows to 120 s, so the TTL must span two beats).
--   The probe answer (`answer_probe`), shared by the heartbeat filter
-    (`heartbeat_received`) and the poll route: records the token,
-    stores outgoing handshake messages in per-recipient mailboxes (size
-    and count capped, short expiry), and answers with the other tokens in
-    the room, whether anyone else is present (tokens plus live sync
-    awareness), and this tab's mailbox. Because every answer hands out
-    the peers' tokens, a token works only for the user it was first
-    recorded for: a probe, leave, or sync request presenting another
-    user's token is ignored.
--   Page-render settings under `window._gutenbergSyncEnginesSettings
-.advisory`: room, token, whether others are present, the STUN list
-    (filterable), the peer cap, and the enabled flag.
-
-Client:
-
--   `src/providers/advisory/signaling.ts`: the probe and mailbox, with
-    two carriers: the heartbeat, and the sync poll itself (the request's
-    `advisory` field, answered alongside the rooms) whenever the loop is
-    active, which makes the handshake about two seconds at the company
-    cadence. Discovered peers, "others present", send/receive handshake
-    messages, the leave beacon.
--   `src/providers/advisory/channel.ts`: the channel the polling manager
-    sees, whichever link is underneath: the presence overlay, the notice
-    and coverage listeners, the presence loop, the on/off switch. It picks
-    the link from the page settings (`link.ts` is the seam).
--   `src/providers/advisory/webrtc-link.ts`: the WebRTC mesh. One peer
-    connection and one data channel per discovered tab. The tab with the
-    lower token initiates; the offer or answer goes out at once and
-    candidates trickle behind it on the next carrier, buffered by the
-    receiver if they overtake the description. Messages:
-    `hello` (client id), `presence`, `announce`, `bye`. Coverage is
-    computed from discovered tokens and the last awareness map.
--   `src/providers/advisory/websocket-link.ts`: one socket per tab to the
-    sync daemon — or to a host's own relay in access-token mode ("Bring your
-    own relay" below) — opened with the same token handshake as the
-    websocket transport (the socket URL rides the page settings under
-    `websocket-advisory`). Frames: the tab follows its post's room
-    (`{type: 'advisory', room, client_id, presence_token}`), sends its
-    presence on the same frame when it changes, and announces writes
-    (`announce: <room>` or `*`); the daemon answers every roster change
-    with the room's full roster (client id, token, latest presence per
-    follower) and relays notices to the other followers. Coverage is the
-    roster: every discovered token and every client id in the last
-    awareness map must be on it. A dropped socket reconnects with
-    backoff and replays the tab's presence; nothing on the daemon side
-    is written to storage, and a dropped advisory socket is NOT a closed
-    tab (the leave beacon and awareness stay the polling transport's).
--   `includes/transports/websocket/class-wp-websocket-sync-server.php`:
-    the daemon's advisory mode (`handle_advisory_message`): a follower is
-    permission-checked like a sync subscriber and bound to one client id;
-    the once-a-second room scan now reads one head cursor per room and
-    tells followers when rows landed off the channel (a script, WP-CLI, a
-    websocket-transport peer), once per batch.
--   `src/providers/http-polling/polling-manager.ts`: the cadence rules
-    above, the held queues (released by company, a flush before a save
-    through the entity sync adapter's `beforeSave` in
-    `src/entity-sync/adapter.ts`, or the tab going hidden; codecs declaring
-    `sendsWhileAlone` are exempt), the announce-after-send, the base
-    presence overlay (per client, on top of the poll response's copy),
-    and the stream disable hook.
--   Settings → Collaboration: one "Transport" list whose entries are
-    (transport, advisory channel) pairs — polling; polling with a
-    WebRTC advisory channel (default); polling with a WebSocket advisory
-    channel; server-sent events; server-sent events from the sync
-    daemon; WebSocket — so the conflicting pairs cannot be chosen. SSE,
-    SSE from the daemon, and WebSocket store WebRTC as the fallback
-    channel. The stored options stay `gutenberg_sync_engines_transport`
-    and `gutenberg_sync_engines_advisory_channel`. Two server URL fields
-    (transport server, advisory server) with "Test" buttons show only
-    for the entries that need them; the polling interval only for the
-    polling entries.
--   `src/providers/websocket/websocket-manager.ts`: the websocket
-    transport as a preferred transport. While its socket is open it
-    moves everything; whenever it is not (token refused, daemon
-    unreachable, socket dropped) each room is PARKED with the polling
-    manager at the cursor the socket had reached, and reclaimed at the
-    cursor polling reached when the socket reopens, carrying whatever
-    polling never sent (`pollingManager.releaseRoom`). One lane serves a
-    room at a time, so nothing is replayed across the handoff. A
-    connection attempt that has not opened after 5 s parks the rooms
-    too, while it keeps trying: a black-holed port can take the browser
-    tens of seconds to give up on. If the socket drops while a reclaim
-    is waiting on polling, the room goes back to polling at the cursor
-    polling reached instead of binding to the dead socket.
--   `src/engines/de-rtc/session.ts`: announces after a commit lands
-    through the autosave lane, since those rows never pass through the
-    polling manager.
 
 ## Bring your own relay
 
@@ -569,3 +472,103 @@ uses it to poll sooner and to show presence faster.**
     test secret, and the spec activates the
     `tests/e2e/plugins/advisory-relay-access-token.php` fixture, which
     configures that secret and points the socket URL at the relay).
+
+## What exists now
+
+Server (`includes/class-gutenberg-sync-engines-advisory-presence.php`):
+
+-   Per-tab presence tokens in a transient per room, or in the backend
+    the `wp_sync_tab_list_backend` filter returns: with the Presence API
+    plugin installed, one `gsetab-` row per tab in its table
+    (`WP_Sync_Presence_API_Tab_List_Backend`). Never in sync storage:
+    presence reads must not create a room's storage post.
+    Stamped at editor page render, refreshed on every heartbeat, removed
+    by a leave beacon on `pagehide`, expired after 300 s (a hidden tab's
+    heartbeat slows to 120 s, so the TTL must span two beats).
+-   The probe answer (`answer_probe`), shared by the heartbeat filter
+    (`heartbeat_received`) and the poll route: records the token,
+    stores outgoing handshake messages in per-recipient mailboxes (size
+    and count capped, short expiry), and answers with the other tokens in
+    the room, whether anyone else is present (tokens plus live sync
+    awareness), and this tab's mailbox. Because every answer hands out
+    the peers' tokens, a token works only for the user it was first
+    recorded for: a probe, leave, or sync request presenting another
+    user's token is ignored.
+-   Page-render settings under `window._gutenbergSyncEnginesSettings
+.advisory`: room, token, whether others are present, the STUN list
+    (filterable), the peer cap, and the enabled flag.
+
+Client:
+
+-   `src/providers/advisory/signaling.ts`: the probe and mailbox, with
+    two carriers: the heartbeat, and the sync poll itself (the request's
+    `advisory` field, answered alongside the rooms) whenever the loop is
+    active, which makes the handshake about two seconds at the company
+    cadence. Discovered peers, "others present", send/receive handshake
+    messages, the leave beacon.
+-   `src/providers/advisory/channel.ts`: the channel the polling manager
+    sees, whichever link is underneath: the presence overlay, the notice
+    and coverage listeners, the presence loop, the on/off switch. It picks
+    the link from the page settings (`link.ts` is the seam).
+-   `src/providers/advisory/webrtc-link.ts`: the WebRTC mesh. One peer
+    connection and one data channel per discovered tab. The tab with the
+    lower token initiates; the offer or answer goes out at once and
+    candidates trickle behind it on the next carrier, buffered by the
+    receiver if they overtake the description. Messages:
+    `hello` (client id), `presence`, `announce`, `bye`. Coverage is
+    computed from discovered tokens and the last awareness map.
+-   `src/providers/advisory/websocket-link.ts`: one socket per tab to the
+    sync daemon — or to a host's own relay in access-token mode ("Bring your
+    own relay" below) — opened with the same token handshake as the
+    websocket transport (the socket URL rides the page settings under
+    `websocket-advisory`). Frames: the tab follows its post's room
+    (`{type: 'advisory', room, client_id, presence_token}`), sends its
+    presence on the same frame when it changes, and announces writes
+    (`announce: <room>` or `*`); the daemon answers every roster change
+    with the room's full roster (client id, token, latest presence per
+    follower) and relays notices to the other followers. Coverage is the
+    roster: every discovered token and every client id in the last
+    awareness map must be on it. A dropped socket reconnects with
+    backoff and replays the tab's presence; nothing on the daemon side
+    is written to storage, and a dropped advisory socket is NOT a closed
+    tab (the leave beacon and awareness stay the polling transport's).
+-   `includes/transports/websocket/class-wp-websocket-sync-server.php`:
+    the daemon's advisory mode (`handle_advisory_message`): a follower is
+    permission-checked like a sync subscriber and bound to one client id;
+    the once-a-second room scan now reads one head cursor per room and
+    tells followers when rows landed off the channel (a script, WP-CLI, a
+    websocket-transport peer), once per batch.
+-   `src/providers/http-polling/polling-manager.ts`: the cadence rules
+    above, the held queues (released by company, a flush before a save
+    through the entity sync adapter's `beforeSave` in
+    `src/entity-sync/adapter.ts`, or the tab going hidden; codecs declaring
+    `sendsWhileAlone` are exempt), the announce-after-send, the base
+    presence overlay (per client, on top of the poll response's copy),
+    and the stream disable hook.
+-   Settings → Collaboration: one "Transport" list whose entries are
+    (transport, advisory channel) pairs — polling; polling with a
+    WebRTC advisory channel (default); polling with a WebSocket advisory
+    channel; server-sent events; server-sent events from the sync
+    daemon; WebSocket — so the conflicting pairs cannot be chosen. SSE,
+    SSE from the daemon, and WebSocket store WebRTC as the fallback
+    channel. The stored options stay `gutenberg_sync_engines_transport`
+    and `gutenberg_sync_engines_advisory_channel`. Two server URL fields
+    (transport server, advisory server) with "Test" buttons show only
+    for the entries that need them; the polling interval only for the
+    polling entries.
+-   `src/providers/websocket/websocket-manager.ts`: the websocket
+    transport as a preferred transport. While its socket is open it
+    moves everything; whenever it is not (token refused, daemon
+    unreachable, socket dropped) each room is PARKED with the polling
+    manager at the cursor the socket had reached, and reclaimed at the
+    cursor polling reached when the socket reopens, carrying whatever
+    polling never sent (`pollingManager.releaseRoom`). One lane serves a
+    room at a time, so nothing is replayed across the handoff. A
+    connection attempt that has not opened after 5 s parks the rooms
+    too, while it keeps trying: a black-holed port can take the browser
+    tens of seconds to give up on. If the socket drops while a reclaim
+    is waiting on polling, the room goes back to polling at the cursor
+    polling reached instead of binding to the dead socket.
+-   `src/engines/de-rtc/session.ts`: announces after a commit lands
+    through the autosave lane, since those rows never pass through the
+    polling manager.

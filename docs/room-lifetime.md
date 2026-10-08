@@ -1,9 +1,9 @@
-# Plan: what happens to unsaved changes when the last editor leaves
+# What happens to unsaved changes when the last editor leaves
 
-Status: implemented on branch `room-lifecycle` (2026-09-08), with the
-policy as one switch. This file keeps the reasoning; the code is the
-reference for details. The product question itself is still open on the
-P2 thread "How should RTC treat unsaved changes?" (2026-09-04).
+Shipped September 2026, with the policy as one switch. This file keeps
+the reasoning; the code is the reference for details. The product
+question itself is still open on the P2 thread "How should RTC treat
+unsaved changes?" (2026-09-04).
 
 ## The question
 
@@ -40,7 +40,7 @@ The default is "discard" because it honors the warning the editor already
 shows, matches the DE-RTC engine's design (saves are the sync point), and
 adds no interface. Whether to flip it is the P2's decision, not the
 plugin's; see the P2 thread for the arguments on each side and
-[wontfix.md](wontfix.md) for why solo edits are held rather than sent.
+[wontfix.md](plan/wontfix.md) for why solo edits are held rather than sent.
 
 ## The machinery, engine-neutral
 
@@ -86,7 +86,7 @@ from its stale canonical and served a reloading tab nothing.
 ## How it composes with the held solo queue
 
 A lone tab holds its edits in the browser and flushes them before a save
-and when the tab goes hidden (docs/plan/advisory-channel.md). Under
+and when the tab goes hidden (docs/advisory-channel.md). Under
 "discard" the two rules meet cleanly:
 
 - Reload or close: hiding fires first and starts the flush, `pagehide`
@@ -111,7 +111,12 @@ mechanism; a button is not), a warning to a joining solo editor when the
 working copy is ahead of the saved post (needs one engine SPI method,
 "is this room ahead of the saved post"), and an unload warning that fires
 only for unsynced changes (a framework change). Those follow if the
-decision flips; none is needed under "discard".
+decision flips; none is needed under "discard". The P2 thread's mockups
+of that surface are in `docs/images/`: a "Changes are synced but not
+saved" warning with a "Revert to saved version" button
+(`shared-draft-warning.png`), the same button without the warning
+(`shared-draft-controls.png`), and a shared draft holding a note another
+editor left behind (`shared-draft-controls-abandoned-edit.png`).
 
 ## Tests
 

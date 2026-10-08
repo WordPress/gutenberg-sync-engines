@@ -191,7 +191,7 @@ release, which the release script generates from the commit history.
     `gutenberg_sync_engines_advisory_enabled`,
     `gutenberg_sync_engines_advisory_ice_servers`,
     `gutenberg_sync_engines_advisory_max_peers`; console:
-    `wpSync.advisory()`. See `docs/plan/advisory-channel.md`.
+    `wpSync.advisory()`. See `docs/advisory-channel.md`.
 
 -   Settings → Collaboration: one "Transport" list replaces the transport
     select. Its entries are polling, polling with a WebRTC advisory
@@ -219,7 +219,7 @@ release, which the release script generates from the commit history.
     and the `wp_sync_websocket_url` filter still wins) and the WebSocket
     advisory server (a relay of your own; empty means the sync daemon).
     `examples/advisory-relay/` is
-    a reference relay to run or port; `docs/plan/advisory-channel.md`
+    a reference relay to run or port; `docs/advisory-channel.md`
     documents the access token and the message formats
     ([#92](https://github.com/WordPress/gutenberg-sync-engines/issues/92)).
 
@@ -252,7 +252,7 @@ sync-server`), and the daemon relays presence and "go and poll"
     shared copy was reset under it starts over from the saved post
     instead of failing silently. Filter:
     `gutenberg_sync_engines_room_reset_when_empty`; action:
-    `gutenberg_sync_engines_room_reset`. See `docs/plan/room-lifetime.md`.
+    `gutenberg_sync_engines_room_reset`. See `docs/room-lifetime.md`.
 
 ### Changed
 

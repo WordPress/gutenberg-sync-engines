@@ -55,7 +55,7 @@ head).
 
 ## Polling cadence
 
-The loop is driven by the cadence rules in `docs/plan/advisory-channel.md`
+The loop is driven by the cadence rules in `docs/advisory-channel.md`
 (constants in `config.ts`):
 
 - **Alone** (the presence lane says nobody else is in this post's room):
@@ -159,7 +159,7 @@ again so the engine client bootstraps from the fresh genesis (the room was
 reset under it). The post's room requests also carry this tab's
 `presence_token`: the server treats a tab's first request as its join and,
 under the default unsaved-changes policy, resets a per-post room nobody
-else is in before serving it. See `docs/plan/room-lifetime.md`.
+else is in before serving it. See `docs/room-lifetime.md`.
 
 ## Awareness
 

@@ -21,10 +21,10 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Advisory_Presence' ) ) {
 	 * whether anyone else is present (tokens plus live sync awareness), and
 	 * delivers the handshake messages addressed to this tab. The transports
 	 * use the answer to decide when to go quiet, when to poll on a timer,
-	 * and when to poll only on demand (see docs/plan/advisory-channel.md).
+	 * and when to poll only on demand (see docs/advisory-channel.md).
 	 *
 	 * The tokens also decide a per-post room's LIFETIME (the "unsaved
-	 * changes" policy, docs/plan/room-lifetime.md). Under the default
+	 * changes" policy, docs/room-lifetime.md). Under the default
 	 * policy the saved post is the only durable copy: a room is reset to a
 	 * fresh genesis from the saved post — its unsaved edits discarded,
 	 * exactly as the editor's unsaved-changes warning promised — when the

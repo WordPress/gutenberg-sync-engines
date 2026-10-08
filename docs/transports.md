@@ -42,7 +42,7 @@ meanwhile, and short polling is always the fallback. The websocket
 transport hands its rooms to short polling whenever its socket is down
 and takes them back, at the cursor polling reached, when it reopens. The
 reasoning, the rules, and the failure cases are in
-[plan/advisory-channel.md](plan/advisory-channel.md).
+[advisory-channel.md](advisory-channel.md).
 
 **What happens to unsaved changes when the last editor leaves** is a
 setting (Settings → Collaboration → Unsaved changes), applied above the
@@ -52,7 +52,7 @@ per-post room nobody is in is reset to the saved post, at once when the
 last tab leaves or when a new tab arrives and finds nobody there. Every
 room response carries a generation token so a tab whose room was reset
 under it starts over. The alternative keeps rooms as a shared working
-copy. See [plan/room-lifetime.md](plan/room-lifetime.md).
+copy. See [room-lifetime.md](room-lifetime.md).
 
 Transport latency is engine-independent (the HTTP rows replicate within
 noise under intent-log). One caveat on the axis itself: "engines run
@@ -108,7 +108,7 @@ the plugin's daemon. With a `WP_SYNC_WEBSOCKET_ACCESS_TOKEN_SECRET`
 configured, each tab carries a signed, two-minute access token (a JSON Web
 Token, HS256) that a relay checks with the shared secret and no call
 to WordPress; `examples/advisory-relay/` is a Node relay a host can run
-as is or port, and `docs/plan/advisory-channel.md` ("Bring your own
+as is or port, and `docs/advisory-channel.md` ("Bring your own
 relay") lists the access token claims and the message formats. The daemon
 accepts access tokens too. The websocket *transport* cannot be relayed this
 way: it does engine work and writes rows.
