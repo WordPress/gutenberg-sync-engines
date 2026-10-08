@@ -264,10 +264,23 @@ describe( 'result lines', () => {
 			min: 800,
 			max: 1000,
 		} );
-		// Equal bounds are a plain value.
+		// Bounds equal once rounded are a plain value.
 		expect( find( 'db_queries_per_person_min' ) ).not.toHaveProperty(
 			'min'
 		);
+		expect(
+			spanResults( 'editing', {
+				...span,
+				server: {
+					...span.server,
+					workerShare: { min: 0.03602201, max: 0.03602204 },
+				},
+			} ).find(
+				( r ) =>
+					r.metric === 'php_worker_share_per_person' &&
+					r.side === 'sync'
+			)
+		).not.toHaveProperty( 'min' );
 		expect( find( 'db_queries_per_php_request' ).value ).toBe( 20 );
 	} );
 

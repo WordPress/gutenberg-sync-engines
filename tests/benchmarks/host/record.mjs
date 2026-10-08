@@ -223,7 +223,7 @@ function pushRow( rows, phase, side, definition, value ) {
 		value: round( point ),
 		unit: definition.unit,
 		kind: definition.kind,
-		...( range && range.min !== range.max
+		...( range && round( range.min ) !== round( range.max )
 			? { min: round( range.min ), max: round( range.max ) }
 			: {} ),
 	} );
