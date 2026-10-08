@@ -55,7 +55,7 @@ a real observation.
 label change. Read the code, run the reproduction, check the tests. Two
 places to look first:
 
-- `docs/traps.md` and `docs/wontfix.md` — is this a known dead end, or already set aside?
+- The Traps section of `AGENTS.md` and `docs/wontfix.md` — is this a known dead end, or already set aside?
 - `docs/` — is this behaving as designed? Some things are deliberate,
   like conflicts resolving silently in yjs-server.
 

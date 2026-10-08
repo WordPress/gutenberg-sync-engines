@@ -59,4 +59,4 @@ decision is missing** and who makes it.
 
 The deep detail, as precise as you like: file paths, the mechanism, what has been tried, what is already fixed, dead ends. Link related issues as `#12`.
 
-Check `docs/traps.md` and `docs/wontfix.md` before writing this section — if the approach you are about to suggest is already listed there as a dead end, say so.
+Check the Traps section of `AGENTS.md` and `docs/wontfix.md` before writing this section — if the approach you are about to suggest is already listed there as a dead end, say so.

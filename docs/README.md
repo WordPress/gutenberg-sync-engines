@@ -23,8 +23,6 @@ About an hour's reading, in this order.
 - [principles.md](principles.md) — the seven principles the engines are
   judged by, and the early decisions still open.
 - [wontfix.md](wontfix.md) — what we decided not to do, and why.
-- [traps.md](traps.md) — rules that must not be undone, dead ends, and
-  code facts that look wrong but are right.
 - [glossary.md](glossary.md) — the project's own words, in plain words.
 
 The pages carry no measured numbers; `npm run bench` produces them on

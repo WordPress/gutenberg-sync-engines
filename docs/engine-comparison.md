@@ -153,7 +153,7 @@ asks a browser to re-send its document.
   visible to editors without the plugin and in raw front-end markup.
 - Two holds on the commit path must stay: a save waits for the
   in-flight commit, and a tab waits for the merged version before
-  proposing again ([traps.md](traps.md)).
+  proposing again (the Traps section of `AGENTS.md`).
 
 ## De-rtc and its upstream design
 

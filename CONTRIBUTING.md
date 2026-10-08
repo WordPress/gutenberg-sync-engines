@@ -59,7 +59,7 @@ bodies: GitHub shows every newline, so one paragraph is one line.
 Agents run the loop with `/loop /shape-issue` and `/loop /solve-issue`
 (either also takes an issue number). Cycle notes go on the issue as a
 comment; a lesson that would save the next person a week goes in
-`docs/traps.md`. Running the PHP tests wipes the test database, so never
+the Traps section of `AGENTS.md`. Running the PHP tests wipes the test database, so never
 share a test environment between two runs.
 
 ## Reporting Security Issues

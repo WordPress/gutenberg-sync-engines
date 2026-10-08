@@ -204,7 +204,7 @@ for every engine here.
    `useBlockSync` passes the new block tree to core-data, and
    `editEntityRecord` hands the edit to the sync manager right before
    it stores it. (This ordering is the trap in
-   [traps.md](traps.md): a push made from inside that call is
+   the Traps section of `AGENTS.md`: a push made from inside that call is
    overwritten.)
 2. The engine records the edit. The experiment and yjs-server write it
    into the Yjs document and queue the binary update. Intent-log

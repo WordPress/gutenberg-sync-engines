@@ -138,7 +138,7 @@ those notes accurate, and stop.
       same time without conflicting. A cycle that changed nothing still
       comments why.
 
-    `docs/traps.md` is only for lessons
+    The Traps section of `AGENTS.md` is only for lessons
     that outlive one issue. Touch it when you learn something durable,
     not every cycle — it is a shared file on the base branch, and every
     write is a chance to collide with another machine.
@@ -181,5 +181,5 @@ those notes accurate, and stop.
   writes.
 - **Do not hard-wrap anything going to GitHub.** Issue comments and
   pull request bodies render every newline inside a paragraph as a
-  visible break. One paragraph, one line. `docs/traps.md` and
+  visible break. One paragraph, one line. `AGENTS.md` and
   commit messages are files and stay wrapped as usual.

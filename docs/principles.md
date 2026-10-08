@@ -2,14 +2,10 @@
 
 These seven rules are the acceptance criteria this project is judged
 against. They are not aspirations. They synthesize the team's problem
-statement and principles ([Collaborative editing: problems and
-strategies](https://collaborativeediting.wordpress.com/2026/08/04/collaborative-editing-problems-and-strategies/))
-and the Distributed Editing design principles ([Distributed Editing with
-unlimited
-Codex](https://collaborativeediting.wordpress.com/2026/07/02/distributed-editing-with-unlimited-codex/)).
-Every engine decision is measured against them, and every violation is
-named — including the ones our own porting choices introduced. See
-[engine-comparison.md](engine-comparison.md) for how each engine scores.
+statement and principles. Every engine decision is measured against
+them, and every violation is named — including the ones our own porting
+choices introduced. See [engine-comparison.md](engine-comparison.md) for
+how each engine scores.
 
 - **P1 — The server is the authority.** WordPress stands in the path of
   every update: it checks who sent it, records who, and can read it
