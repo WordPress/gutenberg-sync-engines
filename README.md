@@ -57,7 +57,7 @@ environments and both Playground blueprints install it.
   tab, and it works where a proxy blocks the WebSocket upgrade. A change
   that lands through WordPress reaches the stream within about a second.
   For local dev, `npm run rtc:sse` starts the daemon and selects it. See
-  [docs/sse-daemon.md](docs/sse-daemon.md).
+  [docs/transports.md](docs/transports.md).
 - **websocket**: the server pushes updates over a persistent connection
   served by a bundled PHP daemon (`wp collaboration sync-server`). For
   local dev, `npm run rtc:ws` starts everything in one command (and

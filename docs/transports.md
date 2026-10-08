@@ -154,92 +154,25 @@ room, twice a second.
 
 A configured Redis that does not answer is reported through the
 `gutenberg_sync_engines_sse_redis_failed` action and the stream falls back
-to the version checks; the browser never has to fall back to polling for
-it. The `wp_sync_sse_redis_url` filter sees the configured or detected
-address and may replace it, or return an empty string to keep the
-transport off Redis. Detection skips a Redis cluster, replica set, or
-sentinel group, which the plugin's small client does not speak; set the
-address by hand there if a single endpoint is available.
+to the version checks by itself; the browser never has to fall back to
+polling for it. Configuring Redis, and what it is and is not trusted
+with, is in [operations.md](operations.md).
 
-### Proxies, buffering, and timeouts
+### What the host must provide
 
 A stream only works when every hop between PHP and the browser passes
-bytes through as they are written. This is the one operational
-requirement SSE adds over short polling, and it is the usual reason a
-stream "does not work" on a host where polling does:
+bytes through as they are written: no response buffering, no
+compression on `text/event-stream`, and timeouts longer than a stream.
+The settings per proxy, the worker-pool rule, and what happens when a
+proxy buffers anyway are in [operations.md](operations.md). In short: a
+stream that cannot be opened at all degrades to polling, and a stream
+that is accepted but buffered is aborted by the browser after 25
+seconds and retried.
 
-- **Response buffering.** The route sends `X-Accel-Buffering: no` (which
-  nginx honors, `proxy_buffering` and `fastcgi_buffering` included) and
-  `Cache-Control: no-cache, no-store, no-transform`. Other proxies, CDNs,
-  and page caches need their own setting to leave `text/event-stream`
-  responses unbuffered and uncached.
-- **Compression.** Compression buffers. Exclude `text/event-stream` from
-  gzip and brotli at the proxy and in Apache's `mod_deflate`; PHP's
-  `zlib.output_compression` must be off for the route.
-- **Timeouts.** PHP's `max_execution_time` shortens a stream (the server
-  ends it five seconds before the limit), and PHP-FPM's
-  `request_terminate_timeout`, a proxy's read timeout, or a load
-  balancer's idle timeout can end it earlier. Every end is safe: the
-  browser reconnects from its last applied cursor. A five-second keepalive
-  comment keeps idle-timeout counters from firing on quiet streams.
-- **Worker pools.** Size the PHP worker pool for one held worker per open
-  editor tab on top of ordinary traffic. Tabs that are alone on a post
-  close their stream, and so do tabs nobody is looking at (a hidden
-  browser tab polls every twenty-five seconds instead, like short
-  polling, and reopens its stream the moment it is visible again), so
-  the count is the number of visible tabs that have company.
-
-When a stream cannot be opened at all (the request fails or is refused),
-the browser falls back to short polling and retries the stream with a
-growing wait, so a misconfigured proxy degrades to polling rather than
-breaking editing. A proxy that accepts the stream but buffers it is the
-worse case: the browser sees no keepalive, aborts after twenty-five
-seconds, and retries. If a host cannot pass streams through, choose
-polling with an advisory channel instead.
-
-For local use, run `npm run env start` or `npm run env:tests start`.
-Each config's `afterStart` hook starts Redis, connects it to that environment's
-network as `sync-redis`, and waits until it responds. Both configs set
-`WP_SYNC_SSE_REDIS_URL` to `redis://sync-redis:6379`. No separate launcher or
-Compose file is needed. Redis has no public port and stores no persistent data.
-A Redis that fails to start does not fail the environment start (the other
-transports need no Redis); the hook prints a notice, and `npm run doctor`
-reports the Redis container for each environment.
-
-The hooks call shared npm commands. `redis:project` reads wp-env's project name,
-which already identifies the checkout and config. Shell variables `REDIS_PROJECT`
-and `REDIS_NAME` reuse that name for the network and Redis container. Set
-`GSE_WP_ENV_CONFIG=.wp-env.tests.json` for the tests config; the default is dev.
-
-Both configs also install the Redis Object Cache plugin and point it at the
-same container (`WP_REDIS_HOST`, with its bundled Predis client so no PHP
-extension is needed), but leave its drop-in OUT: the test suites run
-without a persistent object cache, as most of PHPUnit assumes. `npm run
-cache:on` (dev) or `npm run cache:tests:on` (tests) copies the drop-in in,
-which gives the site a persistent object cache on Redis and lets the SSE
-transport detect Redis by itself; `cache:off` / `cache:tests:off` takes it
-out again, and `npm run doctor` reports the state per environment. With the
-drop-in on, the whole site's options and posts go through Redis too, so
-measurements taken that way describe a Redis-backed host, not just the
-transport.
-
-The transport and host benchmarks switch this for a run: `cache=none|redis`
-picks the persistent object cache and `wake=auto|redis|cache|table` pins
-what an SSE stream sleeps on (`cache` needs `cache=redis`, `table` needs
-`cache=none`; `auto` is whatever the site has, Redis when detectable).
-Both are restored afterwards, both work only for this checkout's wp-env
-sites (the switch goes through wp-cli), and the report records the wait
-the streams actually got, read from the `X-WP-Sync-SSE-Wait` header every
-stream response carries: `redis`, `version-cache`, `version-table`, or
-`reads`.
-
-Use `npm run env:stop` or `npm run env:tests:stop` to stop Redis and WordPress.
-This wp-env version has no stop lifecycle hook: plain `wp-env stop` (including
-`npm run env stop`) does not stop Redis. Redis uses Docker's `--rm`, so stopping
-it also removes its disposable container; the next start creates it again.
-`afterDestroy` removes the matching Redis container if it still exists.
-The dev config keeps its existing WebSocket daemon startup.
-Other transports do not require Redis to be running.
+For local use, both wp-env configs start a Redis container beside
+WordPress and point `WP_SYNC_SSE_REDIS_URL` at it; `AGENTS.md`
+(Environment) has the commands, the object-cache drop-in switch, and
+how the benchmarks pin what a stream waits on.
 
 Redis Pub/Sub channels are namespaced by the database host and name, table
 prefix, and multisite blog ID, followed by the room name. Installations with
@@ -332,3 +265,101 @@ tests site for its duration and restores the previous one afterwards. It needs
 the Redis container the tests env starts, and refuses to run without it, so
 that it certifies the Redis wake rather than the storage checks. The fuzzer
 sweeps `sse` with the same rule.
+
+## Server-sent events from the sync daemon
+
+The `sse-daemon` transport is the same stream the `sse` transport
+speaks, opened against the sync daemon instead of a web-tier REST route.
+The daemon is the process the `websocket` transport already runs, on the
+same port, so this adds no port, no TLS termination, and no second
+service to deploy. Running the daemon on a host is in
+[operations.md](operations.md).
+
+### Why a second way to serve the stream
+
+The `sse` transport holds a PHP worker for the life of every stream, and
+it needs Redis to be told the moment a row lands. The `websocket`
+transport avoids both, but a WebSocket upgrade is the thing a corporate
+proxy, a CDN, or a load balancer is most likely to break, and when it
+breaks the tab falls back to polling.
+
+`sse-daemon` is the middle: an ordinary chunked HTTP response, which
+proxies pass, written by a process that is not a web request. A tab on
+this transport holds no PHP worker, and a tab that goes to the
+background keeps its stream, because the stream costs the server a
+connection rather than a worker.
+
+### How a stream is established
+
+The client POSTs a room envelope to the daemon's stream path
+(`/wp-sync/v1/sse` on the daemon's address). The daemon first reads the
+start of each request. If it asks for a WebSocket, the daemon opens a
+socket; if it is a plain POST, the daemon opens a stream. It
+authenticates the request, and only then writes the `200` and the
+`text/event-stream` headers, so a refused request never opens a stream.
+
+The credential is the one the socket path uses: a one-time token minted
+over the cookie-authenticated REST route, plus the `logged_in` cookie. A
+socket can only send the token in its connection request; an ordinary
+request can use an `Authorization` header. The daemon accepts both.
+The token is spent on first sight, so the client mints a fresh one for
+every open. A POST body can arrive across several reads, and the daemon
+authenticates a connection once and keeps the result, because
+re-authenticating on the second read would spend a token that is already
+spent and refuse a stream that was about to open. The symptoms of
+getting that wrong, for anyone touching the daemon: it logs `Handshake
+rejected: Missing, expired, or mismatched token.`, the browser reports
+the stream POST as a CORS failure (a 403 carries no CORS headers), and
+the client logs `Error posting sync update, will retry with backoff`
+and then succeeds on the retry with a fresh token.
+
+Two rules inside the daemon are easy to mix up. The daemon closes
+quiet connections after 45 seconds. A socket sends more messages, so
+silence means it is dead; a stream never sends anything, so silence is
+normal. Streams must not be timed out on silence, or every live stream
+ends after 45 seconds. Separately, the daemon must keep watching every
+stream for a close signal from the browser, because that signal is the
+only way it learns a stream is over. If it stops watching, dead streams
+stay open and the quiet-connection check closes live ones instead.
+
+### What it does not do
+
+- It does not remove the daemon's once-a-second check of each room's
+  edit log. Some changes arrive through web requests the daemon never
+  sees, so this check is how they reach a stream.
+- It does not make delivery instant. A change is delivered within about
+  a second of being saved, because the check is the only thing that
+  notices it.
+- It does not work without the daemon running. The transport is a
+  preference, and short polling remains the fallback.
+
+### Where the code is
+
+- `includes/transports/class-wp-sync-connection.php`: the socket layer
+  the socket and the stream share.
+- `includes/transports/sse/class-wp-sync-sse-connection.php`: the
+  `event:` and `data:` framing.
+- `includes/transports/sse/class-wp-sync-sse-daemon-transport.php`: the
+  web-process half, the stream URL and the transport registration.
+- `includes/transports/websocket/class-wp-websocket-sync-server.php`:
+  the daemon, which serves both.
+- `src/providers/sse-daemon/sse-daemon-provider.ts`: the client half,
+  which tells the polling manager that a stream holds no worker
+  (`setSseStreamHoldsWorker( false )`) so a hidden tab keeps it.
+- In `src/providers/http-polling/polling-manager.ts`, the stream rules
+  both SSE transports share: `sseStreaming()` (false while the tab is
+  hidden under `sse`), `handleVisibilityChange` and `abortParkedStream`
+  (the deliberate close on hide, which logs no failure),
+  `SSE_SETTLE_MS` (for the first second after a room joins, the tab
+  uses ordinary requests, so a page that joins several rooms at load
+  opens one stream, not many), `heldTails` (the server's reply to an
+  edit sent beside the stream; the client holds it until the stream
+  has caught up to the same point in the edit history), and
+  `updatesInFlight` (one send at a time). On the server,
+  `READ_FROM_HEAD` in `process_room_request` is how a
+  `rows_received_separately` request is answered without rows.
+
+`npm run test:e2e:sse-daemon` starts the daemon with
+`--transport=sse-daemon` and runs the daemon-specific specs plus
+`tests/e2e/specs/sse-framing/`, which both SSE test runs share, because
+only the process writing the stream differs.

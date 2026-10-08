@@ -274,7 +274,7 @@ The framework/plugin split is complete: the framework ships **neither** engines
   `engine-comparison.md` (the decision guide: scorecard, parity table,
   resource profiles, per-engine known gaps), `principles.md` (P1-P7),
   `scenarios.md` (the A-G wire narratives), `transports.md`,
-  `sse-daemon.md`, `de-rtc-fidelity.md` (the audit against the upstream vision),
+  `de-rtc-fidelity.md` (the audit against the upstream vision),
   `architecture-decisions.md`, and `glossary.md` (the project's
   vocabulary in plain words). The set is the interpretation layer over
   both benchmark harnesses; deliberately number-free (run `npm run
@@ -344,6 +344,28 @@ npm run cache:on          # Puts the Redis Object Cache drop-in in (a persistent
                           # extension) but leave the drop-in OUT, so the suites
                           # run without a persistent cache.
 ```
+
+Redis: each config's `afterStart` hook starts a Redis container on that
+environment's Docker network as `sync-redis` and sets
+`WP_SYNC_SSE_REDIS_URL` to `redis://sync-redis:6379`; a Redis that fails
+to start does not fail the environment start (the other transports need
+no Redis), and `npm run doctor` reports the container per environment.
+The hooks call the `redis:*` npm scripts; `redis:project` reads wp-env's
+project name, which identifies the checkout and config, and
+`GSE_WP_ENV_CONFIG=.wp-env.tests.json` selects the tests config. The
+container runs with `--rm`, so stopping it removes it and the next start
+creates it again; `afterDestroy` removes a leftover. This wp-env version
+has no stop hook, so plain `wp-env stop` (including `npm run env stop`)
+leaves Redis running: use `npm run env:stop`. With the object-cache
+drop-in on (`cache:on`), the whole site's options and posts go through
+Redis too, so measurements taken that way describe a Redis-backed host,
+not just the transport. The transport and host benchmarks switch this
+per run: `cache=none|redis` picks the persistent object cache and
+`wake=auto|redis|cache|table` pins what a stream waits on (`cache` needs
+`cache=redis`, `table` needs `cache=none`). Both are restored
+afterwards, and both work only for this checkout's wp-env sites. The
+report records the wait the streams actually got, from the
+`X-WP-Sync-SSE-Wait` header.
 
 `autoPort` is on, so when a port is busy wp-env picks a free one and prints
 the URL it chose. Force ports with `WP_ENV_PORT`. Each config has its own
