@@ -319,7 +319,9 @@ The framework/plugin split is complete: the framework ships **neither** engines
   - `shared/` — client code the base provides to more than one engine
     (no engine folder imports another engine's folder):
     `shared/awareness-sync.ts` — presence bridging used by all three
-    engines.
+    engines; `shared/typed-text.ts` — edits made before the first
+    sync response, compared with the saved post (intent-log's
+    saved-version check, yjs-server's text-only replay).
   - `providers/{http-polling,sse,sse-daemon,websocket}/` — transports
     (sse and sse-daemon reuse the polling manager, swapping only its
     receive half for the stream).
@@ -975,25 +977,30 @@ applies.
   sourced split. Genesis blocks must still set `isValid: true` or the
   editor renders them as invalid-content recovery blocks (has bitten) —
   and a container-shaped variant of exactly that symptom is open, see
-  issue #38. A LATE JOINER'S pre-bootstrap keystroke (typed before the
+  issue #38. A LATE JOINER'S pre-bootstrap edit (made before the
   first snapshot lands) carries the editor's WHOLE tree, parsed from the
-  SAVED post; the engine never merges that tree (issue #57: it
-  re-inserted a peer's saved text or deleted a peer's unsaved text
-  whenever the first snapshot row differed from the saved post). It
-  compares the tree with `parse(savedContent)` kept from `hydrate`,
-  and applies only the rich-text differences straight to the
-  document's own `Y.Text` at the same block position (prefix/suffix
-  diff; a deletion only where the document still holds those
-  characters, an insertion clamped to the text's end). A tree that
-  differs in any other way (block added/removed, non-text attribute,
-  no saved content) is DROPPED — EXCEPT when the document holds no
-  blocks at the first snapshot row (an empty post): nothing can
-  collide, so the buffered edit merges as is and the first paragraph
-  typed into a new post survives (the verifier caught that regression;
-  the late-join spec's empty-post case pins it). The replay runs
-  against the first snapshot row, so a keystroke typed after a peer's
-  just-saved text can land before or after it (the merge's call; the
-  late-join e2e spec accepts both).
+  SAVED post; the engine never merges that tree against the head
+  (issue #57: it re-inserted a peer's saved text or deleted a peer's
+  unsaved text whenever the first snapshot row differed from the saved
+  post). Once the whole first response has landed (the snapshot row
+  bootstraps the document BEFORE the later rows apply, so the replay is
+  deferred a tick), `replayHeldTree` rebuilds the document at each
+  server row, takes the newest state that `showsSavedPost`, applies
+  `rebaseHeldTree` (the person's changes over `parse(savedContent)`,
+  the version's own blocks outside the changed region, so the
+  framework's position-sweeping block merge touches nothing else) on a
+  copy at that state, and adds only the difference to the document,
+  which the CRDT merges with the later rows (issue #100: typing, new
+  and removed blocks). When no row shows the saved post (a checkpoint
+  newer than the save), only the rich-text differences apply, at the
+  same block position (#57's prefix/suffix diff); any other difference
+  is dropped. A document still empty after the response (an empty
+  post) takes the edit as is. Every path edits a COPY and applies the
+  difference as an update: a local transaction after the bootstrap
+  never reaches the editor (it already shows the document without the
+  edit), and the editor's next change then removed the edit again.
+  Two insertions at the same spot are ordered by the merge; the
+  late-join e2e spec accepts both orders.
 - **de-rtc known gaps** (docs/engine-comparison.md has the full list):
   every block carries a durable `metadata.syncId` (intent-log's scheme;
   `WP_De_RTC_Block_Identity` stamps genesis deterministically and
@@ -1041,6 +1048,22 @@ applies.
   the transport carries ZERO proposals, and editor saves settle-and-
   hold the commit lane (`prepareForSave`) so a save can never
   self-conflict with the session's own in-flight commit (fuzzer-found).
+  Edits made before the first sync response (issue #100) were made on
+  the SAVED post: the engine keeps the loaded content (`hydrate`), and
+  the session holds its first proposal one tick (the rest of the first
+  response lands) and declares as its base the newest version whose
+  announced content hash equals the saved post's
+  (`heldEditsSavedContent`, `findSavedVersion`), without a descriptor.
+  Declaring the bootstrap row instead made the server read a save made
+  during the room's life as the joiner's own edit and set the typed
+  text aside. No match on a GENESIS bootstrap keeps the genesis as the
+  base (it was built from the saved post). No match on a CHECKPOINT
+  bootstrap (`checkpoint: true`, compacted past the save) DROPS the
+  edits and re-applies the checkpoint (`settleHeldEdits`): proposing
+  them on it silently erased a peer's unsaved text (the verifier's
+  find; `de-rtc-checkpoint-interval.php` + the late-join spec's
+  compacted case pin it). Two insertions at the same spot of the saved
+  version still park (the frozen core's rule), with a notice.
   Do NOT reintroduce a `content` entry into de-rtc's property lane —
   it silently re-carries the whole document per announce (found by
   wire inspection; stripped on both sides).
@@ -1100,10 +1123,23 @@ applies.
     synchronous variant). Regression tests in
     `tests/js/engines/intent-log-manager.test.ts`; the old replay
     (`npm run fuzz -- --combos=intent-log/http-polling --seed-list=6
-    --steps=14 --profile=concurrency`) passes. Pre-init edits on
-    NON-empty bootstraps are still discarded (reconciled by the
-    bootstrap push, which clobbers them) — pre-existing behavior,
-    unchanged.
+    --steps=14 --profile=concurrency`) passes.
+  - FIXED (issue #100): edits made during the join round trip on a
+    post WITH content (typing, a new or removed block) used to vanish
+    under the bootstrap push. After the delivery burst the buffered
+    tree is derived against the NEWEST retained version that shows
+    the saved post (`showsSavedPost` in `src/shared/typed-text.ts`:
+    same block types and nesting, same rich text, identity compared
+    only where both carry one) and authored at that version's seq
+    (`replayPreInitTree`, `authorBatch` with `observe: false`). The
+    planner moves it past later rows, so a peer's text earlier in the
+    paragraph is respected and a clash is set aside for review. Do
+    NOT diff the tree against the head (peer work since the save
+    reads as deleted) or apply saved offsets to the current text (an
+    earlier attempt: a peer's earlier insertion garbles the
+    paragraph). Still dropped: a tree whose saved version the replica
+    no longer holds (a checkpoint bootstrap newer than the save).
+    Browser spec: `collaboration-intent-log-late-join`.
 
 ## Deep history
 

@@ -18,6 +18,7 @@ import { getBlockType, getSaveContent } from '@wordpress/blocks';
  * Internal dependencies
  */
 import { createAwarenessDoc } from '../shared/awareness-sync';
+import { parseSavedPost, showsSavedPost } from '../shared/typed-text';
 import { registerAwareness } from '../awareness/registry';
 import {
 	applyDerivedIntents,
@@ -185,10 +186,12 @@ interface EntityState {
 	 * this buffer an edit made during the join round trip stays local
 	 * forever — the fuzzer found it as a reload straddling a block insert
 	 * on an empty-genesis room, where the bootstrap push (which would at
-	 * least reconcile the trees) is skipped too. An empty-genesis
-	 * bootstrap schedules a deferred capture of it (see the bootstrap
-	 * branch for why deferred and why only-when-still-empty); a non-empty
-	 * bootstrap or any newer post-init editor tree discards it.
+	 * least reconcile the trees) is skipped too. A bootstrap schedules a
+	 * deferred recovery of it (see the bootstrap branch for why
+	 * deferred): captured as is while the document is still empty,
+	 * otherwise against the version that shows the saved post
+	 * (replayPreInitTree, issue #100). Any newer post-init editor tree
+	 * discards it.
 	 */
 	preInitTree: BridgeBlock[] | null;
 	/**
@@ -1362,23 +1365,33 @@ export function createIntentLogManager( debug = false ): SyncManager {
 				 * every block duplicates (found by fuzz:quick when this
 				 * recovery ran synchronously). A still-empty document after
 				 * the burst means the room truly holds only its genesis —
-				 * exactly the stranded case. Any post-init editor tree
-				 * supersedes the buffer (update() clears it), and non-empty
-				 * bootstraps reconcile through pushDocument as before.
+				 * exactly the stranded case; a filled one is replayed against
+				 * the saved version, like a non-empty bootstrap below. Any
+				 * post-init editor tree supersedes the buffer (update()
+				 * clears it).
 				 */
 				if ( 0 === blocks.length ) {
 					if ( state.preInitTree?.length ) {
 						setTimeout( () => {
+							if (
+								! state.unloaded &&
+								state.session.isInitialized() &&
+								documentBlocks(
+									state,
+									state.session.getDocument()!
+								).length > 0
+							) {
+								// History filled the room: the tree is the
+								// saved post plus edits, as below.
+								replayPreInitTree();
+								return;
+							}
 							const buffered = state.preInitTree;
 							state.preInitTree = null;
 							if (
 								! buffered ||
 								state.unloaded ||
-								! state.session.isInitialized() ||
-								documentBlocks(
-									state,
-									state.session.getDocument()!
-								).length > 0
+								! state.session.isInitialized()
 							) {
 								return;
 							}
@@ -1392,8 +1405,22 @@ export function createIntentLogManager( debug = false ): SyncManager {
 					}
 					return;
 				}
-				state.preInitTree = null;
 				pushDocument( state, bootstrap, blocks );
+				/*
+				 * Edits made during the join round trip on a post that has
+				 * content (issue #100). The push above replaces the canvas,
+				 * so the buffered tree is the only record of them. That
+				 * tree is the SAVED post plus the edits, and the saved post
+				 * may be newer than this snapshot (a save mid-room), so it
+				 * is never captured against the head: replayPreInitTree
+				 * authors it against the version that shows the saved post.
+				 * Deferred past the delivery burst for the same reason as
+				 * the empty-post recovery above: the room's later rows land
+				 * right behind this snapshot.
+				 */
+				if ( state.preInitTree?.length ) {
+					setTimeout( replayPreInitTree, 0 );
+				}
 				return;
 			}
 			/*
@@ -1447,6 +1474,86 @@ export function createIntentLogManager( debug = false ): SyncManager {
 			}
 			log( 'session reset from server checkpoint', { key } );
 		} );
+
+		/**
+		 * Sends what the person did before the snapshot as an ordinary
+		 * edit of the version they were looking at: the saved post.
+		 *
+		 * The buffered tree is the saved post plus their edits (typing, a
+		 * new or removed block, anything the editor captures). It is
+		 * derived against the NEWEST retained version that shows the saved
+		 * post (showsSavedPost) and authored at that version's seq: the
+		 * planner (here, and the same one on the server) then moves the
+		 * edits past everything that landed since, and a clash with a
+		 * peer's change is set aside for review like any other. Diffing
+		 * the tree against the CURRENT document instead would read every
+		 * peer change since the save as the person's own undoing of it,
+		 * and applying saved offsets to the current text garbles a
+		 * paragraph a peer typed earlier in.
+		 *
+		 * Dropped, as before issue #100: a buffer a newer editor tree
+		 * superseded, and a tree whose saved version this replica no
+		 * longer holds (it bootstrapped from a checkpoint newer than the
+		 * save) — there is no version to author it against, and a guess
+		 * would destroy a peer's work.
+		 */
+		const replayPreInitTree = (): void => {
+			const buffered = state.preInitTree;
+			state.preInitTree = null;
+			if (
+				! buffered ||
+				state.unloaded ||
+				! state.session.isInitialized() ||
+				'string' !== typeof recordContent
+			) {
+				return;
+			}
+			const saved = parseSavedPost( recordContent );
+			if ( ! saved ) {
+				return;
+			}
+			const floor = session.getRetainedFloor();
+			for ( let seq = session.getSeq(); seq >= floor; seq-- ) {
+				const doc = session.getDocumentAt( seq );
+				if (
+					! doc ||
+					! showsSavedPost( saved, documentBlocks( state, doc ) )
+				) {
+					continue;
+				}
+				const derived = deriveIntents( doc, buffered, {
+					removableIds: state.editorIds,
+					excludeIds: state.docTombstones,
+					richTextFields: state.fieldsResolver,
+					rawContent: state.rawContent,
+					saveMarkup: saveMarkupAdapter,
+				} );
+				if ( ! derived?.intents.length ) {
+					return;
+				}
+				state.capturing = true;
+				try {
+					// `observe: false`: authored at the saved version
+					// without moving the editor's own observed version.
+					const envelopes = session.authorBatch( derived.intents, {
+						baseSeq: seq,
+						observe: false,
+					} );
+					undoManager?.noteAuthored( session, envelopes );
+				} finally {
+					state.capturing = false;
+				}
+				// The editor has not seen these edits since the bootstrap
+				// push replaced them; this runs outside update(), so it
+				// lands.
+				syncEditor( state, true );
+				return;
+			}
+			log(
+				'pre-init edits dropped: no retained version shows the saved post',
+				{ key }
+			);
+		};
 
 		/**
 		 * Re-derives local work from the last editor-fed tree against the

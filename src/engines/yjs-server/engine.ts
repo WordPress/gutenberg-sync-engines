@@ -6,7 +6,6 @@ import * as Y from 'yjs';
 /**
  * WordPress dependencies
  */
-import { getBlockType, parse } from '@wordpress/blocks';
 // eslint-disable-next-line import/no-unresolved -- Provided at runtime as wp.sync.
 import type {
 	EngineCollection,
@@ -32,10 +31,20 @@ import { createYjsDoc, markEntityAsSaved, serializeCrdtDoc } from './doc';
 import { docContainsSnapshot, encodeDocSnapshot } from './snapshot';
 import { createUndoManager } from './undo';
 import { registerAwareness } from '../../awareness/registry';
+import { getRawContentString } from '../../shared/raw-content';
+import {
+	findTypedTextSinceSave,
+	parseSavedPost,
+	rebaseHeldTree,
+	showsSavedPost,
+	type EditorBlock,
+	type TypedTextEdit,
+} from '../../shared/typed-text';
 import {
 	createYjsServerSessionCodec,
 	YJS_SERVER_ENGINE_PROTOCOL,
 	YJS_SERVER_ENGINE_SLUG,
+	YJS_SERVER_SESSION_ORIGIN,
 } from './session';
 
 /**
@@ -56,8 +65,9 @@ import {
  *   tree is the SAVED post plus the person's keystrokes, and the
  *   server's document may be older or newer than the saved post, so a
  *   verbatim merge would count every difference as the person's edit
- *   (issue #57). Instead only the TEXT the person typed is applied to
- *   the document (see `replayTypedText`).
+ *   (issue #57). Instead the edit is applied to the version that shows
+ *   the saved post, and the CRDT merges it with what landed since (see
+ *   `replayHeldTree`, issue #100).
  * - `getEditorChanges` reports nothing until bootstrap, so an empty
  *   pre-sync document can never be dispatched into the editor as a
  *   mass deletion.
@@ -137,60 +147,158 @@ export function createYjsServerEngine(): SyncEngine {
 			};
 
 			/**
-			 * Applies what a person TYPED before the snapshot landed, and
-			 * nothing else. The buffered tree is compared with the saved post
-			 * as the editor parsed it; when the two differ only in rich text,
-			 * each difference is applied to the document's own text at the
-			 * same block position (see `findTypedTextEdits`). Any other
-			 * difference (a block added or removed, a non-text attribute) is
-			 * dropped, as is a tree with no saved content to compare against:
-			 * the window is one join round trip, and dropping such an edit
-			 * costs far less than merging a stale tree would.
+			 * Applies to `doc` what a person TYPED before the snapshot
+			 * landed, and nothing else (issue #57): the fallback of
+			 * replayHeldTree when no server row shows the saved post. The
+			 * buffered tree is compared with the saved post as the editor
+			 * parsed it; when the two differ only in rich text, each
+			 * difference is applied to the document's own text at the same
+			 * block position (see `findTypedTextSinceSave`). Any other
+			 * difference is dropped: with no version to apply it to, a
+			 * guess would cost a peer their work.
 			 *
-			 * One exception: a document that holds no blocks yet (an empty
-			 * post) has nothing a tree could collide with, so the buffered
-			 * edit is merged as it is. That keeps the first paragraph typed
-			 * into a new post, which the comparison above would drop (the
-			 * saved post parses to no blocks, the tree holds one).
+			 * @param doc  The document to edit.
+			 * @param held The buffered tree.
+			 */
+			const applyTypedText = ( doc: Y.Doc, held: EditorBlock[] ) => {
+				const yblocks = doc
+					.getMap( CRDT_RECORD_MAP_KEY )
+					.get( 'blocks' );
+				const edits =
+					'string' === typeof savedContent
+						? findTypedTextSinceSave( savedContent, held )
+						: null;
+				if ( ! edits || ! ( yblocks instanceof Y.Array ) ) {
+					return;
+				}
+				for ( const edit of edits ) {
+					applyTypedTextEdit( yblocks, edit );
+				}
+			};
+
+			/*
+			 * The server's rows as this document applied them, kept until a
+			 * buffered edit has been replayed: replayHeldTree rebuilds the
+			 * document at each row to find the one that shows the saved
+			 * post.
+			 */
+			const serverUpdates: Uint8Array[] = [];
+			const recordServerUpdate = (
+				update: Uint8Array,
+				origin: unknown
+			) => {
+				if ( YJS_SERVER_SESSION_ORIGIN === origin ) {
+					serverUpdates.push( update );
+				}
+			};
+			ydoc.on( 'updateV2', recordServerUpdate );
+
+			/**
+			 * Applies what a person did before the snapshot landed (typing,
+			 * a new or removed block) as an edit of the version they were
+			 * looking at: the saved post (issue #100).
+			 *
+			 * Runs once the whole first response has landed (the snapshot
+			 * row bootstraps the document, and the room's later rows follow
+			 * it in the same response). The document is rebuilt at each
+			 * server row, and the newest state that shows the saved post
+			 * (showsSavedPost) takes the person's edits (rebaseHeldTree)
+			 * through the ordinary local-change path. Only what that adds
+			 * to the rebuilt state goes into the document, so the CRDT
+			 * merges it with everything that landed since, as it would a
+			 * peer's concurrent edit.
+			 *
+			 * A document still empty after the response (an empty post)
+			 * takes the edit as it is. When no row shows the saved post (a
+			 * checkpoint newer than the save), only the typed text carries
+			 * over (applyTypedText, issue #57).
 			 *
 			 * @param entry The last buffered edit that carried the tree.
 			 */
-			const replayTypedText = ( entry: PendingLocalChange ) => {
+			const replayHeldTree = ( entry: PendingLocalChange ) => {
+				ydoc.off( 'updateV2', recordServerUpdate );
+				const updates = serverUpdates.splice( 0 );
+				const held = entry.changes.blocks;
+				const saved =
+					'string' === typeof savedContent
+						? parseSavedPost( savedContent )
+						: null;
 				const yblocks = recordMap.get( 'blocks' );
-				if (
-					! ( yblocks instanceof Y.Array ) ||
-					0 === yblocks.length
-				) {
-					applyChanges( entry.changes, entry.origin, entry.isSave );
-					return;
-				}
-				const after = entry.changes.blocks;
-				if (
-					! Array.isArray( after ) ||
-					'string' !== typeof savedContent
-				) {
-					return;
-				}
-				let edits: TypedTextEdit[] | null;
-				try {
-					edits = findTypedTextEdits(
-						parse( savedContent ) as EditorBlock[],
-						after as EditorBlock[]
+				const empty =
+					! ( yblocks instanceof Y.Array ) || 0 === yblocks.length;
+
+				/*
+				 * The edit is made on a copy and only the difference goes into
+				 * the document, as remote rows do. A local transaction here
+				 * would never reach the editor, which already shows the
+				 * document without the edit since the bootstrap; its next
+				 * change would then remove the edit again.
+				 */
+				let copy: Y.Doc | null = null;
+				let before: Uint8Array | null = null;
+				if ( empty ) {
+					copy = createYjsDoc( { objectType } );
+					Y.applyUpdateV2( copy, Y.encodeStateAsUpdateV2( ydoc ) );
+					before = Y.encodeStateVector( copy );
+					const target = copy;
+					// Without the selection: the merge would schedule a
+					// delayed cursor write on a copy that is about to go.
+					const { selection: _selection, ...changes } =
+						entry.changes as LocalChanges & { selection?: unknown };
+					target.transact( () =>
+						syncConfig.applyChangesToCRDTDoc(
+							target,
+							changes as LocalChanges
+						)
 					);
-				} catch {
-					return;
-				}
-				if ( ! edits || ( 0 === edits.length && ! entry.isSave ) ) {
-					return;
-				}
-				ydoc.transact( () => {
-					for ( const edit of edits ) {
-						applyTypedTextEdit( yblocks, edit );
+				} else if ( Array.isArray( held ) && saved ) {
+					// The newest server row that shows the saved post.
+					const scratch = createYjsDoc( { objectType } );
+					let matched: Uint8Array | null = null;
+					for ( const update of updates ) {
+						Y.applyUpdateV2( scratch, update );
+						if (
+							showsSavedPost( saved, documentBlocks( scratch ) )
+						) {
+							matched = Y.encodeStateAsUpdateV2( scratch );
+						}
 					}
-					if ( entry.isSave ) {
-						markEntityAsSaved( ydoc );
-					}
-				}, entry.origin );
+					scratch.destroy();
+					copy = createYjsDoc( { objectType } );
+					Y.applyUpdateV2(
+						copy,
+						matched ?? Y.encodeStateAsUpdateV2( ydoc )
+					);
+					before = Y.encodeStateVector( copy );
+					const target = copy;
+					const edited = matched
+						? rebaseHeldTree(
+								saved,
+								held as EditorBlock[],
+								documentBlocks( target )
+						  )
+						: null;
+					target.transact( () => {
+						if ( edited ) {
+							syncConfig.applyChangesToCRDTDoc( target, {
+								blocks: edited,
+							} as LocalChanges );
+						} else if ( ! matched ) {
+							applyTypedText( target, held as EditorBlock[] );
+						}
+					} );
+				}
+				if ( copy && before ) {
+					const diff = Y.encodeStateAsUpdateV2( copy, before );
+					copy.destroy();
+					Y.applyUpdateV2( ydoc, diff, entry.origin );
+				}
+				if ( entry.isSave ) {
+					ydoc.transact(
+						() => markEntityAsSaved( ydoc ),
+						entry.origin
+					);
+				}
 			};
 
 			const onBootstrap = ( event: Y.YMapEvent< unknown > ) => {
@@ -212,7 +320,11 @@ export function createYjsServerEngine(): SyncEngine {
 					applyChanges( entry.changes, entry.origin, entry.isSave );
 				}
 				if ( lastTreeEntry ) {
-					replayTypedText( lastTreeEntry );
+					const entry = lastTreeEntry;
+					setTimeout( () => replayHeldTree( entry ), 0 );
+				} else {
+					ydoc.off( 'updateV2', recordServerUpdate );
+					serverUpdates.length = 0;
 				}
 			};
 			stateMap.observe( onBootstrap );
@@ -414,6 +526,35 @@ export function createYjsServerEngine(): SyncEngine {
 }
 
 /**
+ * The block key of core-data's save-markup mirror (`CRDT_BLOCK_SAVE_KEY` in
+ * the framework's crdt-blocks, which the editor runtime does not export).
+ */
+const BLOCK_SAVE_KEY = '_save';
+
+/**
+ * A document's blocks as editor blocks, without the save-markup mirror
+ * (doc-side bookkeeping the block merge leaves out of its comparison).
+ *
+ * @param doc A document.
+ */
+function documentBlocks( doc: Y.Doc ): EditorBlock[] {
+	const blocks = doc.getMap( CRDT_RECORD_MAP_KEY ).get( 'blocks' );
+	if ( ! ( blocks instanceof Y.Array ) ) {
+		return [];
+	}
+	const strip = ( list: EditorBlock[] ): EditorBlock[] =>
+		list.map( ( block ) => {
+			const { [ BLOCK_SAVE_KEY ]: _save, ...rest } =
+				block as EditorBlock & Record< string, unknown >;
+			return {
+				...rest,
+				innerBlocks: strip( block.innerBlocks ?? [] ),
+			} as EditorBlock;
+		} );
+	return strip( blocks.toJSON() as EditorBlock[] );
+}
+
+/**
  * Whether a change set carries the editor's block tree: a `blocks` edit, or
  * a raw `content` string the tree is re-parsed from (the code editor's
  * per-keystroke dispatch). A lazy `content` serializer alone does not.
@@ -426,113 +567,6 @@ function carriesBlockTree( changes: Partial< ObjectData > ): boolean {
 	}
 	const content = changes.content;
 	return undefined !== content && 'function' !== typeof content;
-}
-
-/** A block as the editor holds it, as far as this engine reads it. */
-interface EditorBlock {
-	name: string;
-	attributes: Record< string, unknown >;
-	innerBlocks?: EditorBlock[];
-}
-
-/**
- * One change to one rich-text attribute: at `path` (block indexes, outer
- * to inner), `attribute` had `removed` replaced by `inserted` at `offset`.
- */
-interface TypedTextEdit {
-	path: number[];
-	attribute: string;
-	offset: number;
-	removed: string;
-	inserted: string;
-}
-
-/**
- * The rich-text changes between the tree the person started from and the
- * tree they typed into, or null when the two differ in any other way
- * (block count, block type, a non-text attribute).
- *
- * @param base  The saved post as the editor parsed it.
- * @param after The editor's tree after the person typed.
- * @param path  Block indexes of the containing block, outer to inner.
- */
-function findTypedTextEdits(
-	base: EditorBlock[],
-	after: EditorBlock[],
-	path: number[] = []
-): TypedTextEdit[] | null {
-	if ( base.length !== after.length ) {
-		return null;
-	}
-	const edits: TypedTextEdit[] = [];
-	for ( let i = 0; i < base.length; i++ ) {
-		const before = base[ i ];
-		const block = after[ i ];
-		if ( before.name !== block.name ) {
-			return null;
-		}
-		const names = new Set( [
-			...Object.keys( before.attributes ?? {} ),
-			...Object.keys( block.attributes ?? {} ),
-		] );
-		for ( const name of names ) {
-			const oldValue = before.attributes?.[ name ];
-			const newValue = block.attributes?.[ name ];
-			if ( isRichText( block.name, name ) ) {
-				const oldText = richTextToString( oldValue );
-				const newText = richTextToString( newValue );
-				if ( oldText !== newText ) {
-					edits.push( {
-						path: [ ...path, i ],
-						attribute: name,
-						...diffText( oldText, newText ),
-					} );
-				}
-			} else if ( ! isDeepEqual( oldValue, newValue ) ) {
-				return null;
-			}
-		}
-		const inner = findTypedTextEdits(
-			before.innerBlocks ?? [],
-			block.innerBlocks ?? [],
-			[ ...path, i ]
-		);
-		if ( ! inner ) {
-			return null;
-		}
-		edits.push( ...inner );
-	}
-	return edits;
-}
-
-/**
- * The one contiguous change between two strings: the text after the
- * common start that is not part of the common end.
- *
- * @param before The text before the change.
- * @param after  The text after the change.
- */
-function diffText(
-	before: string,
-	after: string
-): Pick< TypedTextEdit, 'offset' | 'removed' | 'inserted' > {
-	const max = Math.min( before.length, after.length );
-	let start = 0;
-	while ( start < max && before[ start ] === after[ start ] ) {
-		start++;
-	}
-	let end = 0;
-	while (
-		end < max - start &&
-		before[ before.length - 1 - end ] === after[ after.length - 1 - end ]
-	) {
-		end++;
-	}
-	return {
-		offset: start,
-		removed: before.slice( start, before.length - end ),
-		inserted: after.slice( start, after.length - end ),
-	};
 }
 
 /**
@@ -582,100 +616,12 @@ function applyTypedTextEdit(
 }
 
 /**
- * A rich-text attribute as a string: the editor holds RichTextData, the
- * parser may hold either, and a missing value reads as empty.
- *
- * @param value The attribute value.
- */
-function richTextToString( value: unknown ): string {
-	return null === value || undefined === value ? '' : String( value );
-}
-
-/**
- * Whether a registered block's attribute holds rich text.
- *
- * @param blockName     Block name.
- * @param attributeName Attribute name.
- */
-function isRichText( blockName: string, attributeName: string ): boolean {
-	const attributes = getBlockType( blockName )?.attributes as
-		| Record< string, { type?: string } >
-		| undefined;
-	return 'rich-text' === attributes?.[ attributeName ]?.type;
-}
-
-/**
- * Structural equality for the JSON values a block attribute holds.
- *
- * @param a A value.
- * @param b Another value.
- */
-function isDeepEqual( a: unknown, b: unknown ): boolean {
-	if ( a === b ) {
-		return true;
-	}
-	if ( Array.isArray( a ) && Array.isArray( b ) ) {
-		return (
-			a.length === b.length &&
-			a.every( ( item, i ) => isDeepEqual( item, b[ i ] ) )
-		);
-	}
-	if (
-		a &&
-		b &&
-		'object' === typeof a &&
-		'object' === typeof b &&
-		! Array.isArray( a ) &&
-		! Array.isArray( b )
-	) {
-		const aRecord = a as Record< string, unknown >;
-		const bRecord = b as Record< string, unknown >;
-		const aKeys = Object.keys( aRecord );
-		return (
-			aKeys.length === Object.keys( bRecord ).length &&
-			aKeys.every(
-				( key ) =>
-					key in bRecord &&
-					isDeepEqual( aRecord[ key ], bRecord[ key ] )
-			)
-		);
-	}
-	return false;
-}
-
-/**
  * Change-set keys that may appear in a redundant bootstrap dispatch. `blocks`
  * and `selection` are transient (non-dirtying) entity edits; `content` is the
  * injected serializer the bootstrap guard withholds. Any other key means the
  * document genuinely diverges from the record.
  */
 const REDUNDANT_DISPATCH_KEYS = new Set( [ 'blocks', 'content', 'selection' ] );
-
-/**
- * Extract the raw content string from an edited record's `content` property,
- * which is represented either as a plain string or as an object with a `raw`
- * property. Returns undefined for any other shape, notably the lazy serializer
- * function that replaces it once the editor has registered its own content
- * edit.
- *
- * @param value The edited record's `content` property.
- */
-function getRawContentString( value: unknown ): string | undefined {
-	if ( 'string' === typeof value ) {
-		return value;
-	}
-
-	if (
-		value &&
-		'object' === typeof value &&
-		'raw' in value &&
-		'string' === typeof value.raw
-	) {
-		return value.raw;
-	}
-
-	return undefined;
-}
 
 /**
  * Determine whether a reported change set merely re-states what the editor

@@ -113,6 +113,15 @@ export interface DeRtcSessionOptions {
 	 * as before.
 	 */
 	commit?: DeRtcCommitAdapter;
+
+	/**
+	 * The saved post's raw content when the person edited it before the
+	 * first sync response (the engine replayed those edits at bootstrap),
+	 * else null. The first proposal then declares the version that shows
+	 * the saved post as its base (issue #100). Read once, at the first
+	 * proposal.
+	 */
+	heldEditsSavedContent?: () => string | null;
 }
 
 /*
@@ -221,6 +230,89 @@ export function createDeRtcSessionCodec(
 	// locally-edited blocks, raising contests) instead of applying.
 	let pendingOwnMergeSeq = 0;
 
+	/*
+	 * Content hash by version, from every announce and snapshot row: what
+	 * finds the version that shows the saved post for edits made before
+	 * the first sync response (see heldEditsBase). Bounded like the
+	 * content ledger, but wider: the saved version can be many rows back.
+	 */
+	const versionHashes = new Map< string, string >();
+	const recordVersionHash = ( version: string, hash: string ) => {
+		versionHashes.set( version, hash );
+		while ( versionHashes.size > 256 ) {
+			const oldest = versionHashes.keys().next().value as string;
+			versionHashes.delete( oldest );
+		}
+	};
+	// Whether the first proposal has looked for held edits yet, and
+	// whether that lookup is still waiting for the first response.
+	let heldEditsChecked = false;
+	let heldEditsLookup = false;
+	// The base the next proposal declares instead of the last version.
+	let heldEditsBase: string | null = null;
+
+	// Whether the first snapshot row was a compaction checkpoint (null
+	// until one arrives): a checkpoint may be newer than the saved post.
+	let firstSnapshotIsCheckpoint: boolean | null = null;
+
+	/**
+	 * The newest version, from the one this session last applied on, whose
+	 * content hashes like the saved post, or null.
+	 *
+	 * @param savedContent The saved post's raw content.
+	 */
+	function findSavedVersion( savedContent: string ): string | null {
+		const savedHash = hashDeRtcContent( savedContent );
+		let best: string | null = null;
+		for ( const [ version, hash ] of versionHashes ) {
+			if (
+				hash === savedHash &&
+				versionSeq( version ) >= currentSeq() &&
+				versionSeq( version ) > versionSeq( best )
+			) {
+				best = version;
+			}
+		}
+		return best;
+	}
+
+	/**
+	 * Settles edits made before the first sync response once the rest of
+	 * the first response has landed: declares the version that shows the
+	 * saved post as the next proposal's base, or drops the edits when no
+	 * version can be trusted to show it.
+	 *
+	 * A genesis row is built from the saved post the room started from, so
+	 * when no later version matches, the edits stay on it (a save made
+	 * outside the room has no matching version either). A compaction
+	 * checkpoint may be newer than the saved post: proposing the edits on
+	 * it would read every change a peer made since the save, and has not
+	 * saved, as the person deleting it. The edits are dropped instead and
+	 * the editor shows the checkpoint, the rule intent-log applies.
+	 *
+	 * @param savedContent The saved post's raw content.
+	 * @return Whether a proposal may go out.
+	 */
+	function settleHeldEdits( savedContent: string ): boolean {
+		const found = findSavedVersion( savedContent );
+		if ( found ) {
+			heldEditsBase = found === bridge.lastVersion() ? null : found;
+			return true;
+		}
+		if ( ! firstSnapshotIsCheckpoint ) {
+			return true;
+		}
+		const version = bridge.lastVersion();
+		const content = version ? canonicalContents.get( version ) : undefined;
+		dirty = false;
+		if ( version && undefined !== content ) {
+			// applyCanonical skips the version it already holds.
+			bridge.resetLineage();
+			bridge.applyCanonical( version, content );
+		}
+		return false;
+	}
+
 	const versionSeq = ( version: string | null ): number =>
 		version ? parseInt( version.slice( 1 ), 10 ) || 0 : 0;
 	const currentSeq = () => versionSeq( bridge.lastVersion() );
@@ -254,7 +346,10 @@ export function createDeRtcSessionCodec(
 		// written against, so the server merges them from THEIR base
 		// instead of reading a clean sole-writer change.
 		const blockBaseVersions = bridge.blockBaseVersions();
-		const baseVersion = bridge.lastVersion() ?? '';
+		// Edits made before the first sync response were made on the
+		// saved post, so they declare its version (see heldEditsBase).
+		const baseVersion = heldEditsBase ?? bridge.lastVersion() ?? '';
+		heldEditsBase = null;
 		// The block-native descriptor: TAMPER EVIDENCE the
 		// server validates against the PLAIN declared base and then
 		// drops (merge outcomes are identical either way — the server
@@ -346,6 +441,34 @@ export function createDeRtcSessionCodec(
 			! bridge.isBootstrapped()
 		) {
 			return;
+		}
+		if ( heldEditsLookup ) {
+			return;
+		}
+		if ( ! heldEditsChecked ) {
+			heldEditsChecked = true;
+			const savedContent = options.heldEditsSavedContent?.() ?? null;
+			if ( null !== savedContent ) {
+				/*
+				 * Edits made before the first sync response (issue #100):
+				 * the editor showed the saved post, which may be newer than
+				 * the version this session bootstrapped from (a save during
+				 * the room's life). Declaring that older version as the base
+				 * would make the server read the saved text as the person's
+				 * own edit, competing with the same text in the room, and
+				 * set it aside. Wait for the rest of the first response
+				 * (the room's later versions follow the bootstrap row),
+				 * then settle the edits (settleHeldEdits).
+				 */
+				heldEditsLookup = true;
+				setTimeout( () => {
+					heldEditsLookup = false;
+					if ( settleHeldEdits( savedContent ) ) {
+						maybePropose();
+					}
+				}, 0 );
+				return;
+			}
 		}
 		if ( commitIntervalMs > 0 ) {
 			const wait = lastCommitBuiltAt + commitIntervalMs - Date.now();
@@ -525,7 +648,19 @@ export function createDeRtcSessionCodec(
 		// The revert-edit undo manager derives from canonical rows: feed
 		// it every snapshot (our own accepted proposals are fed from the
 		// announce path, where the hash confirms them).
+		if ( DE_RTC_ANNOUNCE_TYPE === update.type ) {
+			if ( 'string' === typeof decoded.contentHash ) {
+				recordVersionHash( decoded.version, decoded.contentHash );
+			}
+		}
 		if ( DE_RTC_SNAPSHOT_TYPE === update.type ) {
+			if ( null === firstSnapshotIsCheckpoint ) {
+				firstSnapshotIsCheckpoint = true === decoded.checkpoint;
+			}
+			recordVersionHash(
+				decoded.version,
+				hashDeRtcContent( decoded.content )
+			);
 			// The descriptor builder's base-content ledger.
 			recordCanonicalContent( decoded.version, decoded.content );
 			options.undoFeed?.noteRow( {
