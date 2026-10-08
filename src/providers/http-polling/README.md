@@ -91,75 +91,14 @@ On poll failure the manager backs off (solo: 2/4/8/12 s; with collaborators:
 (15 s after a manual retry). Failed updates are restored to the front of the
 queue and re-sent verbatim.
 
-## Wire shape
+## Wire shape, limits, and room lifetime
 
-One request carries every open room (`types.ts`):
-
-```json
-{
-	"rooms": [
-		{
-			"room": "postType/post:123",
-			"client_id": 12345,
-			"after": 987654,
-			"engine": "intent-log",
-			"engine_protocol": 1,
-			"awareness": { "...": "..." },
-			"updates": [ { "type": "intent", "data": "…" } ]
-		}
-	]
-}
-```
-
-```json
-{
-	"rooms": [
-		{
-			"room": "postType/post:123",
-			"end_cursor": 987660,
-			"awareness": { "12345": { "...": "..." } },
-			"dispositions": [ { "...": "..." } ],
-			"updates": [ { "type": "intent", "data": "…" } ]
-		}
-	]
-}
-```
-
-- `after` / `end_cursor` — the storage cursor; opaque to clients, echoed back
-  as `after` on the next request.
-- `engine` / `engine_protocol` — the client's engine identity stamp. A stale
-  tab speaking the wrong engine (or a room whose storage lineage does not
-  match) fails with **409 `rest_sync_engine_mismatch`** before anything is
-  stored, and the client drops the room into the classic post-lock posture.
-- `dispositions` — per-update engine acks (engine-specific; intent-log uses
-  them for applied/escalated/voided).
-- `updates[].type` / `updates[].data` — engine-owned; the transport never
-  interprets them.
-- `debug: true` on a room request asks the engine for a `_debug` diagnostics
-  envelope in the response — served only when the `wp_sync_debug_enabled`
-  filter allows it (default: `SCRIPT_DEBUG`). The `window.wpSync` sync
-  inspector (`src/debug/inspector.ts`) uses this and records per-poll
-  durations.
-
-## Limits and permissions
-
-- Request body ≤ 16 MB server-side (the client packs to a 15 MB budget and
-  shrinks its budget on request-too-large responses, down to a 2 MB floor).
-- ≤ 50 rooms per request (extra rooms rotate through subsequent polls).
-- ≤ 1 MB per encoded update string.
-- Requests require a logged-in user with `edit_posts` plus per-entity edit
-  permission for each room, and each `client_id` is bound to the user that
-  first used it.
-
-## Room lifetime
-
-Each room response carries a `generation` token (the room's first row id).
-When it changes, the manager tears the session down and registers the room
-again so the engine client bootstraps from the fresh genesis (the room was
-reset under it). The post's room requests also carry this tab's
-`presence_token`: the server treats a tab's first request as its join and,
-under the default unsaved-changes policy, resets a per-post room nobody
-else is in before serving it. See `docs/room-lifetime.md`.
+The room envelope, its fields (`after`/`end_cursor`, the engine stamp and
+the 409 mismatch, `dispositions`, `generation`, `presence_token`,
+`rows_received_separately`, `debug`), the body and room limits, and the
+permission checks are documented once, in `docs/protocol.md`. What
+happens to a room when the last editor leaves is in
+`docs/room-lifetime.md`.
 
 ## Awareness
 

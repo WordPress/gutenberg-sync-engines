@@ -30,6 +30,11 @@ is listed here.
   [scenarios.md](scenarios.md) — seven concrete situations (solo
   typing, same-paragraph conflicts, machine writes, deep lag…) traced
   through all three engines.
+- **Read the wire protocol** → [protocol.md](protocol.md) — the REST
+  routes, the room envelope, and the row types each engine stores.
+- **See how rooms are stored** → [storage.md](storage.md) — the two
+  tables, the room-meta keys each engine writes, the object-cache
+  strategy, and where presence lives.
 - **Understand the advisory channel** →
   [advisory-channel.md](advisory-channel.md) — the small extra connection
   that tells open tabs when to check for new edits: its rules, failure
@@ -52,6 +57,10 @@ is listed here.
 
 ## Change it
 
+- **Touch a vendored library** →
+  [vendored-libraries.md](vendored-libraries.md) — y-php, automerge-php,
+  the de-rtc merge core, and the frozen intent-log core: where each
+  came from, the local changes, and how each is checked.
 - **Read the intent-log spec** →
   [../src/engines/intent-log/SPEC.md](../src/engines/intent-log/SPEC.md).
 - **Measure it** → [../tests/benchmarks/README.md](../tests/benchmarks/README.md)

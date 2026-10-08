@@ -148,52 +148,16 @@ This plugin provides:
   "Unsaved changes" setting (default: an empty room is reset to the
   saved post; the room's generation token tells clients to start over).
   Reasoning and the switch: `docs/room-lifetime.md`.
-- **Storage:** `WP_Sync_Table_Storage`, substituted for the framework's
-  post-meta default through the `__unstable_wp_sync_storage` filter. Rooms
-  live in two plugin-owned tables, `{$prefix}sync_updates` (the update log;
-  the row id is the cursor) and `{$prefix}sync_room_meta` (lineage,
-  awareness, engine bookkeeping — one row per room and key), so no
-  collaboration write touches post caches. On a host with a persistent
-  object cache (`wp_using_ext_object_cache()`) the storage follows the
-  strategy the WordPress hosting tests recommended
-  (`custom-table-with-transients`, wordpress-develop#11599): awareness
-  in the room array (the fallback when the Presence API is not recording,
-  see Awareness below) lives ONLY in the object cache (group
-  `WP_Sync_Table_Schema::CACHE_GROUP`, never a row), and the two
-  write-once keys (engine lineage, the polling transport's generation
-  token) are cached after their first read; `reset_room()` drops the
-  cached copies. Nothing else is cached — checkpoints and canonical
-  docs are rewritten under races — and without a persistent cache every
-  read hits the tables (the per-request cache would go stale in the
-  websocket daemon). Independently of the cache, the polling transport
-  rounds awareness timestamps to 10-second buckets
-  (`wp_sync_awareness_timestamp_granularity`) and skips the write when a
-  poll changes nothing, so an idle poll is read-only: with a persistent
-  cache it runs the cursor snapshot plus the engine's own floor read
-  (two queries; six without a cache, seven before the skip). Those
-  counts are for the room-array fallback: with the Presence API holding
-  awareness, each poll also reads `wp_presence` twice (the client-id
-  ownership check and `put()`), and a refresh writes once per 10 s
-  per tab; not yet re-measured. To
-  re-measure, dispatch a poll under the `query` filter as
-  `tests/phpunit/wpHttpPollingSyncServer.php` does. `WP_Sync_Table_Schema` owns
-  the lifecycle: activation creates the tables (dbDelta), a bumped
-  `DB_VERSION` upgrades them on the next load, deactivation leaves them
-  and every room alone, and `uninstall.php` / `wp collaboration storage
-  drop` / `WP_Sync_Table_Schema::drop()` remove them. If the tables cannot
-  be created the filter leaves the post-meta default in place and an
-  admin notice says so.
-- **Awareness:** who is in a room and what they are doing, read and
-  written ONLY through `WP_Sync_Awareness` — transports, the advisory
-  channel and the rooms CLI all go through it, never storage directly.
-  The `wp_sync_awareness_backend` filter takes a
-  `WP_Sync_Awareness_Backend`, addressed per client rather than per room.
-  This plugin returns one when `wp_presence_is_available()` says so, so
-  awareness lives in the required Presence API's shared `wp_presence`
-  table under `gse-`-prefixed client ids; otherwise (recording off, no
-  table) it falls back to the room array above. PHPUnit covers that backend against a
-  stand-in; against the REAL plugin run
-  `tests/tools/check-presence-api.php` (usage in its header).
+- **Storage:** rooms live in two plugin-owned tables, `{$prefix}sync_updates`
+  (the update log; the row id is the cursor) and `{$prefix}sync_room_meta`
+  (lineage, presence, engine bookkeeping), through `WP_Sync_Table_Storage`,
+  substituted for the framework's post-meta default. Columns, the keys
+  each engine writes, the object-cache strategy, the version counter,
+  and the lifecycle commands: `docs/storage.md`.
+- **Awareness:** who is in a room, read and written only through
+  `WP_Sync_Awareness`; held in the required Presence API's `wp_presence`
+  table when it is recording, else with the room's other data. `docs/storage.md`
+  (Presence).
 
 It registers through the framework's extension points: PHP `wp_sync_engines` /
 `wp_sync_transports` filters; JS `registerSyncEngine` / `registerSyncTransport`
@@ -210,109 +174,27 @@ The framework/plugin split is complete: the framework ships **neither** engines
 - `includes/` — server PHP: `engines/{intent-log,yjs-server,de-rtc}/`
   (one folder per engine; none uses another's classes), `shared/` (code
   the base provides to more than one engine: `WP_Sync_Block_Identity`,
-  the genesis block-id scheme `WP_Intent_Log_Planner::genesis_sync_id`
-  delegates to; the editor-side block-id stamper `sync-id.js`; the
-  genesis property seed `WP_Sync_Post_Genesis_Props`),
-  `transports/{...,websocket/}`, `admin/` (the Collaboration settings screen),
-  `storage/` (the room storage tables: `class-wp-sync-table-schema.php`
-  — names, definition, create/upgrade/drop, loaded by the plugin entry
-  ahead of the activation hook; `class-wp-sync-table-storage.php` — the
-  `WP_Sync_Storage` implementation and the ONLY reader/writer of the
-  tables, diagnostics helpers included; the `wp collaboration storage`
-  CLI), and `lib/`:
+  the genesis block-id scheme; the editor-side block-id stamper
+  `sync-id.js`; the genesis property seed `WP_Sync_Post_Genesis_Props`),
+  `transports/{sse/,websocket/}` plus the polling server, `admin/` (the
+  Collaboration settings screen), `storage/` (the room tables: schema,
+  storage, and the `wp collaboration storage` CLI), `diagnostics/`
+  (session capture, the request log, the rooms CLI; dev-only), and
+  `lib/` (the vendored libraries and their loaders).
   - `engines/de-rtc/merge-core.php` — the DE-RTC merge core, ported
-    VERBATIM from the Gutenberg `chriszarate/refreshed-de-rtc` branch's
-    `de-rtc.php` (itself a verbatim port of wordpress-develop
-    `add/distributed-editing`): the exact call-graph closure (113
-    functions) of the engine-facing entry points — serialized-block +
-    block-identity three-way merges, the rich-text merge model, update
-    construction/validation, version snapshots, sync-meta parse/format,
-    canonicalization/hashing. Frozen like the intent-log core and excluded
-    from phpcs; the only deltas are the vendored-library path and loader
-    delegation (marked `DELTA` in place). Loaded behind a
-    `function_exists( 'wp_de_rtc_get_reason_codes' )` guard so a
-    Core/Gutenberg build that ships DE-RTC itself wins.
-  - `lib/y-php/` — **vendored y-php** (PHP port of Yjs 13.6.31), imported
-    verbatim from <https://github.com/alecgeatches/y-php> (MIT; upstream
-    commit recorded in the import commit). TWO deliberate local deltas,
-    preserve both when re-vendoring: `composer.json` pins
-    `config.platform.php` to 7.4 (with the lock resolved for it) so the
-    suite installs on WP-supported PHP, and
-    `src/Lib0/StringDecoder.php` is rewritten to read forward through
-    the data once, so decoding no longer slows down sharply as input
-    grows (PR #29; its header explains the change). Excluded from our phpcs (it
-    deliberately mirrors JS Yjs style and carries its own configs). Its own
-    conformance suite runs in CI:
-    `composer --working-dir=includes/lib/y-php install && composer
-    --working-dir=includes/lib/y-php test` (~4 s, no WordPress needed).
-    Treat it like the frozen intent-log core: don't casually edit — its
-    contract is byte-parity with JS Yjs, enforced by translated upstream
-    tests + fixtures generated from the real JS implementation.
-  - `lib/y-php-loader.php` — lazy runtime loader (PSR-4 autoloader +
-    Composer-`files` equivalents) so the plugin can use y-php without a
-    Composer autoloader.
-  - `lib/automerge-php/` — **vendored automerge-php** (native PHP port of
-    Automerge for DE-RTC research), imported verbatim from the Gutenberg
-    `chriszarate/refreshed-de-rtc` branch (originally wordpress-develop
-    `add/distributed-editing`, PR WordPress/wordpress-develop#12334; MIT,
-    PHP 8.2+ with mbstring, namespace
-    `WordPress\DistributedEditing\Automerge`, no WordPress dependency).
-    Excluded from phpcs; frozen like y-php. Its own conformance suite runs
-    in CI: `php includes/lib/automerge-php/tests/run.php` (<1 s, no
-    WordPress; 680 mapped upstream tests). FULL parity needs the fixed
-    GB11 grapheme rules of PCRE2 ≥ 10.43 — a property of the PCRE2
-    library PHP LINKS, not of the PHP version: PHP 8.4 bundles 10.44,
-    but distro-style builds (Ubuntu 24.04 packages, and since
-    2026-09-03 setup-php's PHP 8.4 on GitHub runners) link the system
-    libpcre2 10.42, under which two adjacent emoji-ZWJ sequences count
-    as ONE `\X` cluster and exactly 2 of the 680 tests fail (grapheme
-    cursor tracking + a UTF-16-boundary splice). CI therefore runs this
-    step in the official `php:8.4-cli` docker image (built against the
-    bundled PCRE2) behind a guard that fails with the cause when PCRE2
-    is too old; locally, check `php -r 'echo PCRE_VERSION;'` before
-    blaming the library for those two failures.
-    The 11 upstream fixture files
-    the runner reads live under `automerge-php/upstream/automerge/`
-    (fetched from automerge/automerge; pin recorded in
-    `VENDORED_FROM_COMMIT.txt` — the source branches referenced an
-    upstream submodule that was never committed). The runner leaves the
-    tracked `PORTING_STATUS.json` alone by default (a marked `DELTA` in
-    `tests/run.php` — upstream rewrote it, timestamp included, on every
-    run, dirtying the tree); set `AUTOMERGE_PHP_UPDATE_STATUS=1` to
-    refresh it deliberately. NOTE: the DE-RTC
-    *shipping* merge path (`native-automerge-blocks-v1`) never calls this
-    library — it backs only the dead legacy whole-text lane and
-    external-repair; it is vendored for fidelity and future use.
-  - `lib/automerge-php-loader.php` — lazy PSR-4 loader shim +
-    `gutenberg_sync_engines_automerge_php_is_supported()` (PHP ≥ 8.2 +
-    mbstring gate).
+    verbatim and frozen. `docs/vendored-libraries.md`.
+  - `lib/y-php/` — vendored y-php (two local deltas, preserve both when
+    re-vendoring). `lib/automerge-php/` — vendored automerge-php (the
+    shipping de-rtc path never calls it). Both frozen, excluded from
+    phpcs, each with its own conformance suite in CI. Provenance,
+    deltas, commands, and the PCRE2 trap: `docs/vendored-libraries.md`.
 - `src/` — client JS/TS (webpack entry `src/index.ts` → `build/sync-engines.js`,
   externalizes `@wordpress/sync`→`wp.sync` and `yjs`→`wp.sync.Y`):
-  - `engines/intent-log/` — the **frozen cross-language core** (byte-matched
-    against its PHP twin + JSON vectors). Excluded from prettier (eslint
-    runs with relaxed rules), but TYPE-CHECKED: the modules are plain
-    JavaScript (they run under Node with no build step — the sweep and
-    vector generators import them directly) typed through JSDoc against
-    the shared interfaces in `engine-types.d.ts`; `tsconfig.json` sets
-    `checkJs`, so `npm run typecheck` (CI) checks the core and TypeScript
-    consumers get their types from the JSDoc itself. There are NO
-    per-module `.d.ts` sidecars — they drifted (a missing `planBatch`
-    parameter, undeclared exports) and were removed. A JSDoc edit is the
-    one non-behavioral change the core routinely takes. Don't casually
-    edit — changes must stay in lockstep with the PHP core and test
-    vectors. Its Jest harness lives in `tests/js/engines/intent-log/`, which
-    also holds the Node-only pieces that are NOT shipped: the deterministic
-    simulator (`simulator.js`, the spec's validation oracle) and the JS
-    reference `genesisSyncId` (`genesis-sync-id.js`, on `node:crypto`; the
-    editor never mints genesis ids — the server and the build-free stamper
-    `includes/shared/sync-id.js` do). Both are type-checked
-    too (only the `*.test.js` files and Jest setup are excluded). Its
-    vector generators are in `tests/tools/`. One file is client-only:
-    `client.js` (the replica —
-    outbox, optimistic replan, log retention) has no PHP twin and no vector
-    coverage, since the server plans with the planner directly. It is still
-    core, still frozen-by-default; changes there are additive and covered by
-    `tests/js/engines/intent-log/client.test.js`.
+  - `engines/intent-log/` — the frozen intent-log core, kept identical
+    to its PHP twin and the JSON vectors (two copies, Jest and PHPUnit,
+    always update both). Plain JavaScript typed through JSDoc; excluded
+    from prettier. Its Jest harness, simulator, and the client-only
+    `client.js`: `docs/vendored-libraries.md`.
   - `engines/yjs-server/` — the yjs-server engine, WITH its Yjs client
     modules (CRDT doc schema, snapshot helpers, `undo.ts`, vendored
     `y-utilities/` — the latter ignored by eslint), inherited from the

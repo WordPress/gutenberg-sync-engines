@@ -140,24 +140,17 @@ order:
 The version counter is a number the room storage bumps after every
 successful write (updates, room meta, a reset, and presence when presence
 is kept in the room storage). Presence kept in the Presence API's
-`wp_presence` table, the default, bumps no counter. While it is in use,
-each counter check also reads the presence of the stream's rooms, one
-query per room, and wakes the stream when it differs from what was
-last sent. Presence writes there still send the Redis notice. The stream
-reads the counters of all its rooms in one lookup and re-reads storage
-when any differs from the snapshot it took just before its last read; a
-write landing during that read therefore still wakes the next check. The
-snapshot is compared for change, not counted, so nothing depends on the
-exact value. The bump is an atomic increment (Redis and Memcached
-increment in place; the row update is one statement MySQL serializes),
-and that is what carries the guarantee: if two writers could each turn
-5 into 6, a stream whose snapshot fell between their bumps would not
-wake for the second write until its next catch-up read. Nothing is
-lost either way, since storage is the truth and every cursor comes from
-a storage read, never from the counter. A storage other than the plugin's tables (through the
-storage filter) has no counters, and the stream checks it the long way
-instead: rows past the cursor and the awareness map, per room, twice a
-second.
+`wp_presence` table, the default, bumps no counter, so each counter check
+also reads the presence of the stream's rooms and wakes the stream when
+it differs from what was last sent. The stream reads the counters of all
+its rooms in one lookup. It notes them just before each read, and reads
+again when any has changed since. So a write that happens while it reads
+still wakes the next check. Storage is the truth and every cursor comes
+from a storage read, never from the counter. How the counter is stored
+and bumped is in [storage.md](storage.md). A storage other than the
+plugin's tables (through the storage filter) has no counters, and the
+stream checks it by reading the new rows and the presence list for each
+room, twice a second.
 
 A configured Redis that does not answer is reported through the
 `gutenberg_sync_engines_sse_redis_failed` action and the stream falls back
