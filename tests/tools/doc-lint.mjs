@@ -5,7 +5,8 @@
  *   node tests/tools/doc-lint.mjs            # every prose file
  *   node tests/tools/doc-lint.mjs docs/a.md  # just these files
  *
- * What it checks (from docs/review/2026-10-07/q2-docs.md, section 6.3):
+ * What it checks (from the 2026-10-07 documentation review, section 6.3;
+ * the review itself lives in the git history, commit 510bbcbdaa):
  *
  * 1. Every backticked repo path (`src/...`, `includes/...`, `tests/...`,
  *    `docs/...`, `examples/...`, `bin/...`, `gutenberg/...`, a root
@@ -50,8 +51,8 @@ const SKIP_DIRS = new Set( [
 	'bench-results',
 ] );
 
-/** Prose directories that are frozen snapshots or third-party code. */
-const SKIP_PROSE = [ 'gutenberg/', 'includes/lib/', 'docs/review/' ];
+/** Prose directories that are third-party code. */
+const SKIP_PROSE = [ 'gutenberg/', 'includes/lib/' ];
 
 /** Where a documented name must appear. */
 const CODE_DIRS = [
@@ -419,10 +420,7 @@ function checkIndex( files ) {
 	const docsDir = path.join( ROOT, 'docs' );
 	for ( const file of walk( docsDir, ( f ) => f.endsWith( '.md' ) ) ) {
 		const rel = relative( file );
-		if (
-			rel === 'docs/README.md' ||
-			/^docs\/review\/[^/]+\/.+\.md$/.test( rel )
-		) {
+		if ( rel === 'docs/README.md' ) {
 			continue;
 		}
 		if ( ! linked.has( file ) ) {

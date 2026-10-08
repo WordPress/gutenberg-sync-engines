@@ -104,11 +104,6 @@ is listed here.
   dead ends not worth retrying.
 - **See what we set aside** → [plan/wontfix.md](plan/wontfix.md) —
   ideas we looked at and why they wait.
-- **Read the latest architecture and code review** →
-  [review/2026-10-07-architecture-review.md](review/2026-10-07-architecture-review.md)
-  — five questions answered against the code at one commit, with the
-  defects found, ranked recommendations, and the five detailed reports
-  beside it.
 
 The pages here describe how things work today. Notable shipped changes
 are recorded in `CHANGELOG.md`, and `AGENTS.md` says how to work in the
