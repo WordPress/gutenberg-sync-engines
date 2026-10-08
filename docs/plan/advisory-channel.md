@@ -25,12 +25,12 @@ The advisory channel moves:
 -   announcements:
     -   "the server has new rows, go and poll"
 
-The advisory channel can be established in three ways:
+The advisory channel runs over one of two links:
 
-1. Via WebRTC, using signaling on short polling requests / responses. (default,
-   `webrtc-advisory`)
-2. Via WebRTC, using signaling on the heartbeat. (default, `webrtc-advisory`)
-3. Via a WebSocket to the plugin's sync daemon (`websocket-advisory`). Each tab
+1. Via WebRTC (`webrtc-advisory`, the default). The handshake messages
+   travel on the heartbeat, and also on the short polling requests and
+   responses whenever the polling loop is active.
+2. Via a WebSocket to the plugin's sync daemon (`websocket-advisory`). Each tab
    opens one socket; the daemon keeps an in-memory roster per room, relays
    presence and notices between the tabs in it, and never carries a row. This
    replaces the WebRTC mesh while retaining the base short polling transport,
@@ -51,24 +51,25 @@ discovery: an offer is tied to one peer connection, so a tab publishes
 its token first and offers once it knows whom to offer to):
 
 -   User A opens a post in one tab. It polls with a "genesis update" as
-    well as its signaling token. Nobody else is there, so A settles on
-    the slow safety poll (25 s) and its heartbeat (10 s).
+    well as its signaling token. Nobody else is there, so A keeps the
+    solo cadence for 30 seconds and then schedules no polls at all; only
+    its heartbeat (10 s) keeps running.
     -   Any edits made by the user are queued until another user is
         present (flushed before a save and when the tab goes hidden).
 -   User B opens the same post in another tab. It polls with a "genesis
     update" as well as its signaling token. The response lists the other
     tokens in the room (A's) and says someone else is present, so B polls
     at the company cadence.
--   A learns of B on its next tick (heartbeat or safety poll; up to
-    10 s — nothing B does can bring that forward). A now has company: it
+-   A learns of B on its next heartbeat (up to 10 s; nothing B does can
+    bring that forward). A now has company: it
     releases its queued updates and polls at the company cadence.
 -   The lower token initiates: it creates an offer and sends it with its
     next request (a poll when the loop is active, else a heartbeat beat
     forced by `connectNow()`). The other tab receives it on its next
     poll, about a second later, and answers the same way.
 -   A and B now send base presence and announcements to each other over
-    the WebRTC advisory channel, and both drop to on-demand polling plus
-    the safety poll.
+    the WebRTC advisory channel, and both drop to on-demand polling with
+    no timer.
 -   When User A makes an edit, it sends the update to the server via
     short polling, plus an announcement over the advisory channel to
     User B that there are new rows to poll.
@@ -91,10 +92,10 @@ enabled, the advisory channel) until it is back.
 
 Two stored options, chosen through one list:
 
-1. Transport: `http-polling` (default), `sse`, or `websocket` (the
-   long-polling transport was retired in favor of `sse`, which is the
-   same held request as a stream). The default short-polling transport is always available
-   as a fallback.
+1. Transport: `http-polling` (default), `sse`, `sse-daemon`, or
+   `websocket` (the long-polling transport was retired in favor of
+   `sse`, which is the same held request as a stream). The default
+   short-polling transport is always available as a fallback.
 2. Advisory channel: `webrtc-advisory` (default), `websocket-advisory`,
    or off. An advisory channel reduces polling by signaling to peers when
    updates are available. It serves whenever short polling does, so under
@@ -104,7 +105,7 @@ Two stored options, chosen through one list:
    own relay" below); a tab that cannot open its socket keeps the timer
    cadence, exactly like a tab whose WebRTC failed.
 
-The screen shows them as one "Transport" list of five entries (see
+The screen shows them as one "Transport" list of six entries (see
 "What exists now"), because the two options can conflict: a WebSocket
 transport with a WebSocket advisory channel looks configured and does
 nothing. Beside them: the WebSocket transport server URL (the daemon;
@@ -190,8 +191,8 @@ A lone tab holds its updates until company arrives. Two cases matter:
 -   **Save, then reload.** This is the real trap: a save writes the post
     while the room never saw the edits, and the reload bootstraps from
     the stale room over the freshly loaded post. So the queue is flushed
-    BEFORE any save (an `apiFetch` middleware on the entity's REST
-    route, the same seam de-rtc's `prepareForSave` uses), and when the
+    BEFORE any save (the entity sync adapter's `beforeSave` step, see
+    [entity-sync-adapter.md](../entity-sync-adapter.md)), and when the
     tab goes hidden (a hidden tab cannot answer a joiner for up to
     120 s). An unsaved edit lost on reload is the editor's own
     unsaved-changes warning doing its job.
@@ -274,15 +275,17 @@ Client:
     websocket-transport peer), once per batch.
 -   `src/providers/http-polling/polling-manager.ts`: the cadence rules
     above, the held queues (released by company, a flush before a save
-    via `save-flush.ts`, or the tab going hidden; codecs declaring
+    through the entity sync adapter's `beforeSave` in
+    `src/entity-sync/adapter.ts`, or the tab going hidden; codecs declaring
     `sendsWhileAlone` are exempt), the announce-after-send, the base
     presence overlay (per client, on top of the poll response's copy),
     and the stream disable hook.
 -   Settings → Collaboration: one "Transport" list whose entries are
     (transport, advisory channel) pairs — polling; polling with a
     WebRTC advisory channel (default); polling with a WebSocket advisory
-    channel; server-sent events; WebSocket — so the conflicting pairs cannot
-    be chosen. SSE and WebSocket store WebRTC as the fallback
+    channel; server-sent events; server-sent events from the sync
+    daemon; WebSocket — so the conflicting pairs cannot be chosen. SSE,
+    SSE from the daemon, and WebSocket store WebRTC as the fallback
     channel. The stored options stay `gutenberg_sync_engines_transport`
     and `gutenberg_sync_engines_advisory_channel`. Two server URL fields
     (transport server, advisory server) with "Test" buttons show only
@@ -514,11 +517,13 @@ uses it to poll sooner and to show presence faster.**
     and the leave beacon stay the polling transport's, so a room is
     never reset because a relay blinked. SSE switches the
     link off exactly as it does WebRTC.
--   Queued work never waits for a slow timer. A coverage flip re-evaluates
-    a pending timer; if that would replace a 1 s timer with the 25 s
-    safety timer while updates are already queued (the intent-log undo
-    spec caught exactly this: an undo's inverse intents sat unsent for
-    25 s), the delay is cut to the on-demand send delay instead. The
+-   Queued work never waits for a slow timer. When a peer joins or leaves
+    the channel, the tab re-checks its waiting timer. If updates are
+    already queued and the rules would
+    leave no timer, or only the slow background one, the next poll is
+    scheduled at the on-demand send delay instead. (An earlier version of
+    these rules had a 25 s safety timer, and the intent-log undo spec
+    caught an undo's inverse intents sitting unsent for 25 s.) The
     cadence rules decide how often to LOOK for rows; queued rows go out
     promptly regardless.
 

@@ -155,7 +155,7 @@ Framework development, rebasing, and updating the pin are described in
 
 ```bash
 npm run env start         # Start WordPress (Gutenberg subtree + this plugin)
-npm run env stop          # Stop it
+npm run env:stop          # Stop it (and the Redis container)
 ```
 
 Alternatively, try it using WordPress Playground. Note: On the official

@@ -2,9 +2,11 @@
 
 Presence for connections that cannot carry live cursors: no WebSocket,
 and polling every few seconds or slower. It is turned on from Settings →
-Collaboration ("Awareness interval"; 0 keeps the built-in live cursors)
-and lives in `src/awareness/` on the client with one small server class in
-`includes/awareness/`.
+Collaboration ("Awareness interval"; 0 keeps the built-in live cursors).
+The client side lives in `src/awareness/`. The server side is small: the
+settings class reads the interval, and
+`includes/class-gutenberg-sync-engines-advisory-presence.php` carries the
+block name on the Heartbeat channel.
 
 ## The problem with live cursors
 
@@ -48,8 +50,8 @@ The value can travel two ways, chosen by "Awareness channel":
   No server change. Under short polling the advisory channel carries
   the value straight to every peer it can reach, within a moment, the
   same way it carries who is present; peers it cannot reach get it on
-  their next timer poll. Under SSE the parked stream exchange is
-  reissued with the new value. Under WebSocket it goes out with the
+  their next timer poll. Under SSE the new value goes out at once on the
+  updates request beside the open stream. Under WebSocket it goes out with the
   transport's periodic awareness message, every 10 seconds.
 - **WordPress Heartbeat.** The value travels on WordPress's admin
   Heartbeat request instead, a separate request that repeats on its own

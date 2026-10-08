@@ -1,9 +1,12 @@
-# Sync Foundations — Prototype Spec
+# Intent-log core spec
 
-Status: prototype / investigation (originally branch
-`chriszarate/investigate-rtc-arch`; continued on `chriszarate/try-intent-log`).
-This directory is a standalone, dependency-free library. It is **not** wired
-into the Gutenberg build or npm workspaces, and nothing here is a shipping API.
+Status: this directory is the shipping intent-log core. It is kept
+identical in JavaScript and PHP (`includes/engines/intent-log/`), checked
+against shared JSON test vectors, and changed only in both at once. It began as a prototype (branch
+`chriszarate/investigate-rtc-arch`, continued on
+`chriszarate/try-intent-log`), and this spec keeps that vocabulary. It is
+a standalone, dependency-free library: the modules run under Node with no
+build step, and the plugin bundle imports them.
 
 ## Purpose
 

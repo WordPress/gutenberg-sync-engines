@@ -49,11 +49,12 @@ is never read** — the live shared text always wins. That rule is what
 keeps a stale copy from overwriting someone's typing, and there is a
 test whose only job is to prove it.
 
-**de-rtc's commit rhythm defaults to as-soon-as-possible.** A setting
-exists to slow it to the ten-second rhythm the original design
-described, which measurably cuts requests and bandwidth. The default
-stays fast so all three engines feel the same. Slowing it down is a
-good recommendation for a small host and a bad default for everyone.
+**de-rtc commits every ten seconds by default.** That is the timing the
+original design described, and it measurably cuts requests and
+bandwidth. The first release committed after every pause in typing, so
+all three engines felt the same; version 0.0.1 moved the default to ten
+seconds. The "DE-RTC commit cadence" setting on Settings → Collaboration
+still allows 0 for immediate commits.
 
 **Review decisions travel over their own web address, but only for
 posts and pages.** That matches where de-rtc saves through the normal

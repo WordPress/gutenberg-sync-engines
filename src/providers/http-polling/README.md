@@ -3,8 +3,8 @@
 The default sync transport: a periodic `POST /wp-sync/v1/updates` that batches
 typed updates and awareness for every open room into a single request. The
 transport is **engine-neutral** — it moves `{ type, data }` updates opaquely
-and delegates their meaning to the active engine (intent-log, yjs-server, or a
-third-party engine) on the server.
+and delegates their meaning to the active engine (intent-log, yjs-server,
+de-rtc, or a third-party engine) on the server.
 
 ## Architecture
 
@@ -30,7 +30,7 @@ third-party engine) on the server.
                     │  (transport only) │    (per-room ingest/read)
                     └─────────┬─────────┘
                               │
-                       post-meta storage
+              room storage (two plugin-owned tables)
 ```
 
 ## Key components
@@ -38,8 +38,9 @@ third-party engine) on the server.
 - Server: `includes/transports/class-wp-http-polling-sync-server.php` —
   registers the route, validates limits and permissions, then hands each
   room envelope to the active engine via the shared room-request seam.
-  Storage is the framework's post-meta storage (one row per update; the
-  cursor is an opaque monotonically increasing integer).
+  Storage is the plugin's table storage
+  (`includes/storage/class-wp-sync-table-storage.php`: one row per
+  update; the cursor is the row id, an opaque increasing integer).
 - Client: `http-polling-provider.ts` (per-room provider lifecycle),
   `polling-manager.ts` (singleton polling loop, queues, awareness),
   `config.ts` (intervals, limits, retry schedules), `types.ts` (wire types),
@@ -66,9 +67,8 @@ The loop is driven by the cadence rules in `docs/plan/advisory-channel.md`
   first through `beforeSave`), or the tab going hidden. Codecs that declare
   `sendsWhileAlone` (de-rtc) are exempt and send 300 ms after the first
   queued update. Company restarts the timer cadence and releases the queues.
-- **Company, some peer not on the advisory channel**: 1000 ms (the
-  "Polling interval" setting on Settings → Collaboration, 1-25 s, replaces
-  this).
+- **Company, some peer not on the advisory channel**: the "Polling
+  interval" setting on Settings → Collaboration (default 5 s, 1-25 s).
 - **Company, every known peer on the advisory channel**: no timer. Polls
   on demand — 300 ms after a queued local update, 150 ms after a peer
   announces new rows (never two announce-driven polls closer than 250 ms),
@@ -176,12 +176,13 @@ rooms, so an active loop is a faster handshake carrier than the heartbeat.
 
 ## Limitations
 
-- **Latency floor is the poll interval** — worst-case propagation is ~1 s
-  with collaborators (4 s solo). Fine for document editing; coarse for
-  high-fidelity cursor tracking.
+- **Latency floor is the poll interval** — worst-case propagation is one
+  polling interval (5 s by default) while a peer is out of the advisory
+  channel's reach. Fine for document editing; coarse for high-fidelity
+  cursor tracking.
 - **Every poll is a full WordPress REST request**, including idle polls; per
-  active collaborator, expect roughly one request per second of load while a
-  session is live.
+  active collaborator, expect roughly one request per polling interval
+  while a session is live and a peer is out of the channel's reach.
 - The historical `should_compact` field remains on the wire for
   compatibility but every engine answers `false` — compaction is
   engine-owned and server-side now (the retired yjs-relay engine

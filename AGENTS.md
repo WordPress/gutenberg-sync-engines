@@ -234,10 +234,13 @@ The framework/plugin split is complete: the framework ships **neither** engines
     Core/Gutenberg build that ships DE-RTC itself wins.
   - `lib/y-php/` — **vendored y-php** (PHP port of Yjs 13.6.31), imported
     verbatim from <https://github.com/alecgeatches/y-php> (MIT; upstream
-    commit recorded in the import commit). ONE deliberate local delta,
-    preserve it when re-vendoring: `composer.json` pins
+    commit recorded in the import commit). TWO deliberate local deltas,
+    preserve both when re-vendoring: `composer.json` pins
     `config.platform.php` to 7.4 (with the lock resolved for it) so the
-    suite installs on WP-supported PHP. Excluded from our phpcs (it
+    suite installs on WP-supported PHP, and
+    `src/Lib0/StringDecoder.php` is rewritten to read forward through
+    the data once, so decoding no longer slows down sharply as input
+    grows (PR #29; its header explains the change). Excluded from our phpcs (it
     deliberately mirrors JS Yjs style and carries its own configs). Its own
     conformance suite runs in CI:
     `composer --working-dir=includes/lib/y-php install && composer
@@ -430,7 +433,7 @@ npm install               # JS tooling (@wordpress/scripts, wp-env, Playwright)
 # AND for Jest/typecheck, which resolve @wordpress/sync + yjs from the subtree.
 # --ignore-scripts skips the Husky install hook, which needs a Git root.
 # npm run build regenerates required library and manifest outputs.
-cd gutenberg && npm install --ignore-scripts && npm run build && cd ..
+cd gutenberg && npm ci --ignore-scripts && npm run build && cd ..
 npm run build             # This plugin's client bundle → build/sync-engines.js
 ```
 
@@ -581,7 +584,7 @@ global-setup REST call dying with
 All suites are green at head; CI (`.github/workflows/ci.yml`) is the
 source of truth for exact test counts — it certifies every suite
 (including `composer lint`, the websocket e2e lane, and the subtree's
-collaboration-review-panel component Jest) on pushes to `main` and
+collaboration-review-panel component Jest) on pushes to `trunk` and
 PRs. The v1 integration tree passed the full default e2e suite three
 consecutive times with retries disabled; the old login
 flake is closed by the plugin-local hardened fixtures

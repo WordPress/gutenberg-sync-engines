@@ -1,5 +1,14 @@
 # Fidelity to the DE-RTC vision
 
+**One mistake caused nearly every gap in the table below.** DE-RTC was
+designed around saving: an editor finishes a change, saves it, and the
+saved document is the shared truth. This plugin was built around a
+different idea: a steady flow of small updates shared between editors,
+several times a second. When the two ideas disagreed, we changed
+DE-RTC to fit the stream, and that is where the silent overwrites and
+the lost "pending edits" came from. The work recorded in this table put
+DE-RTC's own design back.
+
 The de-rtc engine is a port of a *design*, not just of code — and the
 design has an author. This document audits our adaptation against the
 vision stated in [Distributed Editing with unlimited
@@ -27,13 +36,4 @@ the engine works the way it does.
 | The shipping merge is the hand-written block-aware three-way merge; Automerge backs only the legacy lane | Same | Same — ported verbatim as a frozen call-graph closure | **Faithful** |
 | Optimistic concurrency; no database lock | Base-version preflight, hash validation, merge-and-retry on the save path | Lock-free again: accepted proposals atomically claim their version advancement and a lost claim reloads + re-merges (`WP_Sync_Atomic_Option` CAS) | **Restored** |
 | Clients need no CRDT library; Gutenberg couples via semantic Redux actions | Stage 3 of the development plan | The client keeps a plain record of what the editor shows (no Yjs document) and couples through the framework's entity interface; sessions author the block-native descriptor. Presence still uses y-protocols' Awareness over a stub document, and collaborators' carets are off (core-data places them with Yjs positions) | **Mostly restored.** No CRDT document; the coupling is the entity interface rather than semantic Redux actions ([architecture-decisions.md](architecture-decisions.md), item 4) |
-| Cheap-host cadence is a feature: "that $3/mo host … can still support multiple concurrent edit sessions polling … once every ten seconds" | Polling interval scales to the host's comfort; presence is separate from content | Measured fairly now: the `save-sync-session` scenario runs every engine at the vision's cadence — where de-rtc escalates nothing and intent-log becomes the escalation-heavy engine (its stale-observation residual), inverting the per-second ranking. The commit-cadence and polling-interval dials are both exposed on Settings → Collaboration; the default stays immediate so all three engines feel alike, and ten seconds is the documented recommendation for a constrained host | **Measured** |
-
-One mistake caused nearly every gap in the table above. DE-RTC was
-designed around saving: an editor finishes a change, saves it, and the
-saved document is the shared truth. This plugin was built around a
-different idea: a stream of small updates flowing through a shared
-room, several times a second. When the two ideas disagreed, we changed
-DE-RTC to fit the stream — and that is where the silent overwrites and
-the lost "pending edits" came from. The work recorded in this table put
-DE-RTC's own design back.
+| Cheap-host cadence is a feature: "that $3/mo host … can still support multiple concurrent edit sessions polling … once every ten seconds" | Polling interval scales to the host's comfort; presence is separate from content | Measured fairly now: the `save-sync-session` scenario runs every engine at the vision's cadence — where de-rtc escalates nothing and intent-log becomes the escalation-heavy engine (its stale-observation residual), inverting the per-second ranking. The commit-cadence and polling-interval dials are both exposed on Settings → Collaboration; the commit cadence defaults to ten seconds (0 sends a commit after every pause in typing, so the engine feels like the other two) | **Measured** |
