@@ -7,6 +7,38 @@ use these terms freely; none of them is standard outside this project
 - **Room** — the shared workspace for one synced thing (usually one
   post). Everyone editing that post is in its room; all their updates
   flow through it. Rooms are named like `postType/post:123`.
+- **Row** — one stored entry in a room's history: an edit, a full copy
+  of the document, an edit held for review, and so on. Every row has a
+  type (see `docs/protocol.md`).
+- **Wire / wire format** — what travels between the browser and the
+  server: the shape of each request and reply, and the bytes an engine
+  puts inside a row.
+- **Stream / receive stream** — under the two server-sent events
+  transports, the one long-lived response per tab that the server
+  writes each change to. The tab still sends its own edits on ordinary
+  requests beside it.
+- **Canonical (content, document)** — the official copy on the server.
+  Every browser's view is brought in line with it. Under de-rtc it
+  is one serialized-blocks string per room; under yjs-server it is the
+  server's own Yjs document.
+- **Proposal / propose** — (de-rtc) a browser's offer of its whole
+  content, together with the base version it started from. The server
+  merges it; it is never applied as is.
+- **Base version** — (de-rtc) the version of the post a browser or a
+  script started editing from, named with every proposal or save so the
+  server knows what to merge against.
+- **Three-way merge** — combining two versions by comparing each with
+  the version they both started from, so only real overlaps count as
+  conflicts (de-rtc; also what a script's declared base buys it under
+  intent-log).
+- **Company / alone / quiet** — a tab has company when the server says
+  another editor is in its room, and is alone otherwise. A tab that is
+  alone stops polling (it is quiet). The heartbeat, WordPress's regular
+  check-in from every editor screen, tells it when company arrives, and
+  it starts again.
+- **Head cursor** — the id of the newest row in a room. The heartbeat
+  carries it, and a tab whose own cursor is behind it polls (the
+  head-cursor check).
 - **Genesis** — the first version of the shared document, built by the
   server from the post's saved content when the first person opens it.
 - **Materialize** — turn the shared document back into ordinary
@@ -61,6 +93,22 @@ use these terms freely; none of them is standard outside this project
   instead.
 - **Review lane** — the whole path a parked edit travels: durable
   storage, the editor's review panel, and the restore/dismiss verbs.
+- **Lane** — a name for one kind of traffic and the code path it
+  takes: presence (who is here), commit (de-rtc's saves), kses (markup
+  checks), property (title, status, and other fields), review (edits
+  held for a person). Prefer the plain name of the path over coining a
+  new lane.
+- **Kses lane / sanitize-and-compensate** — what happens to markup the
+  author is not allowed to publish, such as scripts (what `wp_kses_post`
+  would strip). Intent-log and de-rtc hold it for review. yjs-server
+  replaces the touched blocks with their cleaned form and sends the
+  correction to everyone; that is sanitize-and-compensate.
+- **Machine writer / engine-unaware writer** — a script, plugin, or
+  WP-CLI command that saves a post without going through the editor. An
+  aware one names the version it read; an unaware one just saves.
+- **Late joiner / rejoin** — a tab that opens a post after a session is
+  already running, or comes back after a reload, and must catch up from
+  the room rather than from the saved post.
 - **Register** — one named field of the post that syncs separately from
   the body: title, status, a taxonomy, one meta key.
 - **LWW (last writer wins)** — the later change silently replaces the
@@ -99,7 +147,30 @@ use these terms freely; none of them is standard outside this project
 - **Capture** — (intent-log) comparing the editor's block tree against
   what it last showed and turning the difference into typed intents.
 - **Settle** — an edit reaching its final state: confirmed by the
-  server, parked, or voided.
+  server, parked, or voided. Also, in the editor, the pause after a
+  burst of typing that the engines wait for before sending.
+- **Unit** — (undo) one undo step: the edits one keystroke or action
+  made, undone or redone together.
+- **CAS (compare-and-swap)** — changing a stored value only if nobody
+  changed it since you read it, as one step. De-rtc uses it
+  (`WP_Sync_Atomic_Option`) for its version numbers and its official
+  content, so two requests cannot both take the same version number.
+- **Framing** — the two ways the same receive stream is served: by a
+  web request (`sse`) or by the sync daemon (`sse-daemon`). The stream
+  looks the same to the browser; only the process writing it differs.
+- **Probe (discovery probe)** — a small request a tab sends to find the
+  other tabs on the same post. It travels on the heartbeat or on a
+  poll, carries the tab's own token and any messages for a peer, and
+  comes back with the other tabs' tokens.
+- **Floor** — the oldest row a room still keeps after old rows are
+  deleted. A client whose cursor is below the floor must start again
+  from the latest full copy of the document.
+- **Envelope** — the per-room block of a request or response (the room
+  envelope), or the engine's diagnostics block inside a response (the
+  `_debug` envelope).
+- **Epoch compaction** — the unbuilt design for shrinking a yjs-server
+  room that has grown past its size limit: start a fresh document and
+  drop the old history (see `docs/plan/wontfix.md`).
 - **Descriptor / `clientUpdate`** — (de-rtc) tamper evidence a session
   attaches to its commit so the server can verify the commit describes
   the change it claims. Validated once, then dropped; not used for
