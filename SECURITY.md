@@ -9,4 +9,4 @@ To report a security issue, please visit the
 
 How the plugin decides who may join a session, what it checks on every
 edit, and what outside processes are trusted with is described in
-[docs/security.md](docs/security.md).
+[docs/protocol.md](docs/protocol.md).

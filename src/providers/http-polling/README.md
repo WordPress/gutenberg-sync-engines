@@ -11,10 +11,9 @@ What it does, and why, is documented once:
   `docs/protocol.md`.
 - The polling cadence (quiet when alone, the interval when a peer is
   out of reach, on demand when every peer is reachable), the advisory
-  channel, and the failure cases: `docs/advisory-channel.md` and
-  `docs/transports.md`.
+  channel, and the failure cases: `docs/transports.md`.
 - What happens to a room when the last editor leaves:
-  `docs/room-lifetime.md`.
+  `docs/transports.md`.
 
 ## Files
 

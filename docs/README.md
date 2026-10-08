@@ -1,113 +1,34 @@
 # Docs
 
-Start with the page for what you want to do. Every page in this folder
-is listed here.
+About an hour's reading, in this order.
 
-## Use it
+**Orientation**
 
-- **Install it and see two people editing one post** →
-  [getting-started.md](getting-started.md).
-- **Pick an engine or transport** →
-  [engine-comparison.md](engine-comparison.md) — what each engine is,
-  how they score against the principles, feature parity, resource
-  shapes, and each engine's known gaps.
-- **Look up a setting** → [settings.md](settings.md) — every option on
-  Settings → Collaboration, with its default, range, and effect.
+- [engine-comparison.md](engine-comparison.md) — which engine to pick,
+  how the three score against the principles, what happens in seven
+  situations, cost, and each engine's known gaps.
+- [data-flow.md](data-flow.md) — how one edit reaches the other
+  editors, in the Gutenberg experiment and under each engine.
+- [transports.md](transports.md) — how updates move: polling and the
+  advisory channel, server-sent events, the sync daemon's WebSocket,
+  what happens to unsaved changes, presence on slow connections, and
+  what a host must provide.
+- [protocol.md](protocol.md) — the routes, the room envelope, the row
+  types per engine, who may do what, and how to add an engine.
+- [storage.md](storage.md) — the two tables, the keys each engine
+  writes, the object cache, presence, and the lifecycle commands.
 
-## Run it
+**Rules and reference**
 
-- **Operate it on a host** → [operations.md](operations.md) — upgrade,
-  deactivate, uninstall, switch engines, proxies, Redis, the sync
-  daemon, what to monitor.
-- **Compare transports** → [transports.md](transports.md) — how each
-  transport moves updates, including the server-sent events stream and
-  the sync daemon, and what the browser does when one fails.
-- **Understand the security model** → [security.md](security.md) — who
-  may join a room, what each engine checks, the credentials and their
-  lifetimes, and what the daemon, a relay, and Redis are trusted with.
+- [principles.md](principles.md) — the seven principles the engines are
+  judged by, and the early decisions still open.
+- [wontfix.md](wontfix.md) — what we decided not to do, and why.
+- [traps.md](traps.md) — rules that must not be undone, dead ends, and
+  code facts that look wrong but are right.
+- [settings.md](settings.md) — every setting, default and override.
+- [glossary.md](glossary.md) — the project's own words, in plain words.
 
-## Understand it
-
-- **See how an edit travels, on one page** → [data-flow.md](data-flow.md) —
-  how an edit reaches other editors in the Gutenberg trunk experiment
-  and under each engine and transport here.
-- **Understand the rules the engines are judged by** →
-  [principles.md](principles.md) — the seven acceptance criteria
-  (P1–P7).
-- **See what actually happens on the wire** →
-  [scenarios.md](scenarios.md) — seven concrete situations (solo
-  typing, same-paragraph conflicts, machine writes, deep lag…) traced
-  through all three engines.
-- **Read the wire protocol** → [protocol.md](protocol.md) — the REST
-  routes, the room envelope, and the row types each engine stores.
-- **See how rooms are stored** → [storage.md](storage.md) — the two
-  tables, the room-meta keys each engine writes, the object-cache
-  strategy, and where presence lives.
-- **Understand the advisory channel** →
-  [advisory-channel.md](advisory-channel.md) — the small extra connection
-  that tells open tabs when to check for new edits: its rules, failure
-  cases, and how to bring your own relay.
-- **Know what happens to unsaved changes** →
-  [room-lifetime.md](room-lifetime.md) — the "Unsaved changes" setting
-  and how a shared editing session is reset.
-- **Show who is where on a slow connection** →
-  [awareness-high-latency.md](awareness-high-latency.md) — each editor
-  reports which block they are in, once per interval, shown as an
-  outline and a badge instead of live cursors.
-- **Understand de-rtc's relationship to its upstream design** →
-  [de-rtc-fidelity.md](de-rtc-fidelity.md) — the audit of our port
-  against the Distributed Editing vision.
-- **See what we'd change with hindsight** →
-  [architecture-decisions.md](architecture-decisions.md) — four early
-  decisions worth revisiting, and what each change would cost.
-- **Look up a term** → [glossary.md](glossary.md) — the project's own
-  vocabulary in plain words.
-
-## Change it
-
-- **Add an engine or a transport** → [extending.md](extending.md) —
-  the server interface, the client interface, the registration
-  filters, and the hooks and filters the plugin offers.
-- **Touch a vendored library** →
-  [vendored-libraries.md](vendored-libraries.md) — y-php, automerge-php,
-  the de-rtc merge core, and the frozen intent-log core: where each
-  came from, the local changes, and how each is checked.
-- **Read the intent-log spec** →
-  [../src/engines/intent-log/SPEC.md](../src/engines/intent-log/SPEC.md).
-- **Measure it** → [../tests/benchmarks/README.md](../tests/benchmarks/README.md)
-  (the host cost report and the tests that compare engines),
-  [../tests/benchmarks/transport/README.md](../tests/benchmarks/transport/README.md)
-  (how long an edit takes to show up, per transport),
-  [../tests/fuzzer/README.md](../tests/fuzzer/README.md) (random-input
-  browser tests), and
-  [../tests/debugging/README.md](../tests/debugging/README.md) (long-run
-  and session-replay tools).
-- **Run a relay of your own** →
-  [../examples/advisory-relay/README.md](../examples/advisory-relay/README.md).
-
-## Maintain the framework
-
-- **Understand how the editor's data reaches the engines** →
-  [entity-sync-adapter.md](entity-sync-adapter.md) — the default
-  adapter, its checks, and what still does not work.
-- **Update the bundled Gutenberg framework** →
-  [gutenberg-subtree.md](gutenberg-subtree.md) — setup, rebasing,
-  updating the pin, and release packaging.
-
-## How we work
-
-- **File or shape an issue** → [plan/README.md](plan/README.md) — the
-  rules, the labels, and the flow. The work itself lives in GitHub
-  Issues.
-- **Learn why the code is shaped this way** →
-  [plan/history.md](plan/history.md) — decisions that are closed and
-  dead ends not worth retrying.
-- **See what we set aside** → [plan/wontfix.md](plan/wontfix.md) —
-  ideas we looked at and why they wait.
-
-The pages here describe how things work today. Notable shipped changes
-are recorded in `CHANGELOG.md`, and `AGENTS.md` says how to work in the
-repo. The pages carry no measured numbers: to produce them on your own
-hardware, run `npm run bench` (what the plugin adds to a server) or
-`npm run bench -- --suite=engines` (the engine comparison) against
-a running tests env; see `tests/benchmarks/README.md`.
+The pages carry no measured numbers; `npm run bench` produces them on
+your hardware. Notable shipped changes are in `CHANGELOG.md`, how to
+work in the repo is in `AGENTS.md`, and open work lives in GitHub
+Issues (`CONTRIBUTING.md` has the filing rules).

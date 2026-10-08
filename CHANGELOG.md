@@ -174,7 +174,7 @@ release, which the release script generates from the commit history.
     When several editors share a block, the outline keeps the color of
     whoever arrived first and the avatars stack, spreading out on hover
     to show every name. A block that has not reached an editor yet shows
-    nothing until it arrives. See `docs/awareness-high-latency.md`.
+    nothing until it arrives. See `docs/transports.md`.
 
 -   An advisory channel between the browser tabs editing one post: a
     direct WebRTC link, discovered and negotiated through the heartbeat
@@ -191,7 +191,7 @@ release, which the release script generates from the commit history.
     `gutenberg_sync_engines_advisory_enabled`,
     `gutenberg_sync_engines_advisory_ice_servers`,
     `gutenberg_sync_engines_advisory_max_peers`; console:
-    `wpSync.advisory()`. See `docs/advisory-channel.md`.
+    `wpSync.advisory()`. See `docs/transports.md`.
 
 -   Settings → Collaboration: one "Transport" list replaces the transport
     select. Its entries are polling, polling with a WebRTC advisory
@@ -219,7 +219,7 @@ release, which the release script generates from the commit history.
     and the `wp_sync_websocket_url` filter still wins) and the WebSocket
     advisory server (a relay of your own; empty means the sync daemon).
     `examples/advisory-relay/` is
-    a reference relay to run or port; `docs/advisory-channel.md`
+    a reference relay to run or port; `docs/transports.md`
     documents the access token and the message formats
     ([#92](https://github.com/WordPress/gutenberg-sync-engines/issues/92)).
 
@@ -252,7 +252,7 @@ sync-server`), and the daemon relays presence and "go and poll"
     shared copy was reset under it starts over from the saved post
     instead of failing silently. Filter:
     `gutenberg_sync_engines_room_reset_when_empty`; action:
-    `gutenberg_sync_engines_room_reset`. See `docs/room-lifetime.md`.
+    `gutenberg_sync_engines_room_reset`. See `docs/transports.md`.
 
 ### Changed
 

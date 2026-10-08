@@ -31,13 +31,15 @@ environments and both Playground blueprints install it.
    and activate it. Activation creates the storage tables and turns the
    Gutenberg "Real-time collaboration" experiment on.
 3. Open the same post in two browsers as two users and type. Changes
-   appear in the other window within seconds.
+   appear in the other window within seconds, each window shows the
+   other person's avatar, and when both change the same paragraph at
+   once a review panel offers to restore or dismiss the change that was
+   set aside.
 
 The defaults (the intent-log engine, polling with a WebRTC advisory
-channel) need nothing from the host. The step-by-step page, including
-the development environment and WordPress Playground, is
-[docs/getting-started.md](docs/getting-started.md); every option is in
-[docs/settings.md](docs/settings.md).
+channel) need nothing from the host. Every option is in
+[docs/settings.md](docs/settings.md). Deactivating the plugin turns
+collaboration off and keeps the storage tables; deleting it drops them.
 
 ## What it provides
 
@@ -45,13 +47,12 @@ the development environment and WordPress Playground, is
 
 - **intent-log**: the editor sends short descriptions of what changed,
   such as "move this block". The server keeps an ordered log of these
-  and works out how to combine edits that overlap (an operational
-  transform engine). Genuine conflicts are set aside for someone to
-  review, so no work is silently lost.
+  and works out how to combine edits that overlap. Genuine conflicts
+  are set aside for someone to review, so no work is silently lost.
 - **yjs-server**: a PHP implementation of Yjs. The server holds a shared
   document for each post in a format built to merge automatically (a
-  CRDT), merges every update into it, compacts it by itself, and produces
-  the post content from it.
+  CRDT), merges every update into it, keeps it small by itself, and can
+  produce the post content from it.
 - **de-rtc** (Distributed Editing): the server compares three versions
   of the post, the latest saved version, the editor's proposed version,
   and the version the editor started from, and combines the changes (a
@@ -80,14 +81,14 @@ To choose one, and see what each gives up, read
 - **websocket**: the server pushes updates over a persistent connection
   served by a bundled PHP daemon (`wp collaboration sync-server`).
 
-[docs/transports.md](docs/transports.md) compares them;
-[docs/operations.md](docs/operations.md) says what each needs from a
-host.
+[docs/transports.md](docs/transports.md) compares them and says what
+each needs from a host.
 
 ### Storage
 
-Collaboration sessions live in two plugin-owned tables instead of post
-meta, so no collaboration write touches post caches. Who is present
+Each post's shared editing session (a room) lives in two plugin-owned
+tables instead of post meta, so no collaboration write touches post
+caches. Who is present
 lives in the Presence API's table. Deactivating the plugin keeps the
 tables and every session; deleting it drops them. See
 [docs/storage.md](docs/storage.md).
@@ -105,7 +106,7 @@ nothing is corrupted. The framework ships no engines and no transports
 of its own; without this plugin, collaboration is off.
 
 How an edit travels is in [docs/data-flow.md](docs/data-flow.md). How to
-add an engine or a transport is in [docs/extending.md](docs/extending.md).
+add an engine or a transport is in [docs/protocol.md](docs/protocol.md).
 The framework's own design notes are at
 `gutenberg/prototypes/sync/ARCHITECTURE.md` inside this repository's
 bundled Gutenberg. Every page is indexed in
@@ -144,9 +145,8 @@ npm run test:e2e          # Playwright, two-browser collaboration
 `npm run playground` serves the built checkout on a local WordPress
 Playground instead. `AGENTS.md` is the full guide to working in the
 repo: environments, the test ladder, diagnostics, and the traps.
-Framework development and updating the pin are in
-[docs/gutenberg-subtree.md](docs/gutenberg-subtree.md). To type in a
-second window by yourself, see [tests/tools/README.md](tests/tools/README.md).
+To type in a second window by yourself, see
+[tests/tools/README.md](tests/tools/README.md).
 
 ## Maintainers
 

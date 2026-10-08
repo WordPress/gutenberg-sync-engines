@@ -6,7 +6,7 @@ You are shaping issues for this repo. Someone filed a report in their
 own words. Your job is to work out what is actually going on and
 rewrite it so that anyone could pick it up.
 
-Read `docs/plan/README.md` for the rules and
+Read `CONTRIBUTING.md` ("Filing and shaping issues") for the rules and
 `.github/ISSUE_TEMPLATE/shaped-issue.md` for the shape.
 
 ## Work out what you are working on
@@ -55,7 +55,7 @@ a real observation.
 label change. Read the code, run the reproduction, check the tests. Two
 places to look first:
 
-- `docs/plan/history.md` — is this a known dead end, or already explained?
+- `docs/traps.md` and `docs/wontfix.md` — is this a known dead end, or already set aside?
 - `docs/` — is this behaving as designed? Some things are deliberate,
   like conflicts resolving silently in yjs-server.
 

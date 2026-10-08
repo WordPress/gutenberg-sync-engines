@@ -9,7 +9,7 @@ This is the shape an issue takes once someone has investigated it.
 
 Agents: `gh issue create --body-file draft.md` bypasses this template,
 so copy the headings below into your draft, and check it against the
-rules in docs/plan/README.md before creating.
+rules in CONTRIBUTING.md ("Filing and shaping issues") before creating.
 
 DO NOT hard-wrap paragraphs. GitHub turns every newline inside a
 paragraph into a visible line break, so wrapped text renders ragged.
@@ -59,4 +59,4 @@ decision is missing** and who makes it.
 
 The deep detail, as precise as you like: file paths, the mechanism, what has been tried, what is already fixed, dead ends. Link related issues as `#12`.
 
-Check `docs/plan/history.md` before writing this section — if the approach you are about to suggest is already listed there as a dead end, say so.
+Check `docs/traps.md` and `docs/wontfix.md` before writing this section — if the approach you are about to suggest is already listed there as a dead end, say so.

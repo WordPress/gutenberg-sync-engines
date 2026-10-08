@@ -138,7 +138,7 @@ those notes accurate, and stop.
       same time without conflicting. A cycle that changed nothing still
       comments why.
 
-    `docs/plan/history.md` ("Running the loop") is only for lessons
+    `docs/traps.md` is only for lessons
     that outlive one issue. Touch it when you learn something durable,
     not every cycle — it is a shared file on the base branch, and every
     write is a chance to collide with another machine.
@@ -177,9 +177,9 @@ those notes accurate, and stop.
   run, and that — not collision — is the failure that actually costs
   time.
 - **Write plainly**, in the ledger, in issue comments, and in commit
-  messages. The rules in `docs/plan/README.md` apply to everything the loop
+  messages. The rules in `CONTRIBUTING.md` apply to everything the loop
   writes.
 - **Do not hard-wrap anything going to GitHub.** Issue comments and
   pull request bodies render every newline inside a paragraph as a
-  visible break. One paragraph, one line. `docs/plan/history.md` and
+  visible break. One paragraph, one line. `docs/traps.md` and
   commit messages are files and stay wrapped as usual.

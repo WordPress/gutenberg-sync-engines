@@ -37,6 +37,31 @@ This repo includes an [`AGENTS.md`](AGENTS.md) file, a
 For more, please see the
 [WordPress AI Guidelines](https://make.wordpress.org/ai/handbook/ai-guidelines/).
 
+## Filing and shaping issues
+
+Work lives in GitHub Issues. A report needs two things: what happened,
+and what you expected. It arrives labelled `agent:needs shaping`; an
+agent investigates and rewrites it into the shape in
+`.github/ISSUE_TEMPLATE/shaped-issue.md` (what happens now, an example
+with numbered steps, what should happen, how we will know it is done,
+notes), then moves the label to `agent:ready`. `agent:in progress`
+means someone claimed it (add the label and assign yourself in one
+step, and release it when you stop); `agent:parked` means it cannot
+move and a comment says what it needs.
+
+Write the title, the problem and the example in plain words. If a word
+is defined in `docs/glossary.md` it is one of ours and belongs only in
+the notes: say "the post everyone is editing", not "the room"; "the
+change was thrown away", not "voided"; "set aside for a person to
+decide", not "escalated". One issue is one thing. Do not hard-wrap issue
+bodies: GitHub shows every newline, so one paragraph is one line.
+
+Agents run the loop with `/loop /shape-issue` and `/loop /solve-issue`
+(either also takes an issue number). Cycle notes go on the issue as a
+comment; a lesson that would save the next person a week goes in
+`docs/traps.md`. Running the PHP tests wipes the test database, so never
+share a test environment between two runs.
+
 ## Reporting Security Issues
 
 Please see [SECURITY.md](SECURITY.md).
