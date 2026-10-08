@@ -61,19 +61,31 @@ This plugin provides:
   object cache is detected (`WP_REDIS_*` constants), and otherwise by
   half-second checks of a per-room VERSION COUNTER
   (`WP_Sync_Table_Storage::get_room_versions`, bumped atomically on every
-  storage write; in the object cache when persistent, else a `_version`
-  room-meta row; snapshot taken BEFORE each read; awareness held by the
-  Presence API bumps no counter, so each check then also reads the
-  stream's rooms' awareness and compares it with what was last sent —
-  `awareness_changed()`; the Presence API backend fires
-  `gutenberg_sync_engines_room_changed` itself, so Redis notices still
-  go out) through
+  write that changes what a reader can see; in the object cache when
+  persistent, else a `_version` room-meta row; snapshot taken BEFORE
+  each read; awareness held by the Presence API bumps no counter, so
+  each check then also reads the stream's rooms' awareness and compares
+  it with what was last sent — `awareness_changed()`; the Presence API
+  backend fires `gutenberg_sync_engines_room_changed` itself, so Redis
+  notices still go out) through
   `WP_Sync_Storage_Change_Waiter`, the retired long-polling transport's
   wait; a storage without counters is read the long way. Bounded
   reconnects from durable cursors. A stored `http-long-polling` choice reads as
   `sse`. wp-env lifecycle hooks start and remove Redis for each checkout
   and config on its own network. Setup, the proxy/buffering caveat, and
   failure behavior: `docs/transports.md`.
+  A presence write that moves only timestamps (the same clients in the
+  same states, refreshed into a later 10-second bucket) is a QUIET write:
+  `WP_Sync_Awareness::store()` compares the entries without their
+  timestamps and sends such a write through
+  `WP_Sync_Table_Storage::refresh_awareness_state()`, which neither bumps
+  the counter nor publishes a Redis notice, so the streams' 20-second
+  presence refreshes never wake each other (N tabs used to cost N×N
+  re-reads per 20 s). The Presence API backend follows the same rule:
+  `put()` rewrites an unchanged row (same user, same state, only older)
+  without firing `gutenberg_sync_engines_room_changed`. Arrivals,
+  leaves, expiries, and state changes notify as before; other storages
+  and awareness backends are untouched.
   Short polling is the BASE transport; beside it every editor tab opens an
   **advisory channel** (`src/providers/advisory/`) that carries presence
   and "go and poll" notices, never content. It runs over one of two

@@ -178,6 +178,13 @@ if ( ! class_exists( 'WP_Sync_Awareness' ) ) {
 		 *
 		 * An idle poll carries the same state in the same timestamp bucket,
 		 * so the comparison skips the write and the poll stays read-only.
+		 * A write that moves only timestamps (the same clients in the same
+		 * states, refreshed into a later bucket) changes nothing a peer can
+		 * see, so on the plugin's table storage it goes through the quiet
+		 * write, which tells no transport: the timestamp still lands for
+		 * the reader that expires entries by it, but no stream on the room
+		 * re-reads storage for it. Anyone arriving, leaving, expiring, or
+		 * changing state is announced as before.
 		 *
 		 * @since 0.0.2
 		 *
@@ -195,10 +202,35 @@ if ( ! class_exists( 'WP_Sync_Awareness' ) ) {
 				}
 			);
 
-			if ( $entries !== $stored ) {
+			if ( $entries === $stored ) {
+				return $entries;
+			}
+
+			if ( $this->storage instanceof WP_Sync_Table_Storage && self::without_timestamps( $entries ) === self::without_timestamps( $stored ) ) {
+				$this->storage->refresh_awareness_state( $room, $entries );
+			} else {
 				$this->storage->set_awareness_state( $room, $entries );
 			}
 
+			return $entries;
+		}
+
+		/**
+		 * The entries with their timestamps removed: what a peer can see
+		 * of them.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param array<int, mixed> $entries Entries.
+		 * @return array<int, mixed> The same entries without `updated_at`.
+		 */
+		private static function without_timestamps( array $entries ): array {
+			foreach ( $entries as &$entry ) {
+				if ( is_array( $entry ) ) {
+					unset( $entry['updated_at'] );
+				}
+			}
+			unset( $entry );
 			return $entries;
 		}
 

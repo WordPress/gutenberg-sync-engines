@@ -103,6 +103,77 @@ class Tests_Collaboration_WpSyncAwareness extends WP_UnitTestCase {
 	}
 
 	/**
+	 * A client repeating its state in a LATER timestamp bucket writes the
+	 * fresh timestamp but tells no transport: nothing a peer can see has
+	 * changed. Anyone arriving, changing state, expiring, or leaving is
+	 * announced.
+	 */
+	public function test_a_refresh_that_moves_only_timestamps_writes_without_notifying(): void {
+		$exact   = static fn() => 1;
+		add_filter( 'wp_sync_awareness_timestamp_granularity', $exact );
+		$changed = 0;
+		add_action(
+			'gutenberg_sync_engines_room_changed',
+			static function () use ( &$changed ) {
+				++$changed;
+			}
+		);
+		$storage   = new WP_Sync_Table_Storage();
+		$awareness = $this->awareness();
+		$room      = $this->room();
+
+		$awareness->put( $room, 7, array( 'name' => 'Ada' ), self::$editor_id, 30 );
+		$this->assertSame( 1, $changed, 'Arriving is announced.' );
+
+		$this->age( $storage, $room, 5 );
+		$version = $storage->get_room_versions( array( $room ) );
+		$awareness->put( $room, 7, array( 'name' => 'Ada' ), self::$editor_id, 30 );
+		$this->assertSame( 1, $changed, 'A timestamp-only refresh is not announced.' );
+		$this->assertSame( $version, $storage->get_room_versions( array( $room ) ), 'Nor does it bump the version counter.' );
+		$this->assertGreaterThanOrEqual( time() - 1, $storage->get_awareness_state( $room )[0]['updated_at'], 'The timestamp still lands.' );
+
+		$awareness->put( $room, 7, array( 'name' => 'Ada Lovelace' ), self::$editor_id, 30 );
+		$this->assertSame( 2, $changed, 'A state change is announced.' );
+
+		$awareness->put( $room, 9, array( 'name' => 'Grace' ), self::$editor_id, 30 );
+		$this->assertSame( 3, $changed, 'A second client is announced.' );
+
+		$this->age( $storage, $room, 5 );
+		$awareness->put( $room, 9, array( 'name' => 'Grace' ), self::$editor_id, 30 );
+		$this->assertSame( 3, $changed, 'The second client refreshing is not.' );
+
+		$this->age( $storage, $room, 31, 7 );
+		$awareness->put( $room, 9, array( 'name' => 'Grace' ), self::$editor_id, 30 );
+		$this->assertSame( 4, $changed, 'A refresh that drops an expired peer is announced.' );
+		$this->assertSame( array( 9 ), array_column( $storage->get_awareness_state( $room ), 'client_id' ) );
+
+		$awareness->forget( $room, 9, 30 );
+		$this->assertSame( 5, $changed, 'Leaving is announced.' );
+
+		remove_filter( 'wp_sync_awareness_timestamp_granularity', $exact );
+	}
+
+	/**
+	 * Moves stored timestamps into the past without announcing anything,
+	 * as if the clock had advanced.
+	 *
+	 * @param WP_Sync_Table_Storage $storage The storage.
+	 * @param string                $room    Room identifier.
+	 * @param int                   $seconds How far back.
+	 * @param int                   $client  Only this client, or 0 for all.
+	 */
+	private function age( WP_Sync_Table_Storage $storage, string $room, int $seconds, int $client = 0 ): void {
+		$entries = $storage->get_awareness_state( $room );
+		foreach ( $entries as &$entry ) {
+			if ( 0 === $client || $client === (int) $entry['client_id'] ) {
+				$entry['updated_at'] = time() - $seconds;
+			}
+		}
+		unset( $entry );
+		$storage->refresh_awareness_state( $room, $entries );
+	}
+
+	/**
 	 * A backend on the filter takes over every read and write, so nothing
 	 * reaches the room array.
 	 */
@@ -283,6 +354,36 @@ class Tests_Collaboration_WpSyncAwareness extends WP_UnitTestCase {
 
 		$this->assertSame( 2, $changed->get_call_count(), 'A put and a forget should each wake streams.' );
 		$this->assertFalse( ( new WP_Sync_Table_Storage() )->peek_room( $room )['found'], 'Awareness should not create the room.' );
+	}
+
+	/**
+	 * A refresh of an unchanged row lands in the presence table but wakes
+	 * no stream; arriving, changing state, and leaving still do. The same
+	 * rule as the room array's timestamp-only write.
+	 */
+	public function test_a_presence_api_refresh_of_an_unchanged_row_wakes_no_stream(): void {
+		Fake_Presence_API::$enabled = true;
+		$room                       = $this->room();
+		$state                      = array( 'name' => 'Ada' );
+		$changed                    = new MockAction();
+		add_action( 'gutenberg_sync_engines_room_changed', array( $changed, 'action' ) );
+
+		$this->awareness()->put( $room, 7, $state, self::$editor_id, 30 );
+		$this->assertSame( 1, $changed->get_call_count(), 'Arriving wakes streams.' );
+
+		$this->backdate( $room, 'gse-7', 12 );
+		$this->awareness()->put( $room, 7, $state, self::$editor_id, 30 );
+		$this->assertRowIsFresh( $room, 'gse-7' );
+		$this->assertSame( 1, $changed->get_call_count(), 'A refresh of an unchanged row does not.' );
+
+		$this->awareness()->put( $room, 7, array( 'name' => 'Ada Lovelace' ), self::$editor_id, 30 );
+		$this->assertSame( 2, $changed->get_call_count(), 'A state change does.' );
+
+		$this->awareness()->put( $room, 9, array( 'name' => 'Grace' ), self::$editor_id, 30 );
+		$this->assertSame( 3, $changed->get_call_count(), 'A second client does.' );
+
+		$this->awareness()->forget( $room, 9, 30 );
+		$this->assertSame( 4, $changed->get_call_count(), 'Leaving does.' );
 	}
 
 	/**
