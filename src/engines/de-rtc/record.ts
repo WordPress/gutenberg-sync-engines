@@ -298,14 +298,21 @@ export function recordChangesFromEditor(
 				// Never stored: blocks carry the content.
 				break;
 			case 'blocks': {
+				let blocks: any[] | null = null;
 				if ( value ) {
-					result.blocks = identifyEditorBlocks( value as any[] );
+					blocks = value as any[];
+				} else {
+					const raw = getRawValue( changes.content );
+					if ( 'string' === typeof raw ) {
+						blocks = parse( raw );
+					}
+				}
+				if ( ! blocks ) {
 					break;
 				}
-				const raw = getRawValue( changes.content );
-				if ( 'string' === typeof raw ) {
-					result.blocks = identifyEditorBlocks( parse( raw ) );
-				}
+				result.blocks = identifyEditorBlocks(
+					adoptRecordIdentity( blocks, record.blocks() )
+				);
 				break;
 			}
 			case 'title': {
@@ -327,6 +334,91 @@ export function recordChangesFromEditor(
 		}
 	}
 	return result;
+}
+
+/**
+ * Carries the record's block identity onto editor blocks that lack one.
+ *
+ * The editor's id stamper (includes/shared/sync-id.js) writes the saved
+ * post's deterministic genesis ids one block at a time, so an editor tree
+ * captured while it runs (every tree buffered before the genesis snapshot
+ * arrives, and the first few after it) carries ids on some blocks and none
+ * on the rest. Those blocks are not creations: they are the saved post's
+ * blocks, which the record already holds under their genesis ids. An
+ * id-less block adopts the record's id at the same path when the block
+ * names match — the server's own rule for engine-unaware writers
+ * (WP_De_RTC_Block_Identity::adopt), mirrored here so a session never
+ * mints a creation id for a block the room already identifies. Minting
+ * one put a second identity on every block of the post: the tab's first
+ * commit replaced the genesis ids, every later merge saw deletions and
+ * insertions instead of edits, and with four or more people a typed
+ * burst was parked as a conflict. Ids already used elsewhere in the
+ * editor tree are never adopted (a duplicate would merge two blocks), and
+ * the editor's immutable blocks are copied, never written to.
+ *
+ * @param blocks       The editor's block tree.
+ * @param recordBlocks The record's current blocks (the canonical tree).
+ * @return The tree with identities adopted.
+ */
+export function adoptRecordIdentity(
+	blocks: any[],
+	recordBlocks: any[]
+): any[] {
+	const used = new Set< string >();
+	const collect = ( tree: any[] ) => {
+		for ( const block of tree ) {
+			const syncId = block.attributes?.metadata?.syncId;
+			if ( 'string' === typeof syncId ) {
+				used.add( syncId );
+			}
+			if ( block.innerBlocks ) {
+				collect( block.innerBlocks );
+			}
+		}
+	};
+	collect( blocks );
+	const walk = ( tree: any[], counterparts: any[] ): any[] => {
+		let changed = false;
+		const result = tree.map( ( block, index ) => {
+			const counterpart = counterparts[ index ];
+			const sameName = counterpart && counterpart.name === block.name;
+			const candidate = sameName
+				? counterpart.attributes?.metadata?.syncId
+				: undefined;
+			const assign =
+				! block.attributes?.metadata?.syncId &&
+				'string' === typeof candidate &&
+				! used.has( candidate );
+			if ( assign ) {
+				used.add( candidate );
+			}
+			const innerBlocks =
+				block.innerBlocks &&
+				walk(
+					block.innerBlocks,
+					sameName ? counterpart.innerBlocks ?? [] : []
+				);
+			if ( ! assign && innerBlocks === block.innerBlocks ) {
+				return block;
+			}
+			changed = true;
+			return {
+				...block,
+				...( assign && {
+					attributes: {
+						...block.attributes,
+						metadata: {
+							...block.attributes?.metadata,
+							syncId: candidate,
+						},
+					},
+				} ),
+				...( innerBlocks && { innerBlocks } ),
+			};
+		} );
+		return changed ? result : tree;
+	};
+	return walk( blocks, recordBlocks );
 }
 
 /**

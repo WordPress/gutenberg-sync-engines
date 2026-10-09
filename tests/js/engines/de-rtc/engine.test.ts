@@ -126,6 +126,153 @@ describe( 'createDeRtcEngine', () => {
 		expect( changes.blocks ).toEqual( [ BLOCK_B ] );
 	} );
 
+	/*
+	 * The editor's id stamper (includes/shared/sync-id.js) writes the
+	 * saved post's deterministic genesis ids one block at a time, so the
+	 * editor trees captured before the genesis snapshot arrives carry ids
+	 * on some blocks and none on the rest. Those blocks are the same
+	 * blocks the genesis identifies; minting creation ids for them put a
+	 * second identity on every block of the post, and the first commit of
+	 * each joining tab scrambled the room (duplicated blocks, a typed
+	 * burst parked as a conflict with four or more people).
+	 */
+	it( 'gives pre-bootstrap editor blocks without ids the genesis identity at their path', () => {
+		const entity = makeEntity();
+		const session = entity.createSession();
+		const sent: any[] = [];
+		session.onLocalUpdate( ( update ) => sent.push( update ) );
+
+		// The loaded post, half stamped, with a word typed into an
+		// unstamped paragraph and a nested unstamped paragraph.
+		const typed = [
+			{
+				clientId: 'c-alpha',
+				name: 'core/paragraph',
+				attributes: {
+					content: 'Alpha',
+					metadata: { syncId: 'g-alpha' },
+				},
+				innerBlocks: [],
+			},
+			{
+				clientId: 'c-beta',
+				name: 'core/paragraph',
+				attributes: { content: 'Beta typed' },
+				innerBlocks: [],
+			},
+			{
+				clientId: 'c-group',
+				name: 'core/group',
+				attributes: {},
+				innerBlocks: [
+					{
+						clientId: 'c-gamma',
+						name: 'core/paragraph',
+						attributes: { content: 'Gamma' },
+						innerBlocks: [],
+					},
+				],
+			},
+		];
+		entity.applyLocalChanges( { blocks: typed } as any, 'editor', {} );
+
+		const genesis = [
+			{
+				name: 'core/paragraph',
+				attributes: {
+					content: 'Alpha',
+					metadata: { syncId: 'g-alpha' },
+				},
+				innerBlocks: [],
+			},
+			{
+				name: 'core/paragraph',
+				attributes: { content: 'Beta', metadata: { syncId: 'g-beta' } },
+				innerBlocks: [],
+			},
+			{
+				name: 'core/group',
+				attributes: { metadata: { syncId: 'g-group' } },
+				innerBlocks: [
+					{
+						name: 'core/paragraph',
+						attributes: {
+							content: 'Gamma',
+							metadata: { syncId: 'g-gamma' },
+						},
+						innerBlocks: [],
+					},
+				],
+			},
+		];
+		session.receiveUpdate( snapshotRow( 'v1', contentOf( ...genesis ) ) );
+
+		const proposals = sent.filter(
+			( update ) => DE_RTC_PROPOSAL_TYPE === update.type
+		);
+		expect( proposals ).toHaveLength( 1 );
+		const proposal = JSON.parse( proposals[ 0 ].data );
+		expect( proposal.baseVersion ).toBe( 'v1' );
+		const blocks = JSON.parse( proposal.proposedContent );
+		expect(
+			blocks.map( ( block: any ) => block.attributes.metadata.syncId )
+		).toEqual( [ 'g-alpha', 'g-beta', 'g-group' ] );
+		expect( blocks[ 1 ].attributes.content ).toBe( 'Beta typed' );
+		expect( blocks[ 2 ].innerBlocks[ 0 ].attributes.metadata.syncId ).toBe(
+			'g-gamma'
+		);
+		// The editor's immutable tree is never written to.
+		expect( typed[ 1 ].attributes ).toEqual( { content: 'Beta typed' } );
+	} );
+
+	it( 'proposes nothing when a pre-bootstrap tree differs from genesis only by missing ids', () => {
+		const entity = makeEntity();
+		const session = entity.createSession();
+		const sent: any[] = [];
+		session.onLocalUpdate( ( update ) => sent.push( update ) );
+
+		const stamped = {
+			name: 'core/paragraph',
+			attributes: { content: 'Alpha', metadata: { syncId: 'g-alpha' } },
+			innerBlocks: [],
+		};
+		const unstamped = {
+			name: 'core/paragraph',
+			attributes: { content: 'Beta' },
+			innerBlocks: [],
+		};
+		// Two stamper passes: the first block, then the second.
+		entity.applyLocalChanges(
+			{
+				blocks: [ stamped, { clientId: 'c-beta', ...unstamped } ],
+			} as any,
+			'editor',
+			{}
+		);
+		// The test serializer keeps clientIds, so the genesis copy carries
+		// the editor's (the real serializer drops them).
+		const genesis = [
+			stamped,
+			{
+				clientId: 'c-beta',
+				...unstamped,
+				attributes: { content: 'Beta', metadata: { syncId: 'g-beta' } },
+			},
+		];
+		session.receiveUpdate( snapshotRow( 'v1', contentOf( ...genesis ) ) );
+		// The stamper's last pass, after genesis: every id present, the
+		// same content, a new tree.
+		entity.applyLocalChanges(
+			{ blocks: [ { ...stamped }, { ...genesis[ 1 ] } ] } as any,
+			'editor',
+			{}
+		);
+
+		expect(
+			sent.filter( ( update ) => DE_RTC_PROPOSAL_TYPE === update.type )
+		).toHaveLength( 0 );
+	} );
+
 	it( 'coalesces local edits into ONE in-flight proposal against the last applied version', () => {
 		const entity = makeEntity();
 		const session = entity.createSession();

@@ -14,19 +14,30 @@ export function editingScript( index, durationMs ) {
 			( max - min );
 	const script = [];
 	let at = 0;
+	let burstIndex = 0;
 	while ( at < durationMs ) {
 		at += jitter( 2000, 6000 );
 		const burst = Math.round( jitter( 4, 9 ) );
+		let typed = 0;
 		for ( let i = 0; i < burst && at < durationMs; i++ ) {
-			script.push( { at, text: ` w${ index }t${ script.length }x` } );
+			script.push( {
+				at,
+				text: ` w${ index }t${ script.length }x`,
+				burst: burstIndex,
+			} );
+			typed++;
 			at += jitter( 250, 550 );
+		}
+		if ( typed ) {
+			burstIndex++;
 		}
 	}
 	return script;
 }
 
 /**
- * Compare the fixture's complete paragraph text, ignoring block metadata.
+ * Compare the fixture's complete text — every paragraph, heading, and
+ * list item, in order — ignoring block metadata and wrapper markup.
  * Extra blocks, missing tokens, duplicates, and changed order must fail.
  *
  * @param {string}        content  Serialized post content.
@@ -40,15 +51,20 @@ export function matchesDocument( content, expected ) {
 	const paragraphs = [];
 	const remaining = content
 		.replace( /<!--[\s\S]*?-->/g, '' )
-		.replace( /<p(?:\s[^>]*)?>([\s\S]*?)<\/p>/g, ( _, text ) => {
-			paragraphs.push(
-				text
-					.replace( /&nbsp;|&#160;/g, ' ' )
-					.replace( /\s+/g, ' ' )
-					.trim()
-			);
-			return '';
-		} );
+		.replace(
+			/<(p|h[1-6]|li)(?:\s[^>]*)?>([\s\S]*?)<\/\1>/g,
+			( _, tag, text ) => {
+				paragraphs.push(
+					text
+						.replace( /&nbsp;|&#160;/g, ' ' )
+						.replace( /\s+/g, ' ' )
+						.trim()
+				);
+				return '';
+			}
+		)
+		// Wrapper markup (list and group containers) carries no text.
+		.replace( /<[^>]+>/g, '' );
 	return (
 		remaining.trim() === '' &&
 		paragraphs.length === expected.length &&
