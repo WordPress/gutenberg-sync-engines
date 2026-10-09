@@ -217,6 +217,18 @@ before a big change. A durable lesson from an issue goes here.
   stores content). The one place whole content still travels on the
   transport is a `proposal` row for collections and unsupported post
   types; posts and pages commit through the autosave endpoint.
+- **A de-rtc record never mints a creation id for a block the room
+  already identifies.** The editor's id stamper writes the saved post's
+  genesis ids one block at a time, so the editor trees captured around
+  a tab's bootstrap carry ids on some blocks and none on the rest. An
+  id-less block adopts the record's id at the same path (the server's
+  own rule for id-less saves, `adoptRecordIdentity` in
+  `src/engines/de-rtc/record.ts`). Minting the editor's clientId
+  instead put a second identity on every block: each joining tab's first
+  commit replaced the genesis ids, later merges saw deletions and
+  insertions instead of edits, and with four or more people one
+  person's first burst was parked as a conflict and lost.
+  `tests/js/engines/de-rtc/engine.test.ts` pins it.
 - **A de-rtc tab waits for the merged version before it sends its next
   change.** When the server merges other people's work into a tab's
   change, a newer version exists that the tab does not hold yet

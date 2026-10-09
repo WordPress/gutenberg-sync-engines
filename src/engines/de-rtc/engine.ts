@@ -21,6 +21,7 @@ import {
 	createDeRtcRecord,
 	editorChangesFromRecord,
 	recordChangesFromEditor,
+	sameBlocks,
 } from './record';
 import { createDeRtcAuthorship, type DeRtcBlockAuthorship } from './authorship';
 import {
@@ -346,15 +347,41 @@ export function createDeRtcEngine(): SyncEngine & {
 				origin: unknown;
 			} > = [];
 
+			/*
+			 * The block tree the editor lane last stored. The editor's
+			 * trees are immutable, so while the record still holds this
+			 * one a new tree is a change by definition. Once a canonical
+			 * row has replaced it, the record holds the room's parsed
+			 * blocks and the editor's next tree is compared by content:
+			 * the trees the editor emits around a bootstrap (the id
+			 * stamper's passes over the loaded post, the buffered copies
+			 * replayed after genesis) say exactly what the room says, and
+			 * storing them would mark the doc dirty and commit a version
+			 * that changes nothing.
+			 */
+			let editorTree: unknown = null;
+
 			// Editor edits: kept per the framework's field rules.
 			const applyEditorChanges = (
 				changes: Record< string, unknown >,
 				origin: unknown
 			) => {
-				record.apply(
-					recordChangesFromEditor( changes, record, objectType ),
-					origin
+				const next = recordChangesFromEditor(
+					changes,
+					record,
+					objectType
 				);
+				if (
+					Array.isArray( next.blocks ) &&
+					record.blocks() !== editorTree &&
+					sameBlocks( record.blocks(), next.blocks )
+				) {
+					delete next.blocks;
+				}
+				record.apply( next, origin );
+				if ( Array.isArray( next.blocks ) ) {
+					editorTree = next.blocks;
+				}
 			};
 
 			// Restores and reverts: already record-shaped. Parsed blocks
