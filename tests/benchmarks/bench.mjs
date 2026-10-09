@@ -120,7 +120,7 @@ Suites (--suite=; default: host):
   sweep      Runs the host report once per run of a plan file and
              collects the result lines into a data set, with a CSV export
              and a chart page (tests/benchmarks/host/sweep.mjs). Arguments:
-             --plan= (quick | scaling | spread | transports, or a path), --out=,
+             --plan= (quick | peers | scaling | spread | transports, or a path), --out=,
              --dry-run, --max-runs=, --headed.
   engines    The engine-decision matrix and invariant sweeps (in-process,
              wp-env cli). Arguments: --engines=, --scenarios=, --seed=,

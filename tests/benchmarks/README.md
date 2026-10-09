@@ -329,6 +329,7 @@ npm run bench -- --suite=sweep --plan=scaling             # run them
 | Plan         | What it answers                                              |
 | ------------ | ------------------------------------------------------------ |
 | `quick`      | each engine with 1 and 2 people, short runs: checks the output path in ~30–40 min |
+| `peers`      | each engine with 1 to 5 peers, short runs: ~1.5–2 hours |
 | `scaling`    | each engine against people (1–3), post size, and pattern     |
 | `spread`     | one setup five times: how much each metric moves between identical runs |
 | `transports` | each engine over each transport (needs Redis and the daemon) |
