@@ -1297,7 +1297,7 @@ function summarize( phase, baseline, rows, engine, coverageLimits, timeline ) {
 			const baseMeasured = measureTimelines(
 				timeline.rows.filter( ( row ) => row.approach === 'baseline' ),
 				baseWindows,
-				timeline.clock,
+				timeline.baseClock,
 				1
 			);
 			// Timelines bound CPU, worker time, and queries; the PHP
@@ -2021,7 +2021,14 @@ async function main() {
 				tracking.issued.has( row.request_id )
 			);
 			validateTimelines( rows, tracking.expected, clock );
-			timeline = { clock, rows };
+			// The plugin-off phase is bounded by its own clock probes
+			// only: they travel with a saved phase, so a run that reuses
+			// it gets the same ranges as the run that measured it.
+			// (Probes from later runs would only widen its bounds.)
+			const baseClock = clockRange(
+				baseline.sessions.flatMap( ( session ) => session.clockProbes )
+			);
+			timeline = { clock, baseClock, rows };
 		} catch ( error ) {
 			timelineError = error.message;
 		}
