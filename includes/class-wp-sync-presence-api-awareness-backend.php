@@ -73,7 +73,11 @@ if ( ! class_exists( 'WP_Sync_Presence_API_Awareness_Backend' ) ) {
 			$now     = time();
 			$entries = array();
 
-			foreach ( wp_get_presence( $room, $timeout ) as $row ) {
+			$rows = self::takes_args()
+				? wp_get_presence( $room, array( 'timeout' => $timeout ) )
+				: wp_get_presence( $room, $timeout );
+
+			foreach ( $rows as $row ) {
 				if ( ! str_starts_with( (string) $row->client_id, self::CLIENT_PREFIX ) ) {
 					continue;
 				}
@@ -155,7 +159,19 @@ if ( ! class_exists( 'WP_Sync_Presence_API_Awareness_Backend' ) ) {
 			// The explicit timestamp turns off the Presence API's own write
 			// skip, which runs as long as the caller's whole window and so
 			// would let a live client reach the edge of it unwritten.
-			if ( wp_set_presence( $room, self::CLIENT_PREFIX . $client_id, $state, $user_id, gmdate( 'Y-m-d H:i:s', $now ) ) ) {
+			$date_gmt = gmdate( 'Y-m-d H:i:s', $now );
+			$written  = self::takes_args()
+				? wp_set_presence(
+					$room,
+					self::CLIENT_PREFIX . $client_id,
+					$state,
+					array(
+						'user_id'  => $user_id,
+						'date_gmt' => $date_gmt,
+					)
+				)
+				: wp_set_presence( $room, self::CLIENT_PREFIX . $client_id, $state, $user_id, $date_gmt );
+			if ( $written ) {
 				self::changed( $room );
 			}
 
@@ -199,6 +215,19 @@ if ( ! class_exists( 'WP_Sync_Presence_API_Awareness_Backend' ) ) {
 		private static function changed( string $room ): void {
 			/** This action is documented in includes/storage/class-wp-sync-table-storage.php */
 			do_action( 'gutenberg_sync_engines_room_changed', $room );
+		}
+
+		/**
+		 * Whether the Presence API takes its optional arguments as an `$args` array, as it does from 0.17.0.
+		 *
+		 * Older versions read an array there as a user ID, so they keep the positional form.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @return bool
+		 */
+		private static function takes_args(): bool {
+			return defined( 'WP_PRESENCE_VERSION' ) && version_compare( WP_PRESENCE_VERSION, '0.17.0', '>=' );
 		}
 	}
 }
