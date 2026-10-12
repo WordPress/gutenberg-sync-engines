@@ -44,7 +44,17 @@ if ( ! class_exists( 'WP_Sync_Presence_API_Tab_List_Backend' ) ) {
 		public function tabs( string $room, int $timeout ): array {
 			$tabs = array();
 
-			foreach ( wp_get_presence( $room, $timeout, self::CLIENT_PREFIX ) as $row ) {
+			$rows = self::takes_args()
+				? wp_get_presence(
+					$room,
+					array(
+						'timeout'       => $timeout,
+						'client_prefix' => self::CLIENT_PREFIX,
+					)
+				)
+				: wp_get_presence( $room, $timeout, self::CLIENT_PREFIX );
+
+			foreach ( $rows as $row ) {
 				$client_id = (string) $row->client_id;
 				// Presence API versions before 0.7.0 ignore the prefix argument.
 				if ( ! str_starts_with( $client_id, self::CLIENT_PREFIX ) ) {
@@ -76,7 +86,21 @@ if ( ! class_exists( 'WP_Sync_Presence_API_Tab_List_Backend' ) ) {
 		public function put( string $room, string $token, array $state, int $user_id, int $timeout ): void {
 			// An explicit date is never skipped as too recent; the lifetime
 			// outlasts the site's default, which can be shorter than $timeout.
-			wp_set_presence( $room, self::CLIENT_PREFIX . $token, $state, $user_id, gmdate( 'Y-m-d H:i:s' ), $timeout );
+			$date_gmt = gmdate( 'Y-m-d H:i:s' );
+			if ( self::takes_args() ) {
+				wp_set_presence(
+					$room,
+					self::CLIENT_PREFIX . $token,
+					$state,
+					array(
+						'user_id'    => $user_id,
+						'date_gmt'   => $date_gmt,
+						'expires_in' => $timeout,
+					)
+				);
+			} else {
+				wp_set_presence( $room, self::CLIENT_PREFIX . $token, $state, $user_id, $date_gmt, $timeout );
+			}
 		}
 
 		/**
@@ -90,6 +114,19 @@ if ( ! class_exists( 'WP_Sync_Presence_API_Tab_List_Backend' ) ) {
 		 */
 		public function forget( string $room, string $token ): void {
 			wp_remove_presence( $room, self::CLIENT_PREFIX . $token );
+		}
+
+		/**
+		 * Whether the Presence API takes its optional arguments as an `$args` array, as it does from 0.17.0.
+		 *
+		 * Older versions read an array there as a user ID, so they keep the positional form.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @return bool
+		 */
+		private static function takes_args(): bool {
+			return defined( 'WP_PRESENCE_VERSION' ) && version_compare( WP_PRESENCE_VERSION, '0.17.0', '>=' );
 		}
 	}
 }
