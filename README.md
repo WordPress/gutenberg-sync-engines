@@ -45,20 +45,27 @@ collaboration off and keeps the storage tables; deleting it drops them.
 
 ### Engines
 
-- **intent-log**: the editor sends short descriptions of what changed,
-  such as "move this block". The server keeps an ordered log of these
-  and works out how to combine edits that overlap. Genuine conflicts
-  are set aside for someone to review, so no work is silently lost.
-- **yjs-server**: a PHP implementation of Yjs. The server holds a shared
-  document for each post in a format built to merge automatically (a
-  CRDT), merges every update into it, keeps it small by itself, and can
-  produce the post content from it.
-- **de-rtc** (Distributed Editing): the server compares three versions
-  of the post, the latest saved version, the editor's proposed version,
-  and the version the editor started from, and combines the changes (a
-  three-way merge). Sync happens on save or autosave, not on every
-  change. Genuine conflicts are flagged for someone to review instead of
-  silently merging.
+#### intent-log
+
+The editor sends short descriptions of what changed, such as "move this block". The server keeps an ordered log of these and works out how to combine edits that overlap. Genuine conflicts are set aside for someone to review, so no work is silently lost.
+
+https://github.com/user-attachments/assets/3c05f1c4-27ec-4a28-ba75-ce256b20864a
+
+When two people edit at the same time, the server adjusts the later edit around the earlier one before adding it to the log, so both are adjusted for what each person meant:
+
+https://github.com/user-attachments/assets/3563cba8-0537-4aa1-8794-9c712439b3a4
+
+#### yjs-server
+
+A PHP implementation of Yjs. The server holds a shared document for each post in a format built to merge automatically (a CRDT), merges every update into it, keeps it small by itself, and can produce the post content from it.
+
+https://github.com/user-attachments/assets/b0ffc6c8-a619-41e9-991c-c310144348ef
+
+#### de-rtc
+
+Distributed Editing: the server compares three versions of the post, the latest saved version, the editor's proposed version, and the version the editor started from, and combines the changes (a three-way merge). Sync happens on save or autosave, not on every change. Genuine conflicts are flagged for someone to review instead of silently merging.
+
+https://github.com/user-attachments/assets/deeb6012-d708-433c-9514-12b81fc870a1
 
 To choose one, and see what each gives up, read
 [docs/engine-comparison.md](docs/engine-comparison.md).
