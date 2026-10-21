@@ -59,7 +59,7 @@ https://github.com/user-attachments/assets/3563cba8-0537-4aa1-8794-9c712439b3a4
 
 A PHP implementation of Yjs. The server holds a shared document for each post in a format built to merge automatically (a CRDT), merges every update into it, keeps it small by itself, and can produce the post content from it.
 
-https://github.com/user-attachments/assets/b0ffc6c8-a619-41e9-991c-c310144348ef
+https://github.com/user-attachments/assets/d408357a-499e-446b-8d97-732d22c8b4a6
 
 #### de-rtc
 
