@@ -1800,12 +1800,37 @@ export function createIntentLogManager( debug = false ): SyncManager & {
 			 * blocks would leave a block from in between behind the
 			 * merged result, out of order.
 			 */
+			const replacement =
+				'' === content.trim() ? [] : toBridgeBlocks( parse( content ) );
 			const tree = replaceBlocksInTree(
 				documentBlocks( state, doc ),
 				parked.spanIds,
-				'' === content.trim() ? [] : toBridgeBlocks( parse( content ) ),
+				replacement,
 				slot
 			);
+			/*
+			 * The content is the reviewer's choice, not a stale editor
+			 * tree, so a block it names must land even when this tab holds
+			 * a tombstone for it. The tab's own set-aside split is the
+			 * case: the replan took the second half out of the optimistic
+			 * document, which tombstoned its id as if a peer had removed
+			 * it, and the stale-tree filter then dropped the very block
+			 * the reviewer had just chosen to put back ("It should be
+			 * split into multiple paragraphs." vanished on accept).
+			 */
+			const excludeIds = new Set( state.docTombstones );
+			const liftTombstones = ( blocks: BridgeBlock[] ) => {
+				for ( const block of blocks ) {
+					const syncId = (
+						block.attributes?.metadata as { syncId?: string }
+					 )?.syncId;
+					if ( syncId ) {
+						excludeIds.delete( syncId );
+					}
+					liftTombstones( block.innerBlocks );
+				}
+			};
+			liftTombstones( replacement );
 			// Only what the record showed may disappear: the run's blocks
 			// and the blocks inside them.
 			const removableIds = new Set( parked.blockIds );
@@ -1827,7 +1852,7 @@ export function createIntentLogManager( debug = false ): SyncManager & {
 			collectRun( doc.root );
 			const derived = deriveIntents( doc, tree, {
 				removableIds,
-				excludeIds: state.docTombstones,
+				excludeIds,
 				richTextFields: state.fieldsResolver,
 				rawContent: state.rawContent,
 				saveMarkup: saveMarkupAdapter,

@@ -3093,6 +3093,192 @@ describe( 'intent-log manager', () => {
 		expect( doc.root.map( ( block ) => block.syncId ) ).toEqual( [ 'p1' ] );
 	} );
 
+	it( "REGRESSION: accepting the split version of the reviewer's OWN parked split keeps both halves", async () => {
+		// Manual finding: user B split "This block is too long. It
+		// should be split…" at the period while user A typed into the
+		// same paragraph. B's split was set aside; the record's proposed
+		// side showed both halves. B chose that version and accepted,
+		// and only the first half remained. The parked split had left
+		// B's optimistic document, so the second half's id was
+		// tombstoned, and the accept path's stale-tree filter dropped
+		// the block the reviewer had just chosen to put back.
+		const paragraph = {
+			syncId: 'p1',
+			blockType: 'core/paragraph',
+			text: 'This block is too long. It should be split into multiple paragraphs.',
+		};
+		const head = 'This block is too long.';
+		const tail = ' It should be split into multiple paragraphs.';
+		const server = rebaseCreateServer(
+			createDocument( [ paragraph ] )
+		) as unknown as {
+			log: Array< Record< string, unknown > >;
+			proposals: Array< Record< string, unknown > >;
+		};
+		const ingest = ( rows: Parameters< typeof serverIngestBatch >[ 1 ] ) =>
+			serverIngestBatch( server as never, rows ) as Array< {
+				status: string;
+				reason?: string;
+			} >;
+		const takeSent = () =>
+			transport.captured.sent
+				.splice( 0 )
+				.filter(
+					( update ) => INTENT_LOG_UPDATE_TYPES.INTENT === update.type
+				)
+				.map( ( update ) => JSON.parse( update.data ) );
+		const { manager, handlers, transport } = await loadManagedEntity();
+		const session = transport.captured.session as IntentLogSession;
+		session.receiveUpdate( snapshotRow( [ paragraph ] ) );
+		const lastPush = () =>
+			handlers.edits.at( -1 ) as {
+				blocks: Array< {
+					clientId: string;
+					attributes: { content: string };
+				} >;
+			};
+		const clientId = lastPush().blocks[ 0 ].clientId;
+		const tree = ( blocks: Array< [ string, string | undefined ] > ) => ( {
+			blocks: blocks.map( ( [ content, syncId ] ) => ( {
+				name: 'core/paragraph',
+				clientId: syncId ? clientId : 'editor-tail',
+				attributes: syncId
+					? { content, metadata: { syncId } }
+					: { content },
+				innerBlocks: [],
+			} ) ),
+		} );
+
+		// B types into the paragraph, then presses Enter after the
+		// period: the editor hands over the head with p1's identity and
+		// a new tail block.
+		manager.update(
+			'postType/post',
+			'1',
+			tree( [ [ `Yes, ${ paragraph.text }`, 'p1' ] ] ),
+			'gutenberg'
+		);
+		flushEditorSync();
+		manager.update(
+			'postType/post',
+			'1',
+			tree( [
+				[ `Yes, ${ head }`, 'p1' ],
+				[ tail, undefined ],
+			] ),
+			'gutenberg'
+		);
+		flushEditorSync();
+		const burst = takeSent();
+		expect( burst.map( ( row ) => row.type ) ).toEqual( [
+			'insert_text',
+			'split_block',
+		] );
+		const tailId = burst[ 1 ].payload.newSyncId as string;
+		expect( session.getDocument()!.root.map( ( b ) => b.syncId ) ).toEqual(
+			[ 'p1', tailId ]
+		);
+
+		// A's keystroke into the same paragraph reaches the server
+		// first, and B's burst, planned against the older frame, is set
+		// aside whole (rule 5).
+		expect(
+			ingest( [
+				{
+					intentId: 'a-1',
+					actorId: 'u9c9',
+					baseSeq: 0,
+					txnId: null,
+					type: 'insert_text',
+					payload: {
+						syncId: 'p1',
+						field: 'content',
+						offset: 0,
+						text: 'I think ',
+					},
+				},
+			] ).map( ( d ) => d.status )
+		).toEqual( [ 'applied' ] );
+		const dispositions = ingest( burst );
+		expect( dispositions.map( ( d ) => d.reason ) ).toEqual( [
+			'frame-conflict',
+			'dependent-on-escalated',
+		] );
+		// One poll: the accepted row, the parked rows, the acks.
+		session.receiveUpdate( {
+			data: JSON.stringify( server.log[ 0 ] ),
+			type: INTENT_LOG_UPDATE_TYPES.INTENT,
+		} );
+		for ( const proposal of server.proposals ) {
+			session.receiveUpdate( {
+				data: JSON.stringify( proposal ),
+				type: INTENT_LOG_UPDATE_TYPES.PARKED,
+			} );
+		}
+		session.receiveDispositions!(
+			dispositions.map( ( disposition, index ) => ( {
+				...disposition,
+				intentId: burst[ index ].intentId as string,
+			} ) ) as never
+		);
+		await Promise.resolve();
+		// B's optimistic document no longer shows the split.
+		expect(
+			session
+				.getDocument()!
+				.root.map( ( b ) => `${ b.syncId }:${ b.fields.content.text }` )
+		).toEqual( [ `p1:I think ${ paragraph.text }` ] );
+		const open = manager.conflicts.getOpenConflicts( 'postType/post', '1' );
+		expect( open ).toHaveLength( 1 );
+		// The side is one serialized chunk per block (the test's serialize
+		// is JSON, so re-join the chunks into one block list).
+		const proposedBlocks = JSON.parse(
+			`[${ open[ 0 ].proposed.split( '\n\n' ).join( ',' ) }]`
+		).flat() as Array< {
+			attributes: { content: string; metadata?: { syncId?: string } };
+		} >;
+		expect( proposedBlocks.map( ( b ) => b.attributes.content ) ).toEqual( [
+			`Yes, ${ head }`,
+			tail,
+		] );
+		expect( proposedBlocks[ 1 ].attributes.metadata?.syncId ).toBe(
+			tailId
+		);
+
+		// B restores "Your version" (the proposed side) and accepts.
+		handlers.edits.length = 0;
+		manager.conflicts.resolveConflict( 'postType/post', '1', open[ 0 ].id, {
+			action: 'accept',
+			content: JSON.stringify( proposedBlocks ),
+			current: open[ 0 ].current,
+		} );
+
+		const bothHalves = [ `Yes, ${ head }`, tail ];
+		expect(
+			session.getDocument()!.root.map( ( b ) => b.fields.content.text )
+		).toEqual( bothHalves );
+		expect(
+			lastPush().blocks.map( ( b ) => b.attributes.content )
+		).toEqual( bothHalves );
+		expect(
+			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
+		).toEqual( [] );
+
+		// The server takes the accepted result as it was authored.
+		const acceptBatch = takeSent();
+		expect( acceptBatch.length ).toBeGreaterThan( 0 );
+		expect( ingest( acceptBatch ).map( ( d ) => d.status ) ).toEqual(
+			acceptBatch.map( () => 'applied' )
+		);
+		const serverHead = serverDocAtForTest(
+			server as never,
+			server.log.length
+		);
+		expect( serverHead.root.map( ( b ) => b.fields.content.text ) ).toEqual(
+			bothHalves
+		);
+	} );
+
 	it( 'accept of a post-field record authors one set_property at the observed version, then closes the record', async () => {
 		const { manager, handlers, transport } = await loadManagedEntity( {
 			title: { raw: 'Original' },

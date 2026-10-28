@@ -450,6 +450,102 @@ describe( 'intent-log conflict records', () => {
 		expect( record.conflict.current ).toBe( '' );
 	} );
 
+	it( 'targets the slot a removed block used to sit in, from the base', () => {
+		// A peer removed p1 after the author's edit to it was set aside.
+		// An accepted result puts p1 back where it was: before p2, the
+		// sibling after it that survived, not at the top of the post.
+		const base = createDocument( [
+			{ syncId: 'p0', blockType: 'core/paragraph', text: 'Intro' },
+			{ syncId: 'p1', blockType: 'core/paragraph', text: 'Hello' },
+			{ syncId: 'p2', blockType: 'core/paragraph', text: 'World' },
+		] );
+		const removal = intent( 'remove_block', { syncId: 'p1' } );
+		const current = applyIntent(
+			applyIntent( base, removal ).doc,
+			intent( 'insert_block', {
+				block: { syncId: 'n1', blockType: 'core/paragraph', text: '' },
+				parentId: null,
+				afterSiblingId: null,
+			} )
+		).doc;
+		expect( current.root.map( ( block ) => block.syncId ) ).toEqual( [
+			'n1',
+			'p0',
+			'p2',
+		] );
+		const edit = intent( 'insert_text', {
+			syncId: 'p1',
+			field: 'content',
+			offset: 5,
+			text: '!',
+		} );
+
+		const [ record ] = buildConflictRecords(
+			[ parked( edit ) ],
+			depsFor( current, { 0: base } )
+		);
+
+		expect( record.conflict.target ).toEqual( {
+			type: 'blocks',
+			parentId: undefined,
+			index: 2,
+			count: 0,
+		} );
+		expect( record.conflict.current ).toBe( '' );
+		expect( record.conflict.proposed ).toBe( 'p1:Hello!' );
+		expect( record.spanIds ).toEqual( [] );
+
+		// With every sibling after it gone, the slot is after the nearest
+		// surviving one before it.
+		const trimmed = applyIntent(
+			current,
+			intent( 'remove_block', { syncId: 'p2' } )
+		).doc;
+		const [ afterIntro ] = buildConflictRecords(
+			[ parked( edit ) ],
+			depsFor( trimmed, { 0: base } )
+		);
+		expect( afterIntro.conflict.target ).toMatchObject( {
+			parentId: undefined,
+			index: 2,
+		} );
+
+		// Inside a container whose other children are gone: its first
+		// child.
+		const grouped = createDocument( [
+			{
+				syncId: 'g1',
+				blockType: 'core/group',
+				children: [
+					{ syncId: 'c1', blockType: 'core/paragraph', text: 'One' },
+				],
+			},
+		] );
+		const emptied = applyIntent(
+			grouped,
+			intent( 'remove_block', { syncId: 'c1' } )
+		).doc;
+		const [ inGroup ] = buildConflictRecords(
+			[
+				parked(
+					intent( 'insert_text', {
+						syncId: 'c1',
+						field: 'content',
+						offset: 3,
+						text: '!',
+					} )
+				),
+			],
+			depsFor( emptied, { 0: grouped } )
+		);
+		expect( inGroup.conflict.target ).toEqual( {
+			type: 'blocks',
+			parentId: 'g1',
+			index: 0,
+			count: 0,
+		} );
+	} );
+
 	it( 'describes a parked property write by its three values', () => {
 		const base = createDocument( [], { title: 'Draft' } );
 		const current = createDocument( [], { title: 'Theirs' } );

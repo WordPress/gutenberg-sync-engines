@@ -581,13 +581,19 @@ function acceptedSiblings(
 
 /**
  * The run of blocks a record covers in the current document, or, for a
- * proposed insertion, where the block would land.
+ * proposed insertion or a run a peer removed, where the blocks would land.
  *
  * @param draft   Record draft.
  * @param current The current document.
+ * @param baseDoc The document at the record's base, or null when it is
+ *                not retained.
  * @return The target.
  */
-function targetOf( draft: Draft, current: EngineDocument ): SyncConflictTarget {
+function targetOf(
+	draft: Draft,
+	current: EngineDocument,
+	baseDoc: EngineDocument | null
+): SyncConflictTarget {
 	if ( undefined !== draft.property ) {
 		return { type: 'property', name: draft.property };
 	}
@@ -606,18 +612,82 @@ function targetOf( draft: Draft, current: EngineDocument ): SyncConflictTarget {
 	const insertion = draft.members.find(
 		( member ) => 'insert_block' === member.intent.type
 	);
-	const payload = insertion?.intent.payload ?? {};
-	const sibling =
-		'string' === typeof payload.afterSiblingId
-			? placed.get( payload.afterSiblingId )
-			: undefined;
+	if ( insertion ) {
+		const payload = insertion.intent.payload;
+		const sibling =
+			'string' === typeof payload.afterSiblingId
+				? placed.get( payload.afterSiblingId )
+				: undefined;
+		return {
+			type: 'blocks',
+			parentId:
+				'string' === typeof payload.parentId
+					? payload.parentId
+					: undefined,
+			index: sibling ? sibling.index + 1 : 0,
+			count: 0,
+		};
+	}
+	// The blocks left the document after the record opened (a peer
+	// removed them). An accepted result puts them back where they were,
+	// so the slot is read from the base: before the nearest sibling after
+	// the run that is still there, else after the nearest one before it.
+	const vacated = baseDoc
+		? vacatedSlot( draft.blockIds, baseDoc, current )
+		: null;
 	return {
 		type: 'blocks',
-		parentId:
-			'string' === typeof payload.parentId ? payload.parentId : undefined,
-		index: sibling ? sibling.index + 1 : 0,
+		parentId: vacated?.parentId,
+		index: vacated?.index ?? 0,
 		count: 0,
 	};
+}
+
+/**
+ * Where a run of blocks that is gone from the current document used to
+ * sit, as a slot in the current document: the run's place at the base,
+ * carried over by the siblings that survived.
+ *
+ * @param ids     The run's block ids.
+ * @param baseDoc The document the run was taken from.
+ * @param current The current document.
+ * @return The slot, or null when neither the parent nor a sibling survived.
+ */
+function vacatedSlot(
+	ids: string[],
+	baseDoc: EngineDocument,
+	current: EngineDocument
+): { parentId?: string; index: number } | null {
+	const run = coveringRun( ids, baseDoc );
+	if ( 0 === run.ids.length ) {
+		return null;
+	}
+	const siblings = run.parentId
+		? blocksById( baseDoc ).get( run.parentId )?.children ?? []
+		: baseDoc.root;
+	const placed = placements( current );
+	const stillBeside = ( block: EngineBlock ) => {
+		const placement = placed.get( block.syncId );
+		return placement && placement.parentId === run.parentId
+			? placement
+			: undefined;
+	};
+	for ( let at = run.index + run.ids.length; at < siblings.length; at++ ) {
+		const placement = stillBeside( siblings[ at ] );
+		if ( placement ) {
+			return { parentId: run.parentId, index: placement.index };
+		}
+	}
+	for ( let at = run.index - 1; at >= 0; at-- ) {
+		const placement = stillBeside( siblings[ at ] );
+		if ( placement ) {
+			return { parentId: run.parentId, index: placement.index + 1 };
+		}
+	}
+	if ( run.parentId && placed.has( run.parentId ) ) {
+		return { parentId: run.parentId, index: 0 };
+	}
+	return null;
 }
 
 /**
@@ -688,7 +758,7 @@ export function buildConflictRecords(
 			);
 		}
 
-		const target = targetOf( draft, current );
+		const target = targetOf( draft, current, baseDoc );
 
 		return {
 			conflict: {
