@@ -856,6 +856,129 @@ class Tests_Collaboration_WpDeRtcEngine extends WP_UnitTestCase {
 		$this->assertStringContainsString( '<script>alert(1)</script>', $this->engine()->materialize( $this->room() ) );
 	}
 
+	public function test_restored_resolution_of_a_security_hold_needs_unfiltered_html() {
+		wp_set_current_user( self::$author_id );
+		$engine   = $this->engine();
+		$response = $engine->get_updates_since( $this->room(), 1, 0, array() );
+		$latest   = $this->latest_from_response( $response );
+		$proposed = $latest['content'] . "\n\n<!-- wp:html -->\n<script>alert(1)</script>\n<!-- /wp:html -->";
+		$engine->handle_updates(
+			$this->room(),
+			3,
+			0,
+			array( $this->proposal( 'p-risky', $latest['version'], $latest['content'], $proposed ) ),
+			array()
+		);
+		$parked = $this->rows_of_type(
+			$this->engine()->get_updates_since( $this->room(), 4, 0, array() ),
+			WP_De_RTC_Engine::UPDATE_TYPE_PARKED
+		);
+		$this->assertCount( 1, $parked );
+
+		// Restoring is the approval act (it pins the held bytes as vetted),
+		// so the author who lacks unfiltered_html cannot do it through the
+		// route either: the record stays open and nothing is pinned.
+		$rejected = $this->engine()->resolve_proposal( $this->room(), $parked[0]['proposalId'], 'restored', 3 );
+		$this->assertWPError( $rejected );
+		$this->assertSame( 'rest_sync_forbidden', $rejected->get_error_code() );
+		$room_read = $this->engine()->get_updates_since( $this->room(), 5, 0, array() );
+		$this->assertCount( 0, $this->rows_of_type( $room_read, WP_De_RTC_Engine::UPDATE_TYPE_RESOLVED ) );
+
+		// Re-proposing the same bytes still does not land them: nothing was
+		// approved, and the one open hold keeps covering them.
+		$this->engine()->handle_updates(
+			$this->room(),
+			3,
+			0,
+			array( $this->proposal( 'p-risky-again', $latest['version'], $latest['content'], $proposed ) ),
+			array()
+		);
+		$this->assertStringNotContainsString( '<script>', $this->engine()->materialize( $this->room() ) );
+		$this->assertCount(
+			1,
+			$this->rows_of_type(
+				$this->engine()->get_updates_since( $this->room(), 1, 0, array() ),
+				WP_De_RTC_Engine::UPDATE_TYPE_PARKED
+			)
+		);
+
+		// A privileged reviewer can restore it.
+		wp_set_current_user( self::$editor_id );
+		$restored = $this->engine()->resolve_proposal( $this->room(), $parked[0]['proposalId'], 'restored', 5 );
+		$this->assertSame( 'resolved', $restored['status'] );
+	}
+
+	public function test_accepted_resolution_of_a_property_conflict_decodes_a_non_string_value() {
+		$engine   = $this->engine();
+		$response = $engine->get_updates_since( $this->room(), 1, 0, array() );
+		$latest   = $this->latest_from_response( $response );
+		$seed     = $this->latest_properties( $response );
+		$this->assertArrayHasKey( 'categories', $seed );
+
+		// Two clients set the categories differently against the same base.
+		$engine->handle_updates(
+			$this->room(),
+			1,
+			0,
+			array( $this->property_proposal( 'p-c1', $latest['version'], $latest['content'], array( 'categories' => array( 101 ) ) ) ),
+			array()
+		);
+		$this->engine()->handle_updates(
+			$this->room(),
+			2,
+			0,
+			array( $this->property_proposal( 'p-c2', $latest['version'], $latest['content'], array( 'categories' => array( 202, 303 ) ) ) ),
+			array()
+		);
+		$parked = $this->rows_of_type(
+			$this->engine()->get_updates_since( $this->room(), 3, 0, array() ),
+			WP_De_RTC_Engine::UPDATE_TYPE_PARKED
+		);
+		$this->assertCount( 1, $parked );
+		$this->assertSame( 'categories', $parked[0]['property']['name'] );
+		$this->assertSame( array( 202, 303 ), $parked[0]['property']['value'] );
+
+		// The sides carry a non-string value as JSON, and "Use proposed"
+		// sends that JSON back. The field takes the decoded list, not the
+		// JSON text.
+		$now      = $this->latest_from_response( $this->engine()->get_updates_since( $this->room(), 3, 0, array() ) );
+		$accepted = $this->engine()->resolve_proposal( $this->room(), $parked[0]['proposalId'], 'accepted', 5, wp_json_encode( array( 202, 303 ) ), $now['version'] );
+		$this->assertSame( 'resolved', $accepted['status'] );
+		$props = $this->latest_properties( $this->engine()->get_updates_since( $this->room(), 6, 0, array() ) );
+		$this->assertSame( array( 202, 303 ), $props['categories'] );
+	}
+
+	public function test_accepted_resolution_of_a_property_conflict_refuses_a_value_that_does_not_decode() {
+		$engine   = $this->engine();
+		$response = $engine->get_updates_since( $this->room(), 1, 0, array() );
+		$latest   = $this->latest_from_response( $response );
+		$engine->handle_updates(
+			$this->room(),
+			1,
+			0,
+			array( $this->property_proposal( 'p-c1', $latest['version'], $latest['content'], array( 'categories' => array( 101 ) ) ) ),
+			array()
+		);
+		$this->engine()->handle_updates(
+			$this->room(),
+			2,
+			0,
+			array( $this->property_proposal( 'p-c2', $latest['version'], $latest['content'], array( 'categories' => array( 202 ) ) ) ),
+			array()
+		);
+		$parked = $this->rows_of_type(
+			$this->engine()->get_updates_since( $this->room(), 3, 0, array() ),
+			WP_De_RTC_Engine::UPDATE_TYPE_PARKED
+		);
+		$this->assertCount( 1, $parked );
+
+		$refused = $this->engine()->resolve_proposal( $this->room(), $parked[0]['proposalId'], 'accepted', 5, 'not json' );
+		$this->assertWPError( $refused );
+		$this->assertSame( 'rest_invalid_param', $refused->get_error_code() );
+		$props = $this->latest_properties( $this->engine()->get_updates_since( $this->room(), 3, 0, array() ) );
+		$this->assertSame( array( 101 ), $props['categories'] );
+	}
+
 	public function test_accepted_resolution_of_a_closed_record_acks_without_applying() {
 		$this->escalate_conflict();
 		$this->engine()->resolve_proposal( $this->room(), 'p-b', 'dismissed', 2 );

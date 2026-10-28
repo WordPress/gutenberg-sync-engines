@@ -1589,6 +1589,24 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 			$proposal_id = $resolution['proposalId'];
 			if ( isset( $review['open'][ $proposal_id ] ) && ! isset( $review['resolved'][ $proposal_id ] ) ) {
 				$parked = $review['open'][ $proposal_id ];
+
+				// Restoring a security hold is the approval act (it pins the
+				// held bytes as vetted, see below), so it takes the same gate
+				// as accepting one: only a user who may publish unfiltered
+				// HTML. Without it, the author of the held markup could
+				// approve it through the route and re-propose it unfiltered.
+				if (
+					'restored' === $resolution['resolution'] &&
+					'requires-unfiltered-html' === ( $parked['reason'] ?? null ) &&
+					! current_user_can( 'unfiltered_html' )
+				) {
+					return new WP_Error(
+						'rest_sync_forbidden',
+						__( 'Approving this content requires permission to publish unfiltered HTML.', 'gutenberg-sync-engines' ),
+						array( 'status' => 403 )
+					);
+				}
+
 				$stored = $this->add_row(
 					$room,
 					$client_id,
@@ -2001,8 +2019,26 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 				'baseVersion' => (string) $state['version'],
 			);
 			if ( is_array( $parked['property'] ?? null ) && is_string( $parked['property']['name'] ?? null ) ) {
+				/*
+				 * The sides of a property record carry a string as it is and
+				 * any other value (a term list, a flag) as JSON, and the
+				 * decision sends the chosen side back in that encoding. A
+				 * non-string field takes the decoded value, never the JSON
+				 * text, or every client would set the field to a string.
+				 */
+				$value = $content;
+				if ( ! is_string( $parked['property']['value'] ?? '' ) ) {
+					$value = json_decode( $content, true );
+					if ( null === $value && 'null' !== trim( $content ) ) {
+						return new WP_Error(
+							'rest_invalid_param',
+							__( 'The accepted value is not valid for this field.', 'gutenberg-sync-engines' ),
+							array( 'status' => 400 )
+						);
+					}
+				}
 				$proposal['proposedContent']    = (string) $state['content'];
-				$proposal['proposedProperties'] = array( $parked['property']['name'] => $content );
+				$proposal['proposedProperties'] = array( $parked['property']['name'] => $value );
 			} else {
 				$replaced = $this->replace_parked_span(
 					(string) $state['content'],
