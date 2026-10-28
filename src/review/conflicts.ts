@@ -215,6 +215,16 @@ export function resolveConflict(
 				undefined !== decision.current &&
 				decision.current !== record.current
 			) {
+				// The reviewer decided against an older reading, so the
+				// record on screen is behind. The fresh read above went
+				// around the cached snapshot, and a source that compares
+				// its last read to notice a change has nothing left to
+				// notice, so wake the subscribers here.
+				const watch = watches.get( keyOf( objectType, objectId ) );
+				if ( watch ) {
+					watch.snapshot = null;
+					watch.listeners.forEach( ( listener ) => listener() );
+				}
 				return Promise.resolve< SyncConflictOutcome >( 'stale' );
 			}
 			return Promise.resolve(

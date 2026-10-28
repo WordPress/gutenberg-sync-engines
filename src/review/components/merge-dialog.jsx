@@ -318,6 +318,10 @@ export default function CollaborationMergeDialog( {
 			size="large"
 		>
 			<MergeDialogBody
+				// A different record on the same block (the first one
+				// closed while the dialog was open) starts a fresh dialog:
+				// the merged result the reviewer built belongs to the old one.
+				key={ conflict.id }
 				base={ conflict.base }
 				proposed={ conflict.proposed }
 				current={ conflict.current }

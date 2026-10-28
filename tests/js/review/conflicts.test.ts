@@ -109,6 +109,37 @@ describe( 'resolveConflict', () => {
 		expect( only.resolve ).toHaveBeenCalledTimes( 1 );
 	} );
 
+	it( 'wakes the subscribers of a refused decision, so the record on screen catches up', async () => {
+		// The source's record moved on without the source announcing it
+		// (its own change check compares against its last read, and the
+		// refusal's read is that read). The refusal itself is the signal.
+		const read = jest.fn( () => [ PARAGRAPH_CONFLICT ] );
+		registerConflictSource( {
+			getOpenConflicts: read,
+			subscribe: () => () => {},
+			resolveConflict: () => 'resolved',
+		} );
+		const listener = jest.fn();
+		subscribeConflicts( ...POST, listener );
+		expect( getOpenConflicts( ...POST ) ).toHaveLength( 1 );
+		listener.mockClear();
+		read.mockClear();
+
+		await expect(
+			resolveConflict( ...POST, 'c1', {
+				action: 'accept',
+				content: 'merged',
+				current: 'what the reviewer saw, since changed',
+			} )
+		).resolves.toBe( 'stale' );
+
+		expect( listener ).toHaveBeenCalledTimes( 1 );
+		// The cached list was dropped: the next read asks the source again.
+		read.mockClear();
+		getOpenConflicts( ...POST );
+		expect( read ).toHaveBeenCalledTimes( 1 );
+	} );
+
 	it( 'reads a record no source holds as resolved elsewhere', async () => {
 		const only = source( [ 'c1' ], 'stale' );
 		registerConflictSource( only.source );

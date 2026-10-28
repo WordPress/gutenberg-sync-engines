@@ -179,12 +179,14 @@ export function KsesReviewDialogBody( { sequestration, onApprove, onRemove } ) {
  * markup as reviewed (edited or not) for the engine to land.
  *
  * @param {Object}   props
+ * @param {string}   props.recordId      The hold's record id.
  * @param {Object}   props.sequestration The hold (see sequestrationOf).
  * @param {Function} props.onApprove     ( proposedHtml ) => void.
  * @param {Function} props.onRemove      Remove the held block.
  * @param {Function} props.onClose       Close without resolving.
  */
 export default function KsesReviewDialog( {
+	recordId,
 	sequestration,
 	onApprove,
 	onRemove,
@@ -198,6 +200,9 @@ export default function KsesReviewDialog( {
 			size="large"
 		>
 			<KsesReviewDialogBody
+				// A different hold on the same block starts a fresh dialog:
+				// the markup the reviewer edited belongs to the old one.
+				key={ recordId }
 				sequestration={ sequestration }
 				onApprove={ onApprove }
 				onRemove={ onRemove }

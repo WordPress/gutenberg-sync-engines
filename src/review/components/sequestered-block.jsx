@@ -135,6 +135,7 @@ export default function SequesteredBlock( { conflicts } ) {
 			/>
 			{ isReviewing && (
 				<KsesReviewDialog
+					recordId={ conflict.id }
 					sequestration={ sequestration }
 					onClose={ () => setIsReviewing( false ) }
 					onApprove={ accept }

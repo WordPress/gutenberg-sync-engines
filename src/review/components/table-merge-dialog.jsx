@@ -288,6 +288,9 @@ export function TableConflictView( { conflict, onDecide, onClose } ) {
 			size="large"
 		>
 			<TableMergeDialogBody
+				// A different record on the same table starts a fresh
+				// dialog: the merged grid belongs to the old one.
+				key={ conflict.id }
 				base={ grids.base }
 				isBaseMissing={ grids.isBaseMissing }
 				yours={ grids.yours }
