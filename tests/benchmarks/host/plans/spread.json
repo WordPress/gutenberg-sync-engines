@@ -1,0 +1,17 @@
+{
+  "name": "spread",
+  "description": "One setup measured five times, to see how much each metric moves between identical runs on one machine. Run it on each machine whose results you compare.",
+  "center": {
+    "engine": "intent-log",
+    "transport": "http-polling",
+    "cache": "none",
+    "windows": 2,
+    "postSize": "medium",
+    "pattern": "own-paragraph",
+    "editSeconds": 60,
+    "idleSeconds": 60,
+    "pollingInterval": 0
+  },
+  "repeat": 5,
+  "seed": 1
+}

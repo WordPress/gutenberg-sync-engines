@@ -104,6 +104,12 @@ module.exports = {
 			FRAMEWORK_ROOT,
 			'packages/theme/build-module/index.mjs'
 		),
+		// The browser test utilities are this plugin's own dependency (the
+		// subtree's copy has no `main`, which the generic mapper below
+		// would need), and tests/js/e2e only mocks them.
+		'^@wordpress/e2e-test-utils-playwright$': require.resolve(
+			'@wordpress/e2e-test-utils-playwright'
+		),
 		// The Jest tooling is this plugin's own: the subtree runs its tests
 		// with another runner and no longer installs these packages.
 		'^@wordpress/(jest-console|jest-preset-default)(.*)$': path.join(
@@ -123,7 +129,10 @@ module.exports = {
 	// `uuid` (a dependency of the subtree's components package) ships only
 	// ES modules; Jest runs CommonJS, so let babel-jest transform it. Every
 	// other node_modules package keeps the default (untransformed).
-	transformIgnorePatterns: [ '/node_modules/(?!(uuid|marked|parsel-js|client-zip)/)', '\\.pnp\\.[^\\/]+$' ],
+	transformIgnorePatterns: [
+		'/node_modules/(?!(uuid|marked|parsel-js|client-zip)/)',
+		'\\.pnp\\.[^\\/]+$',
+	],
 	setupFiles: [
 		...( defaultConfig.setupFiles || [] ),
 		path.join( __dirname, 'tests/js/jest-setup.js' ),

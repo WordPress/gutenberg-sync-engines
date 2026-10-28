@@ -1,0 +1,20 @@
+{
+  "name": "quick",
+  "description": "A short sweep to check the whole output path (result lines, CSV, chart) in about 30-40 minutes: each engine with one and two people, short typing, two repeats.",
+  "center": {
+    "engine": "intent-log",
+    "transport": "http-polling",
+    "cache": "none",
+    "windows": 2,
+    "postSize": "medium",
+    "pattern": "own-paragraph",
+    "editSeconds": 30,
+    "idleSeconds": 30,
+    "pollingInterval": 0
+  },
+  "vary": [
+    { "engine": [ "intent-log", "yjs-server", "de-rtc" ], "windows": [ 1, 2 ] }
+  ],
+  "repeat": 2,
+  "seed": 1
+}

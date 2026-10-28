@@ -9,7 +9,7 @@ import type { Page } from '@playwright/test';
 import { test, expect } from '../../config/collaboration-fixtures';
 
 /**
- * The advisory channel (docs/plan/advisory-channel.md): two tabs editing
+ * The advisory channel (docs/transports.md): two tabs editing
  * one post find each other through the heartbeat, connect browser to
  * browser, and then poll only on demand plus a slow safety poll; a tab
  * that is alone schedules no polls at all. Edits still travel over the

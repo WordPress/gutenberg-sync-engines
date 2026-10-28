@@ -4,9 +4,7 @@
  * the REAL Presence API plugin, the other half of a PHPUnit suite that can
  * only use a stand-in.
  *
- * Usage (tests env, with the Presence API installed and active):
- *   npx wp-env --config .wp-env.tests.json run cli \
- *     wp plugin install presence-api --activate
+ * Usage (tests env, which installs and activates the Presence API):
  *   npx wp-env --config .wp-env.tests.json run cli \
  *     --env-cwd=wp-content/plugins/gutenberg-sync-engines \
  *     wp eval-file tests/tools/check-presence-api.php

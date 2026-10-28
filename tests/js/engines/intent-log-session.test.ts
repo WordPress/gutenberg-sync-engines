@@ -163,8 +163,68 @@ describe( 'intent-log session codec', () => {
 		expect( canonicalJson( session.getDocument()! ) ).toBe( before );
 	} );
 
+	it( 'stale-base recovery excludes rejected conflicts and keeps still-pending work', () => {
+		const session = makeSession( 1, 11 );
+		session.receiveUpdate( {
+			data: JSON.stringify( { doc: createDocument( GENESIS_BLOCKS ) } ),
+			type: INTENT_LOG_UPDATE_TYPES.SNAPSHOT,
+		} );
+		const recover =
+			jest.fn<
+				Parameters< IntentLogSession[ 'onStaleBaseRecovery' ] >[ 0 ]
+			>();
+		session.onStaleBaseRecovery( recover );
+		const stale = session.author( 'insert_text', {
+			syncId: 'p1',
+			offset: 11,
+			text: '!',
+		} );
+		const rejected = session.author( 'insert_text', {
+			syncId: 'q1',
+			field: 'content',
+			offset: 0,
+			text: 'rejected ',
+		} );
+		session.author( 'insert_text', {
+			syncId: 'p1',
+			offset: 0,
+			text: 'pending ',
+		} );
+		const acks = [
+			{
+				intentId: stale.intentId,
+				status: 'voided',
+				reason: 'stale-base',
+			},
+			{
+				intentId: rejected.intentId,
+				status: 'escalated',
+				reason: 'requires-approval',
+			},
+		];
+		session.receiveDispositions!( acks );
+		expect( recover ).toHaveBeenCalledTimes( 1 );
+		const [ { base, target, seq } ] = recover.mock.calls[ 0 ];
+		expect( seq ).toBe( 0 );
+		expect( base.root[ 0 ].fields.content.text ).toBe(
+			'pending Hello world'
+		);
+		expect( target.root[ 0 ].fields.content.text ).toBe(
+			'pending Hello world!'
+		);
+		expect( target.root[ 1 ] ).toEqual( base.root[ 1 ] );
+		expect( target.root[ 1 ].fields.content.text ).toBe(
+			'To be or not to be'
+		);
+		expect( session.getPendingCount() ).toBe( 1 );
+		session.receiveDispositions!( acks );
+		expect( recover ).toHaveBeenCalledTimes( 1 );
+	} );
+
 	it( 'a checkpoint snapshot past the cursor DEFERS behind pending work, then resets when it settles', () => {
 		const session = makeSession( 1, 11 );
+		const recover = jest.fn();
+		session.onStaleBaseRecovery( recover );
 		session.receiveUpdate( {
 			data: JSON.stringify( { doc: createDocument( GENESIS_BLOCKS ) } ),
 			type: INTENT_LOG_UPDATE_TYPES.SNAPSHOT,
@@ -213,6 +273,7 @@ describe( 'intent-log session codec', () => {
 		] );
 
 		expect( resets ).toBe( 1 );
+		expect( recover ).not.toHaveBeenCalled();
 		expect( session.hasDeferredReset() ).toBe( false );
 		expect( session.getSeq() ).toBe( 40 );
 		expect( session.getPendingCount() ).toBe( 0 );

@@ -1,0 +1,23 @@
+{
+  "name": "peers",
+  "description": "Each engine with 1 to 5 peers: the quick plan's short runs, across every peer count the benchmark allows. About 1.5-2 hours.",
+  "center": {
+    "engine": "intent-log",
+    "transport": "http-polling",
+    "cache": "none",
+    "windows": 2,
+    "postSize": "medium",
+    "pattern": "own-paragraph",
+    "editSeconds": 30,
+    "idleSeconds": 30,
+    "pollingInterval": 0
+  },
+  "vary": [
+    {
+      "engine": [ "intent-log", "yjs-server", "de-rtc" ],
+      "windows": [ 1, 2, 3, 4, 5 ]
+    }
+  ],
+  "repeat": 2,
+  "seed": 1
+}

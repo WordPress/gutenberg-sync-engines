@@ -108,6 +108,9 @@ it( 'withholds total server costs when request logs cannot cover them', () => {
 		serverCoverageLimits( { ...polling, transport: 'sse' } )[ 0 ]
 	).toContain( 'span phases' );
 	expect(
+		serverCoverageLimits( { ...polling, transport: 'sse', timeline: true } )
+	).toEqual( [] );
+	expect(
 		serverCoverageLimits( { ...polling, sockets: true } )[ 0 ]
 	).toContain( 'advisory relay' );
 	expect(

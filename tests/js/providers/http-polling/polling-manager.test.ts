@@ -308,12 +308,14 @@ describe( 'polling-manager', () => {
 
 	describe( 'connection limits', () => {
 		it( 'disconnects when clients exceed limit on first poll of first room', async () => {
-			// DEFAULT_CLIENT_LIMIT_PER_ROOM is 3. 4 clients should exceed it.
+			// DEFAULT_CLIENT_LIMIT_PER_ROOM is 5. The sixth total client must be rejected.
 			const awareness = {
 				1: { collaboratorInfo: { id: 100 } },
 				2: { collaboratorInfo: { id: 200 } },
 				3: { collaboratorInfo: { id: 300 } },
 				4: { collaboratorInfo: { id: 400 } },
+				5: { collaboratorInfo: { id: 500 } },
+				6: { collaboratorInfo: { id: 600 } },
 			};
 
 			mockPostSyncUpdate.mockResolvedValue( {
@@ -347,11 +349,13 @@ describe( 'polling-manager', () => {
 		} );
 
 		it( 'allows connection when clients are at or under the limit', async () => {
-			// DEFAULT_CLIENT_LIMIT_PER_ROOM is 3. 3 clients should be fine.
+			// DEFAULT_CLIENT_LIMIT_PER_ROOM is 5. Five total clients, including us, must be allowed.
 			const awareness = {
 				1: { collaboratorInfo: { id: 100 } },
 				2: { collaboratorInfo: { id: 200 } },
 				3: { collaboratorInfo: { id: 300 } },
+				4: { collaboratorInfo: { id: 400 } },
+				5: { collaboratorInfo: { id: 500 } },
 			};
 
 			mockPostSyncUpdate.mockResolvedValue( {
@@ -414,6 +418,7 @@ describe( 'polling-manager', () => {
 				3: {},
 				4: {},
 				5: {},
+				6: {},
 			};
 
 			mockPostSyncUpdate.mockResolvedValue( {
@@ -454,7 +459,7 @@ describe( 'polling-manager', () => {
 		} );
 
 		it( 'does not re-check limits after initial sync', async () => {
-			// First poll: 3 clients (at limit, passes).
+			// First poll: 3 clients (under the limit, passes).
 			const awareness3 = {
 				1: {},
 				2: {},
@@ -484,20 +489,21 @@ describe( 'polling-manager', () => {
 			await jest.advanceTimersByTimeAsync( 0 );
 			onStatusChange.mockClear();
 
-			// Second poll: 5 clients (over limit).
-			const awareness5 = {
+			// Second poll: 6 clients (over limit).
+			const awareness6 = {
 				1: {},
 				2: {},
 				3: {},
 				4: {},
 				5: {},
+				6: {},
 			};
 			mockPostSyncUpdate.mockResolvedValue( {
 				rooms: [
 					{
 						room: 'test-room',
 						end_cursor: 2,
-						awareness: awareness5,
+						awareness: awareness6,
 						updates: [],
 					},
 				],
@@ -622,7 +628,7 @@ describe( 'polling-manager', () => {
 
 			expect( mockApplyFilters ).toHaveBeenCalledWith(
 				'sync.pollingProvider.maxClientsPerRoom',
-				3,
+				5,
 				'my-custom-room'
 			);
 		} );

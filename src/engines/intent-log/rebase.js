@@ -23,6 +23,7 @@ import { applyIntent, replay } from './reducer.js';
 import { textSliceIntents, withTextSlices } from './text-slices.js';
 
 /** @typedef {import('./engine-types').EngineDocument} EngineDocument */
+/** @typedef {(seq: number) => EngineDocument} DocumentLookup */
 /** @typedef {import('./engine-types').IntentEnvelope} IntentEnvelope */
 /** @typedef {import('./engine-types').IntentDisposition} IntentDisposition */
 /** @typedef {import('./engine-types').IntentProposal} IntentProposal */
@@ -1016,7 +1017,7 @@ function transformOne( intent, prior, doc ) {
  * @param {Intent}         intent     Intent to rebase.
  * @param {Intent[]}       priors     Accepted intents after startSeq, in log
  *                                    order.
- * @param {EngineDocument} docAtBase  Document at startSeq.
+ * @param {DocumentLookup} docAt      Document at a log position (read-only).
  * @param {number|null}    [startSeq] Log index of priors[0] (defaults to
  *                                    intent.baseSeq). Non-clean outcomes
  *                                    carry `atSeq`, the absolute log index
@@ -1024,12 +1025,12 @@ function transformOne( intent, prior, doc ) {
  * @return {RebaseOutcome} { outcome: 'clean'|'escalate'|'void', intent,
  *                         reason?, atSeq? }.
  */
-export function rebaseIntent( intent, priors, docAtBase, startSeq = null ) {
+export function rebaseIntent( intent, priors, docAt, startSeq = null ) {
 	const base = startSeq ?? intent.baseSeq;
 	let current = intent;
-	let doc = docAtBase;
 	for ( let i = 0; i < priors.length; i++ ) {
 		const prior = priors[ i ];
+		const doc = docAt( base + i );
 		if ( prior.actorId !== intent.actorId ) {
 			const result = transformOne( current, prior, doc );
 			if ( result.outcome !== 'clean' ) {
@@ -1037,7 +1038,6 @@ export function rebaseIntent( intent, priors, docAtBase, startSeq = null ) {
 			}
 			current = result.intent;
 		}
-		( { doc } = applyIntent( doc, prior ) );
 	}
 	return clean( current );
 }
@@ -1260,6 +1260,22 @@ function planUnits( units, log, docAt, firstSeq, seed, setAside ) {
 	/** @type {FrameClash[]} */
 	const triggers = [];
 	let headDoc = docAt( firstSeq + log.length );
+	// Intents in a batch rebase over the same log entries; build each
+	// document version once and share it.
+	/** @type {Map<number, EngineDocument>} */
+	const versions = new Map();
+	/** @type {DocumentLookup} */
+	const versionAt = ( seq ) => {
+		let doc = versions.get( seq );
+		if ( ! doc ) {
+			const previous = versions.get( seq - 1 );
+			doc = previous
+				? applyIntent( previous, log[ seq - 1 - firstSeq ] ).doc
+				: docAt( seq );
+			versions.set( seq, doc );
+		}
+		return doc;
+	};
 	for ( const unit of units ) {
 		/** @type {RebaseOutcome[]} */
 		const rebased = [];
@@ -1312,7 +1328,7 @@ function planUnits( units, log, docAt, firstSeq, seed, setAside ) {
 					atSeq: conflictSeq,
 				};
 			} else {
-				result = rebaseIntent( intent, slice, docAt( intent.baseSeq ) );
+				result = rebaseIntent( intent, slice, versionAt );
 			}
 			rebased.push( result );
 		}

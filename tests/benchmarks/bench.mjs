@@ -7,9 +7,10 @@
  *                                        # measured against the same site
  *                                        # with the plugin deactivated
  *                                        # (tests/benchmarks/host/)
- *   npm run bench -- --engine=de-rtc --windows=3     # host report, targeted
+ *   npm run bench -- --engine=de-rtc --peers=3     # host report, targeted
  *   npm run bench -- --suite=engines     # engine-decision matrix (below)
  *   npm run bench -- --suite=transport --transport=http-polling --trials=30
+ *   npm run bench -- --peers=5 --p95-ms=2000
  *
  * Those are the BENCHMARKS: the host report (default), the engine
  * matrix, and the transport experience. The soak and replay lanes are
@@ -97,8 +98,9 @@ Suites (--suite=; default: host):
                --wake=       auto | redis | cache | table: what an SSE
                              stream sleeps on (cache needs --cache=redis,
                              table needs --cache=none)
-               --windows=    collaborator windows per engine phase
-                             (default 2)
+               --peers=      total peers (default 2; --windows is an alias)
+               --p95-ms=     optional maximum p95 edit delivery delay
+               --max-lag-ms= maximum typing schedule delay (default 1000 ms)
                --edit-seconds=      editing seconds per person (default
                                     120, min 30)
                --idle-seconds=      idle seconds per phase (default 120;
@@ -108,9 +110,18 @@ Suites (--suite=; default: host):
                                     (0 = the plugin's defaults; default:
                                     leave the site's setting alone)
                --metrics=    comma list of table rows to print:
-                             requests,traffic,cpu,workers,memory,cache,queries,diskio (default all)
+                             requests,traffic,cpu,workers,memory,cache,queries,fsyncs,editor (default all)
+               --post-size=  empty | medium | large (default empty)
+               --pattern=    own-paragraph | new-blocks
                --json=       write full results as JSON to this path
+               --record=     append this run's result line to a
+                             results file
                --headed      visible browser (debugging)
+  sweep      Runs the host report once per run of a plan file and
+             collects the result lines into a data set, with a CSV export
+             and a chart page (tests/benchmarks/host/sweep.mjs). Arguments:
+             --plan= (quick | peers | scaling | spread | transports, or a path), --out=,
+             --dry-run, --max-runs=, --headed.
   engines    The engine-decision matrix and invariant sweeps (in-process,
              wp-env cli). Arguments: --engines=, --scenarios=, --seed=,
              --out=, --certify=N (invariant sweep across N seeds),
@@ -129,12 +140,13 @@ tests/debugging/README.md):
 
 Arguments are --key=value flags. Arguments other than --suite= are
 forwarded to the suite's script; each script's header documents its full
-list. Environment: WP_BASE_URL (default http://localhost:8889),
+list. Environment: WP_BASE_URL (host default: this checkout’s running wp-env test site; transport default: http://localhost:8889),
 WP_USERNAME/WP_PASSWORD.
 
 Examples:
   npm run bench
-  npm run bench -- --engine=de-rtc --windows=3 --polling-interval=2
+  npm run bench -- --engine=de-rtc --peers=3 --polling-interval=2
+  npm run bench -- --suite=sweep --plan=scaling
   npm run bench -- --suite=engines --scenarios=editorial-session
   npm run bench -- --certify=10
 `;
@@ -166,6 +178,7 @@ if ( positionals.length ) {
 const SUITE_SCRIPTS = {
 	'text-slices': 'tests/benchmarks/text-slices.mjs',
 	host: 'tests/benchmarks/host/host-benchmark.mjs',
+	sweep: 'tests/benchmarks/host/sweep.mjs',
 	transport: 'tests/benchmarks/transport/benchmark-transport.mjs',
 };
 // The soak and replay lanes are debugging/analysis tools, not
@@ -199,7 +212,7 @@ if ( 'engines' !== SUITE ) {
 			);
 		} else {
 			console.error(
-				`unknown suite "${ SUITE }" — known: host (default), engines, transport, text-slices`
+				`unknown suite "${ SUITE }" — known: host (default), sweep, engines, transport, text-slices`
 			);
 		}
 		process.exit( 1 );

@@ -1,0 +1,23 @@
+{
+  "name": "transports",
+  "description": "Each engine over each transport. SSE needs the tests env's Redis; websocket needs the sync daemon running (npm run rtc:ws starts it for the dev env).",
+  "center": {
+    "engine": "intent-log",
+    "transport": "http-polling",
+    "cache": "none",
+    "windows": 2,
+    "postSize": "medium",
+    "pattern": "own-paragraph",
+    "editSeconds": 60,
+    "idleSeconds": 60,
+    "pollingInterval": 0
+  },
+  "vary": [
+    {
+      "engine": [ "intent-log", "yjs-server", "de-rtc" ],
+      "transport": [ "http-polling", "sse", "websocket" ]
+    }
+  ],
+  "repeat": 3,
+  "seed": 1
+}

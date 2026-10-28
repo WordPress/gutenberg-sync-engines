@@ -15,6 +15,12 @@ developers and agents rather than plugin evaluators.
 
 ## The N-window soak (`soak-transport.mjs`)
 
+For a comparison across increasing peer counts, use the
+[host benchmark](../benchmarks/README.md):
+`npm run bench -- --peers=5 --p95-ms=2000`. Run it again with another count.
+It overrides the normal five-peer limit inside its own browsers and checks
+edit delivery alongside server costs.
+
 The transport benchmark (`npm run bench -- --suite=transport`) answers
 "what does one edit cost"; the soak answers "what does an hour of real
 co-editing cost per user" — the end-to-end validation of the hosting

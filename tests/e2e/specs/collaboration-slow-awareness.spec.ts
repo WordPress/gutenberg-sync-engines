@@ -10,7 +10,7 @@ import type { RequestUtils } from '@wordpress/e2e-test-utils-playwright';
 import { test, expect } from '../config/collaboration-fixtures';
 
 /**
- * Slow awareness (docs/awareness-high-latency.md): with an "Awareness
+ * Slow awareness (docs/transports.md): with an "Awareness
  * interval" set, each editor names the block its selection is in once per
  * interval, and peers draw the block outline and an avatar badge on that
  * block instead of live cursors. This runs the sync-transport channel over

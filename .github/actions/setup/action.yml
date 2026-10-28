@@ -1,0 +1,69 @@
+name: Set up the plugin and the built Gutenberg copy
+description: Restores or installs npm dependencies, the Gutenberg build, and optionally Chromium.
+
+inputs:
+  playwright:
+    description: Also install the Playwright Chromium browser.
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version-file: .nvmrc
+
+    # A hit skips `npm ci`.
+    - name: Restore plugin dependencies
+      id: plugin-deps
+      uses: actions/cache@v4
+      with:
+        path: node_modules
+        key: node-modules-${{ runner.os }}-${{ hashFiles('.nvmrc', 'package-lock.json') }}
+
+    - name: Install plugin dependencies
+      if: steps.plugin-deps.outputs.cache-hit != 'true'
+      shell: bash
+      run: npm ci
+
+    - name: Read the Gutenberg tree ID
+      id: subtree
+      shell: bash
+      run: echo "tree=$(git rev-parse HEAD:gutenberg)" >> "$GITHUB_OUTPUT"
+
+    # Built files only. Without the subtree's node_modules, the e2e
+    # fixtures load Playwright from the plugin's node_modules.
+    - name: Restore the Gutenberg build
+      id: subtree-build
+      uses: actions/cache@v4
+      with:
+        path: |
+          gutenberg/build
+          gutenberg/packages/*/build
+          gutenberg/packages/*/build-module
+          gutenberg/packages/*/build-style
+        key: gutenberg-build-${{ runner.os }}-${{ hashFiles('.nvmrc') }}-${{ steps.subtree.outputs.tree }}
+
+    # --ignore-scripts skips a husky hook that fails outside a git root.
+    - name: Build Gutenberg
+      if: steps.subtree-build.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        cd gutenberg
+        npm ci --ignore-scripts
+        npm run build
+
+    - name: Restore Chromium
+      if: inputs.playwright == 'true'
+      id: playwright-browser
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+    # No --with-deps: the runner already has Chromium's libraries, and
+    # that flag's apt step once took ten minutes.
+    - name: Install Chromium
+      if: inputs.playwright == 'true' && steps.playwright-browser.outputs.cache-hit != 'true'
+      shell: bash
+      run: npx playwright install chromium

@@ -47,7 +47,7 @@ class Tests_Collaboration_GutenbergSyncEnginesDiagnostics extends WP_UnitTestCas
 		global $wpdb;
 		parent::set_up();
 		Gutenberg_Sync_Engines_Request_Log::reset_whole_request();
-		unset( $_SERVER['HTTP_X_RTC_TEST'], $_SERVER['HTTP_X_RTC_SCENARIO'], $_SERVER['HTTP_X_RTC_APPROACH'] );
+		unset( $_SERVER['HTTP_X_RTC_TIMELINE'], $_SERVER['HTTP_X_RTC_REQUEST_ID'], $_SERVER['HTTP_X_RTC_TEST'], $_SERVER['HTTP_X_RTC_SCENARIO'], $_SERVER['HTTP_X_RTC_APPROACH'] );
 		// The plugin bootstrap registered the diagnostics hooks (the test
 		// bootstrap defines GUTENBERG_SYNC_ENGINES_DIAGNOSTICS); these tests
 		// only need clean tables.
@@ -316,6 +316,79 @@ class Tests_Collaboration_GutenbergSyncEnginesDiagnostics extends WP_UnitTestCas
 		// A second flush must not insert a second row.
 		Gutenberg_Sync_Engines_Request_Log::flush_whole_request();
 		$this->assertCount( 1, Gutenberg_Sync_Engines_Request_Log::fetch_rows() );
+	}
+
+	public function test_timeline_measures_sleep_queries_and_cpu_without_writing_at_checkpoints() {
+		global $wpdb;
+		$_SERVER['HTTP_X_RTC_TEST']       = '1';
+		$_SERVER['HTTP_X_RTC_TIMELINE']   = '1';
+		$_SERVER['HTTP_X_RTC_REQUEST_ID'] = '12345678-1234-1234-1234-123456789012';
+		$_SERVER['REQUEST_TIME_FLOAT']    = microtime( true );
+		$log                              = new Gutenberg_Sync_Engines_Request_Log();
+		$log->capture_whole_request();
+		$query_start = $wpdb->num_queries;
+		$wall_start  = hrtime( true );
+		$cpu_start   = getrusage();
+		$iterations  = 0;
+		while ( hrtime( true ) - $wall_start < 20000000 ) {
+			hash( 'sha256', (string) ++$iterations );
+		}
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Independent known query count.
+		$wpdb->get_var( 'SELECT 1' );
+		do_action( 'gutenberg_sync_engines_sse_checkpoint' );
+		usleep( 30000 );
+		do_action( 'gutenberg_sync_engines_sse_checkpoint' );
+		$this->assertSame( $query_start + 1, $wpdb->num_queries, 'Sampling must not query or write the database.' );
+		$cpu_end = getrusage();
+		$wall_ms = ( hrtime( true ) - $wall_start ) / 1000000;
+		Gutenberg_Sync_Engines_Request_Log::flush_whole_request();
+		Gutenberg_Sync_Engines_Request_Log::flush_whole_request();
+		$rows = Gutenberg_Sync_Engines_Request_Log::fetch_rows();
+		$this->assertCount( 1, $rows );
+		$row      = $rows[0];
+		$timeline = $row['timeline'];
+		$this->assertTrue( $timeline['clock_stable'] );
+		$this->assertSame( $_SERVER['HTTP_X_RTC_REQUEST_ID'], $row['request_id'] );
+		$this->assertCount( 4, $timeline['samples'] );
+		$this->assertSame( 1, $row['db_queries'] );
+		$this->assertSame( 1, $timeline['samples'][3]['queries'] );
+		$this->assertEquals( $row['total_cpu_ms'], $timeline['samples'][3]['cpu_ms'] );
+		$this->assertGreaterThanOrEqual( $wall_ms, $row['total_ms'] );
+		$cpu_ms = 0;
+		foreach ( array( 'ru_utime', 'ru_stime' ) as $kind ) {
+			$cpu_ms += ( $cpu_end[ $kind . '.tv_sec' ] - $cpu_start[ $kind . '.tv_sec' ] ) * 1000;
+			$cpu_ms += ( $cpu_end[ $kind . '.tv_usec' ] - $cpu_start[ $kind . '.tv_usec' ] ) / 1000;
+		}
+		$this->assertGreaterThan( 0, $cpu_ms );
+		$this->assertEqualsWithDelta( $cpu_ms, $row['total_cpu_ms'], 5.0, 'Independent process CPU check brackets the measured work.' );
+	}
+
+	public function test_timeline_caps_samples_but_keeps_final_counters() {
+		$_SERVER['HTTP_X_RTC_TEST']       = '1';
+		$_SERVER['HTTP_X_RTC_TIMELINE']   = '1';
+		$_SERVER['HTTP_X_RTC_REQUEST_ID'] = '12345678-1234-1234-1234-123456789012';
+		$_SERVER['REQUEST_TIME_FLOAT']    = microtime( true );
+		( new Gutenberg_Sync_Engines_Request_Log() )->capture_whole_request();
+		for ( $i = 0; $i < 4100; ++$i ) {
+			Gutenberg_Sync_Engines_Request_Log::sample_timeline();
+		}
+		Gutenberg_Sync_Engines_Request_Log::flush_whole_request();
+		$row = Gutenberg_Sync_Engines_Request_Log::fetch_rows()[0];
+		$this->assertTrue( $row['timeline']['truncated'] );
+		$this->assertCount( 4097, $row['timeline']['samples'] );
+		$this->assertEquals( $row['total_cpu_ms'], $row['timeline']['samples'][4096]['cpu_ms'] );
+	}
+
+	public function test_timeline_is_opt_in_and_sampling_stops_after_shutdown() {
+		$_SERVER['HTTP_X_RTC_TEST'] = '1';
+		$log                        = new Gutenberg_Sync_Engines_Request_Log();
+		$log->capture_whole_request();
+		do_action( 'gutenberg_sync_engines_sse_checkpoint' );
+		Gutenberg_Sync_Engines_Request_Log::flush_whole_request();
+		do_action( 'gutenberg_sync_engines_sse_checkpoint' );
+		$rows = Gutenberg_Sync_Engines_Request_Log::fetch_rows();
+		$this->assertCount( 1, $rows );
+		$this->assertNull( $rows[0]['timeline'] );
 	}
 
 	public function test_whole_request_capture_merges_with_rest_dispatch() {

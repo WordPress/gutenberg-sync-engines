@@ -47,10 +47,10 @@ import type { Editor } from '@wordpress/e2e-test-utils-playwright';
 import {
 	test,
 	expect,
-} from '../../../gutenberg/test/e2e/specs/editor/collaboration/fixtures';
+	waitForSyncQuiet,
+} from '../../e2e/config/collaboration-fixtures';
 import type CollaborationUtils from '../../../gutenberg/test/e2e/specs/editor/collaboration/fixtures/collaboration-utils';
 import { SECOND_USER } from '../../../gutenberg/test/e2e/specs/editor/collaboration/fixtures/collaboration-utils';
-import { waitForSyncQuiet } from '../../e2e/config/collaboration-fixtures';
 
 type Random = () => number;
 

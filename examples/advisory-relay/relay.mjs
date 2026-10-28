@@ -13,7 +13,7 @@
  *   WP_SYNC_WEBSOCKET_ACCESS_TOKEN_SECRET  the secret WordPress signs with
  */
 
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, timingSafeEqual, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { WebSocketServer } from 'ws';
 
@@ -233,7 +233,32 @@ function leave( ws ) {
  * The server
  * ------------------------------------------------------------------ */
 
+const benchmarkProcessId = randomUUID();
 const server = createServer( ( request, response ) => {
+	if (
+		request.method === 'GET' &&
+		request.url === '/bench-metrics' &&
+		process.env.GSE_BENCH_METRICS === '1'
+	) {
+		const cpu = process.cpuUsage();
+		response.writeHead( 200, {
+			'Content-Type': 'application/json',
+			'Cache-Control': 'no-store',
+		} );
+		response.end(
+			JSON.stringify( {
+				version: 1,
+				process_id: benchmarkProcessId,
+				kind: 'node-advisory-relay',
+				elapsed_ms: Number( process.hrtime.bigint() ) / 1e6,
+				cpu_ms: ( cpu.user + cpu.system ) / 1000,
+				queries: 0,
+				memory_bytes: process.memoryUsage().rss,
+				memory_kind: 'rss',
+			} )
+		);
+		return;
+	}
 	// `GET /health` for monitoring; everything else must upgrade.
 	response.writeHead( request.url === '/health' ? 200 : 400 );
 	response.end();
