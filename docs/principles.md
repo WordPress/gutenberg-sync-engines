@@ -42,7 +42,8 @@ how each engine scores.
   operations ("split block", "move block") and stable block identity
   make merges match what the user actually did. Diffing before/after
   snapshots reconstructs a guess — and a guess is what mangles prose
-  when edits collide.
+  when edits collide. In addition, capturing intent allows humans to
+  review and audit what happened.
 
 ## Early decisions still open to revisiting
 
