@@ -1861,7 +1861,11 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 	public function test_a_second_authors_hold_on_a_block_leaves_the_first_authors_hold_on_it() {
 		$first = $this->raise_hold();
 
-		$this->second_filtered_author_edits_the_first_block( '<script>alert(2)</script>' );
+		// The text in front of the script stays after the filter, so the
+		// block visibly changes under every kses: the newer kses drops a
+		// script's text with the tag, and a script alone would leave the
+		// sanitized block as it was.
+		$this->second_filtered_author_edits_the_first_block( 'Two: <script>alert(2)</script>' );
 
 		$holds = $this->engine()->get_open_holds( $this->room() );
 		$this->assertCount( 2, $holds, 'one hold per author' );
