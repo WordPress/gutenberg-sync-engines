@@ -378,10 +378,15 @@ test( 'frame rules still catch pipelined edits when the remote write IS the same
 	for ( const row of report ) {
 		assert.deepEqual( row.predicted, row.actual, row.intentId );
 	}
-	assert.deepEqual( report[ 0 ].actual, { status: 'applied' } );
-	assert.deepEqual( report[ 1 ].actual, {
+	// The clash sets bob's burst aside whole: the first write goes with
+	// the second instead of landing as a fragment.
+	assert.deepEqual( report[ 0 ].actual, {
 		status: 'escalated',
 		reason: 'frame-conflict',
+	} );
+	assert.deepEqual( report[ 1 ].actual, {
+		status: 'escalated',
+		reason: 'dependent-on-escalated',
 	} );
 } );
 

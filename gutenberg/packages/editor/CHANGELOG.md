@@ -4,6 +4,7 @@
 
 ### Enhancements
 
+-   Expose the revisions block differ through the package's private APIs: `diffRevisionContent`, `registerDiffFormatTypes`/`unregisterDiffFormatTypes`, the diff view layer (`DiffDescriptions`, `REVISION_DIFF_STYLES`, `REVISION_REMOVED_FILTER_SVG`, extracted from the revisions canvas into `block-diff-view`), and the presentational `RevisionsCodeDiff`, so hosts outside the revisions screen can render diffed blocks.
 -   `PostAuthor`: The field renders with the `SearchableSelect` component of `@wordpress/ui` instead of `ComboboxControl` and `SelectControl` ([#83323](https://github.com/WordPress/gutenberg/pull/83323)).
 -   `DocumentOutline`: Show the outline items' focus ring with the design system's outline instead of a legacy box-shadow ([#83755](https://github.com/WordPress/gutenberg/pull/83755)).
 

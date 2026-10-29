@@ -7,6 +7,7 @@ import * as Y from 'yjs';
  * WordPress dependencies
  */
 import { getBlockType, parse } from '@wordpress/blocks';
+import apiFetch from '@wordpress/api-fetch';
 // eslint-disable-next-line import/no-unresolved -- Provided at runtime as wp.sync.
 import type {
 	EngineCollection,
@@ -37,6 +38,12 @@ import {
 	YJS_SERVER_ENGINE_PROTOCOL,
 	YJS_SERVER_ENGINE_SLUG,
 } from './session';
+import { createYjsServerHolds } from './holds';
+import type { SyncConflict, SyncConflictSource } from '../../review/types';
+import {
+	createEntityConflictSource,
+	type EntityConflicts,
+} from '../../review/entity-source';
 
 /**
  * The server-authoritative Yjs engine, client half.
@@ -72,15 +79,93 @@ import {
  *
  * @return {SyncEngine} The yjs-server engine.
  */
-export function createYjsServerEngine(): SyncEngine {
+export function createYjsServerEngine(): SyncEngine & {
+	/** The plugin's conflict review lane (src/review/): security holds. */
+	conflicts: SyncConflictSource;
+} {
+	/*
+	 * Security holds, per entity. A CRDT merge detects no conflicts to
+	 * set aside, so this engine has no MERGE records. What it has is
+	 * markup the server's kses lane stripped from a filtered author's
+	 * block and kept for approval.
+	 */
+	const conflicts = createEntityConflictSource();
+
 	return {
 		slug: YJS_SERVER_ENGINE_SLUG,
 		protocolVersion: YJS_SERVER_ENGINE_PROTOCOL,
+		conflicts: conflicts.source,
 		// Same per-peer Yjs undo as the relay: undo is client-local
 		// machinery, orthogonal to where the canonical merge happens.
 		createUndoManager,
 		createEntity( { syncConfig, objectType, objectId } ): EngineEntity {
 			const ydoc = createYjsDoc( { objectType } );
+			const holds = createYjsServerHolds();
+			const entity: EntityConflicts = {
+				list: () =>
+					holds.getOpen().map(
+						( hold ): SyncConflict => ( {
+							id: hold.holdId,
+							kind: 'sequestration',
+							authorId: hold.author,
+							target: {
+								type: 'blocks',
+								// The block's id in the document, which is
+								// its client id in the editor. A hold that
+								// left no block behind is a proposed
+								// insertion.
+								...( hold.blockId
+									? { ids: [ hold.blockId ] }
+									: {} ),
+								index: hold.index,
+								count: hold.blockId ? 1 : 0,
+							},
+							base: hold.base,
+							proposed: hold.held,
+							// The canonical document holds the sanitized
+							// block, and every client converges on it.
+							current: hold.sanitized,
+						} )
+					),
+				resolve: ( conflictId, decision ) => {
+					if ( 'accept' === decision.action ) {
+						const hold = holds
+							.getOpen()
+							.find(
+								( candidate ) => candidate.holdId === conflictId
+							);
+						// The server lands the content in place of the
+						// sanitized block, under the reviewer's capability,
+						// and closes the hold in the same request. It
+						// refuses when the block no longer reads the way
+						// the reviewer saw it.
+						return holds.resolve(
+							conflictId,
+							'accepted',
+							decision.content,
+							decision.current ?? hold?.sanitized
+						);
+					}
+					return holds.resolve( conflictId, 'dismissed' );
+				},
+			};
+			conflicts.set( objectType, objectId, entity );
+			holds.onChange( () => conflicts.notify( objectType, objectId ) );
+			holds.setRestResolver( ( holdId, resolution, content, seen ) =>
+				apiFetch( {
+					data: {
+						holdId,
+						resolution,
+						...( undefined !== content ? { content } : {} ),
+						...( undefined !== seen ? { current: seen } : {} ),
+						room: objectId
+							? `${ objectType }:${ objectId }`
+							: objectType,
+					},
+					method: 'POST',
+					path: '/wp-sync/v1/yjs-server/resolve',
+				} )
+			);
 			const recordMap = ydoc.getMap( CRDT_RECORD_MAP_KEY );
 			const stateMap = ydoc.getMap( CRDT_STATE_MAP_KEY );
 			const now = Date.now();
@@ -235,7 +320,11 @@ export function createYjsServerEngine(): SyncEngine {
 				awareness,
 
 				createSession: () =>
-					createYjsServerSessionCodec( { awareness, doc: ydoc } ),
+					createYjsServerSessionCodec( {
+						awareness,
+						doc: ydoc,
+						holds,
+					} ),
 
 				hydrate( record ) {
 					// Deliberately no seeding: the server's genesis snapshot
@@ -346,6 +435,12 @@ export function createYjsServerEngine(): SyncEngine {
 							stateMap.unobserve( onStateMapUpdate );
 						}
 					}
+					// The holds go with the entity: nothing feeds them
+					// any more, and a decision would have no session to
+					// travel with. A newer entity for the same post has
+					// its own ledger, which stays.
+					conflicts.delete( objectType, objectId, entity );
+					holds.setRestResolver( null );
 					ydoc.destroy();
 				},
 			};

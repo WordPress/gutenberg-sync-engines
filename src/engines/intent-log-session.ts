@@ -8,7 +8,12 @@ import {
 	predictedDisposition,
 	replanClient,
 } from './intent-log/client.js';
-import { groupUnits, planBatch, serverDocAt } from './intent-log/rebase.js';
+import {
+	ESCALATION_REASONS,
+	groupUnits,
+	planBatch,
+	serverDocAt,
+} from './intent-log/rebase.js';
 import { createIntent } from './intent-log/intents.js';
 import type {
 	EngineDocument,
@@ -86,6 +91,8 @@ export interface IntentLogProposal {
 	intent: IntentEnvelope;
 	actorId: string;
 	reason: string;
+	/** Log index of the entry that settled it (planner escalations). */
+	atSeq?: number;
 	at?: number;
 	time?: number;
 	context?: { excerpt?: string };
@@ -200,6 +207,16 @@ export interface IntentLogSession extends EngineSessionCodec {
 	 * Read-only. Null pre-snapshot or below the retained floor.
 	 */
 	getDocumentAt: ( seq: number ) => EngineDocument | null;
+
+	/**
+	 * The retained log entries above a position, oldest first, each with
+	 * the seq the document has once it applied. Empty when the position
+	 * is no longer retained. Conflict review reads the author's own
+	 * accepted edits out of it (see intent-log-conflicts.ts).
+	 */
+	getLogSince: (
+		seq: number
+	) => Array< { seq: number; intent: IntentEnvelope } >;
 
 	/** The lowest absolute seq the replica's log copy is sliceable from. */
 	getRetainedFloor: () => number;
@@ -401,6 +418,9 @@ export function createIntentLogSession(
 	const resolvedIds = new Set< string >();
 	const proposalsChangeListeners = new Set< () => void >();
 	const notifyProposalsChange = () => {
+		// An opened or closed proposal moves the retention floor (see
+		// applyRetention).
+		applyRetention();
 		proposalsChangeListeners.forEach( ( listener ) => listener() );
 	};
 	const changeListeners = new Set< () => void >();
@@ -455,17 +475,68 @@ export function createIntentLogSession(
 	};
 
 	/**
+	 * The settling seq of one of this actor's own planner escalations, or
+	 * null when the proposal is not one (a security hold is not a frame
+	 * phantom) or carries no seq. Rows written before the seq was recorded
+	 * fall back to the head at parking, the conservative choice.
+	 *
+	 * @param proposal A parked proposal.
+	 * @return The settling seq, or null.
+	 */
+	const ownParkedAtSeq = ( proposal: IntentLogProposal ): number | null => {
+		if (
+			proposal.actorId !== actorId ||
+			! ESCALATION_REASONS.has( proposal.reason )
+		) {
+			return null;
+		}
+		if ( 'number' === typeof proposal.atSeq ) {
+			return proposal.atSeq;
+		}
+		return 'number' === typeof proposal.at ? proposal.at - 1 : null;
+	};
+
+	/**
+	 * This actor's set-aside intents with their settling seqs, the frame
+	 * seed a fresh replica's replans start from (see client.js `parked`).
+	 *
+	 * @return The parks.
+	 */
+	const ownParked = (): Array< { intent: IntentEnvelope; atSeq: number } > =>
+		proposals.flatMap( ( proposal ) => {
+			const atSeq = ownParkedAtSeq( proposal );
+			return null === atSeq ? [] : [ { intent: proposal.intent, atSeq } ];
+		} );
+
+	/**
 	 * Recomputes the replica's retention floor: the log must stay sliceable
-	 * from BOTH the observed frame (the next capture authors at it) and the
-	 * undo pin (inverse derivation reads documents at retained seqs).
+	 * from the observed frame (the next capture authors at it), the undo
+	 * pin (inverse derivation reads documents at retained seqs), AND the
+	 * base of every open proposal (conflict review rebuilds what the
+	 * author started from. A parked intent is no longer pending, so the
+	 * outbox floor alone would let its base be trimmed away). A proposal
+	 * whose base is already below the replica's first seq (parked before
+	 * this session joined) cannot pull the floor back. Its record has no
+	 * base side.
 	 */
 	const applyRetention = (): void => {
-		if ( replica ) {
-			replica.retainFrom =
-				null === undoRetainSeq
-					? observedSeq
-					: Math.min( observedSeq, undoRetainSeq );
+		if ( ! replica ) {
+			return;
 		}
+		let floor =
+			null === undoRetainSeq
+				? observedSeq
+				: Math.min( observedSeq, undoRetainSeq );
+		for ( const proposal of proposals ) {
+			if ( resolvedIds.has( proposal.intent.intentId ) ) {
+				continue;
+			}
+			const baseSeq = Number( proposal.intent.baseSeq );
+			if ( Number.isFinite( baseSeq ) && baseSeq >= replica.firstSeq ) {
+				floor = Math.min( floor, baseSeq );
+			}
+		}
+		replica.retainFrom = floor;
 	};
 
 	/**
@@ -578,6 +649,7 @@ export function createIntentLogSession(
 							decoded.doc as EngineDocument,
 							snapshotSeq
 						);
+						replica.parked = ownParked();
 						observedSeq = snapshotSeq;
 						notifyChange();
 						return;
@@ -607,6 +679,7 @@ export function createIntentLogSession(
 							decoded.doc as EngineDocument,
 							snapshotSeq
 						);
+						replica.parked = ownParked();
 						observedSeq = snapshotSeq;
 						// New epoch: rows after the checkpoint are new to
 						// this replica even if their ids were seen before.
@@ -665,13 +738,24 @@ export function createIntentLogSession(
 					 * document must be replanned explicitly: the last
 					 * replan ran while this intent was still pending, and
 					 * its predicted-applied effect would otherwise sit on
-					 * the canvas until the next accepted row — which may
-					 * never come. (The fuzzer's one-keystroke divergence:
-					 * concurrent same-paragraph typing left the loser's
-					 * first escalated keystroke on their canvas forever.)
+					 * the canvas until the next accepted row, which may
+					 * never come (the fuzzer's one-keystroke divergence).
+					 * One of our own escalations also seeds every later
+					 * replan: a pending intent that still counts the
+					 * set-aside text (same old baseSeq) is predicted as the
+					 * dependent the server will make of it, so the
+					 * optimistic document never shows it misplaced.
 					 */
+					const atSeq = ownParkedAtSeq( proposal );
+					if ( replica && null !== atSeq ) {
+						replica.parked.push( {
+							intent: proposal.intent,
+							atSeq,
+						} );
+					}
 					if (
-						settlePending( proposal.intent.intentId ) &&
+						( settlePending( proposal.intent.intentId ) ||
+							null !== atSeq ) &&
 						replica
 					) {
 						replanClient( replica );
@@ -954,6 +1038,19 @@ export function createIntentLogSession(
 				replica as never,
 				seq
 			) as EngineDocument | null;
+		},
+
+		getLogSince: ( seq ) => {
+			if ( ! replica || seq < replica.firstSeq ) {
+				return [];
+			}
+			const { firstSeq } = replica;
+			return replica.log
+				.slice( seq - firstSeq )
+				.map( ( intent, offset ) => ( {
+					seq: seq + offset + 1,
+					intent: intent as IntentEnvelope,
+				} ) );
 		},
 
 		getRetainedFloor: () => replica?.firstSeq ?? 0,

@@ -60,13 +60,15 @@ jobs:
       - name: Jest
         run: npm run test:js
 
-      # The collaboration review-panel components (V1 item B3) live in the
-      # vendored subtree, outside the plugin Jest's roots — run their own
-      # suite so the card/panel lifecycle stays certified.
-      - name: Subtree component Jest (collaboration-review-panel)
+      # The vendored subtree carries one change on top of its pin, the
+      # revisions differ exported for the plugin's conflict review UI
+      # (see "The gutenberg/ subtree" in AGENTS.md). Run its own suite, plus
+      # the bundled Gutenberg's review panel, so the change stays certified.
+      # The review UI itself lives in the plugin and runs under `npm run test:js`.
+      - name: Subtree component tests (revisions differ, review panel)
         run: |
           cd gutenberg
-          npm run test:unit -- collaboration-review-panel
+          npm run test:unit -- post-revisions-preview collaboration-review-panel
 
       - name: Build the plugin bundle
         run: npm run build

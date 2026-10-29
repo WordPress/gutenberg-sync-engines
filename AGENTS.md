@@ -34,7 +34,9 @@ shared editing session.
 - `src/` — client TypeScript; `src/index.ts` builds `build/sync-engines.js`
   with `@wordpress/sync` and `yjs` external: `engines/`, `shared/`,
   `providers/{http-polling,sse,sse-daemon,websocket,advisory}/`,
-  `awareness/`, `entity-sync/`, `framework.ts`, `debug/inspector.ts`.
+  `awareness/`, `entity-sync/`, `review/` (the conflict review cards
+  and dialogs; see `docs/conflict-review.md`), `framework.ts`,
+  `debug/inspector.ts`.
 - `gutenberg/` — a squashed Git subtree of Gutenberg, source only,
   pinned by `gutenberg-pin.json` (`commit`, `trunk`, and `tree`, which
   must equal `git rev-parse HEAD:gutenberg`). The plugin loads it when
@@ -251,6 +253,25 @@ before a big change. A durable lesson from an issue goes here.
 - **De-rtc commits every ten seconds by default.** Setting it to 0
   commits after every pause in typing; that was the first release's
   default, changed because ten seconds measurably cuts requests.
+- **The engine applies a review decision; the review code never
+  writes to the post.** Each engine publishes its set-aside changes as
+  records (`src/review/types.ts`) and applies the reviewer's accept or
+  dismiss itself. An accept names the current side the reviewer saw,
+  and the registry (`src/review/conflicts.ts`) refuses it when that
+  side moved on; de-rtc and yjs-server make the same check on the
+  server. A card waits for the author's typing only when the engine
+  promises that later typing joins the same record (`followsTyping`).
+  Block editors inside the dialogs carry the document's own block ids,
+  so everything inside a dialog is wrapped in `ReviewSurface` or the
+  cards render inside it. The rules and each engine's part:
+  `docs/conflict-review.md`.
+- **The bundled Gutenberg carries one change on top of its pin: the
+  editor package exports its revision comparison** (four files under
+  `gutenberg/packages/editor/`, read through `src/lock-unlock.ts`).
+  Keep it when importing a framework update. A standalone Gutenberg
+  lacks it, so the review dialogs check `hasBlockDiff` and
+  `hasCodeDiff` (`src/review/revisions-diff.ts`) and show a text
+  comparison instead; a new use of those names needs the same check.
 - **Four pieces of code are frozen: do not edit them casually.**
   - The intent-log core (`src/engines/intent-log/`) is kept identical
     to its PHP twin (`includes/engines/intent-log/`) through JSON test

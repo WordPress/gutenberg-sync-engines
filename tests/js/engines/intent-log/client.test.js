@@ -133,8 +133,9 @@ test( 'REGRESSION: pipelined offline edits with an interleaved remote edit escal
 	// bob types "AA" at 0, then "B" right after it (local frame). alice's
 	// concurrent "z" at 1 is accepted first. A naive one-sided transform of
 	// bob's second intent would shift its offset against the WRONG frame and
-	// silently interleave the text ("AAHBzello…"). The engine must apply the
-	// first intent, escalate the second (frame-conflict), and park it.
+	// silently interleave the text ("AAHBzello…"). The engine must escalate
+	// the second (frame-conflict) and set the first aside with it, so bob's
+	// burst reaches review whole and the document gains none of it.
 	const server = createServer( baseDoc() );
 	const alice = makeActorClient( 'alice' );
 	const bob = makeActorClient( 'bob' );
@@ -163,20 +164,24 @@ test( 'REGRESSION: pipelined offline edits with an interleaved remote edit escal
 
 	const report = flushClient( server, bob.client );
 	assertReportExact( report );
-	assert.deepEqual( report[ 0 ].actual, { status: 'applied' } );
-	assert.deepEqual( report[ 1 ].actual, {
+	assert.deepEqual( report[ 0 ].actual, {
 		status: 'escalated',
 		reason: 'frame-conflict',
 	} );
+	assert.deepEqual( report[ 1 ].actual, {
+		status: 'escalated',
+		reason: 'dependent-on-escalated',
+	} );
 
 	const text = getBlock( headDoc( server ), 'p1' ).fields.content.text;
-	assert.equal( text, 'AAHzello world', 'no silently misplaced insert' );
+	assert.equal( text, 'Hzello world', 'no silently misplaced insert' );
 	assert.ok(
-		! text.includes( 'B' ),
-		'the conflicted insert is parked, not misplaced'
+		! text.includes( 'B' ) && ! text.includes( 'AA' ),
+		'the conflicted burst is parked whole, not misplaced'
 	);
-	assert.equal( server.proposals.length, 1 );
+	assert.equal( server.proposals.length, 2 );
 	assert.equal( server.proposals[ 0 ].actorId, 'bob' );
+	assert.equal( server.proposals[ 1 ].actorId, 'bob' );
 	assert.equal(
 		canonicalJson( bob.client.doc ),
 		canonicalJson( headDoc( server ) )
@@ -205,6 +210,73 @@ test( 'pipelined offline edits with NO remote interference apply as authored', (
 	assert.equal(
 		getBlock( headDoc( server ), 'p1' ).fields.content.text,
 		'AABHello world'
+	);
+} );
+
+test( 'a park recorded at flush seeds later replans: a pending intent at the old base is predicted the dependent the server makes of it', () => {
+	const server = createServer( baseDoc() );
+	const alice = createClient( 'alice', baseDoc() );
+	const bob = createClient( 'bob', baseDoc() );
+	authorIntent(
+		alice,
+		createIntent(
+			IntentTypes.INSERT_TEXT,
+			{ syncId: 'p1', offset: 11, text: '!' },
+			{ actorId: 'alice', baseSeq: 0, intentId: 'alice#0' }
+		)
+	);
+	flushClient( server, alice );
+	// Bob, behind, types "ab": "b" clashes (rule 5) and takes "a" with it.
+	for ( const [ offset, text ] of [
+		[ 0, 'a' ],
+		[ 1, 'b' ],
+	] ) {
+		authorIntent(
+			bob,
+			createIntent(
+				IntentTypes.INSERT_TEXT,
+				{ syncId: 'p1', offset, text },
+				{ actorId: 'bob', baseSeq: 0, intentId: `bob#${ text }` }
+			)
+		);
+	}
+	// The entity bridge keeps the log sliceable from the frame the editor
+	// displays (retainFrom). The park survives the post-flush trim with it.
+	bob.retainFrom = 0;
+	const report = flushClient( server, bob );
+	assert.equal( report[ 0 ].actual.reason, 'frame-conflict' );
+	assert.equal( report[ 1 ].actual.reason, 'dependent-on-escalated' );
+	assert.deepEqual( bob.parked, [
+		{ intent: server.proposals[ 0 ].intent, atSeq: 0 },
+		{ intent: server.proposals[ 1 ].intent, atSeq: 0 },
+	] );
+
+	// A live editor keeps showing the "b": "c" is authored with it counted
+	// and at the old base, as the entity bridge does mid-burst.
+	const c = createIntent(
+		IntentTypes.INSERT_TEXT,
+		{ syncId: 'p1', offset: 2, text: 'c' },
+		{ actorId: 'bob', baseSeq: 0, intentId: 'bob#c' }
+	);
+	authorIntent( bob, c );
+	replanClient( bob );
+	assert.deepEqual( predictedDisposition( bob, 'bob#c' ), {
+		status: 'escalated',
+		reason: 'dependent-on-escalated',
+	} );
+	assert.equal(
+		getBlock( bob.doc, 'p1' ).fields.content.text,
+		'Hello world!'
+	);
+	const [ row ] = flushClient( server, bob );
+	assert.deepEqual( row.actual, row.predicted );
+	assert.equal(
+		getBlock( headDoc( server ), 'p1' ).fields.content.text,
+		'Hello world!'
+	);
+	assert.equal(
+		canonicalJson( bob.doc ),
+		canonicalJson( headDoc( server ) )
 	);
 } );
 

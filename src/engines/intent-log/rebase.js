@@ -110,6 +110,13 @@ import { textSliceIntents, withTextSlices } from './text-slices.js';
  */
 
 /**
+ * A frame-rule escalation: the reason, the settling log position, and, for
+ * a rule-5 clash, the frame key it was found on.
+ *
+ * @typedef {{ reason: string, atSeq: number, key?: string }} FrameProblem
+ */
+
+/**
  * @param {Intent} intent Intent.
  * @return {CleanOutcome} Clean outcome.
  */
@@ -347,6 +354,53 @@ export function createFrameState() {
 }
 
 /**
+ * A copy of a frame state, so a plan can extend it without changing the
+ * caller's copy.
+ *
+ * @param {FrameState} frame Frame state.
+ * @return {FrameState} The copy.
+ */
+export function cloneFrameState( frame ) {
+	return {
+		ownWrites: new Map( frame.ownWrites ),
+		broken: new Map( frame.broken ),
+	};
+}
+
+/**
+ * The frame state one actor's EARLIER set-aside intents leave behind, for
+ * planBatch to start from (its `seed`): each one is a phantom write (and a
+ * broken created block) settled at its clash, exactly as recordFrameOutcome
+ * records an escalation within a batch.
+ *
+ * Why a batch should start from it: the frame rules assume an author drops
+ * a set-aside effect from their local state once they observe the entry
+ * that settled it, and re-authors on a clean frame. A live editor cannot
+ * always do that mid-burst, so its later edits keep counting the set-aside
+ * text and keep their old baseSeq. Rule 6 already treats such an intent as
+ * a dependent (baseSeq at or before the settlement), but only while the
+ * batch frame state remembers the phantom. Seeding the state from the
+ * actor's stored proposals makes rule 6 hold across requests, so a
+ * typist's later keystrokes park beside the first one instead of landing
+ * at offsets the server's text does not have. Scoping is unchanged: an
+ * intent authored after its author observed the clash is clean.
+ *
+ * @param {Array<{ intent: Intent, atSeq: number }>} parked The actor's
+ *                                                          set-aside intents
+ *                                                          (ORIGINAL payloads)
+ *                                                          with the log index
+ *                                                          that settled each.
+ * @return {FrameState} Frame state.
+ */
+export function seedFrameState( parked ) {
+	const frame = createFrameState();
+	for ( const { intent, atSeq } of parked ) {
+		recordFrameOutcome( frame, intent, false, atSeq );
+	}
+	return frame;
+}
+
+/**
  * Intra-unit frame conflict: unit member `index` reads a text frame that an
  * EARLIER member of the same unit writes. Its coordinates assume that write;
  * if another actor also wrote the block concurrently, the one-sided
@@ -444,8 +498,8 @@ export function unitEscalation( outcomes, isEscalated ) {
  *                                        first overlapping other-actor
  *                                        frame write at or after
  *                                        intent.baseSeq, or null.
- * @return {{ reason: string, atSeq: number }|null} { reason, atSeq }, or
- *                                                   null.
+ * @return {FrameProblem|null} { reason, atSeq }, or null; a rule-5 clash
+ *                             also names the frame `key` it was found on.
  */
 export function frameEscalation( frame, intent, firstRemoteSeq ) {
 	for ( const id of requiredTargets( intent ) ) {
@@ -476,7 +530,7 @@ export function frameEscalation( frame, intent, firstRemoteSeq ) {
 		if ( hasApplied ) {
 			const remoteAt = firstRemoteSeq( key );
 			if ( remoteAt !== null ) {
-				return { reason: 'frame-conflict', atSeq: remoteAt };
+				return { reason: 'frame-conflict', atSeq: remoteAt, key };
 			}
 		}
 	}
@@ -507,7 +561,13 @@ export function recordFrameOutcome( frame, intent, applied, atSeq = null ) {
 		if ( ! applied ) {
 			const seq = Math.max( atSeq ?? 0, current?.atSeq ?? -1 );
 			frame.ownWrites.set( id, { state: 'phantom', atSeq: seq } );
-		} else if ( current?.state !== 'phantom' ) {
+		} else if (
+			current?.state !== 'phantom' ||
+			current.atSeq < intent.baseSeq
+		) {
+			// An applied write authored AFTER the author observed the
+			// phantom's settlement was authored on a frame without it
+			// (rule 6's scoping), so the key's frame is clean again.
 			frame.ownWrites.set( id, { state: 'applied' } );
 		}
 	}
@@ -1082,6 +1142,16 @@ export function groupUnits( intents ) {
  * (lowest-trigger) escalation; surviving intents apply in order to the head
  * document.
  *
+ * A rule-5 clash sets aside the burst it belongs to, not only the keystroke
+ * it was found on. The rule needs an EARLIER accepted write of the author's
+ * to the same field, so checked one intent at a time it lets the first
+ * keystroke of a burst through and parks the rest: the document gains a
+ * fragment nobody typed, and the author's text reaches review in two
+ * pieces. So the plan runs again with the author's accepted writes to that
+ * field from this batch set aside beside it (reason `frame-conflict`, at
+ * the same log position), until the set stops growing. Writes accepted by
+ * an earlier request stay: they are in the log already.
+ *
  * @param {IntentEnvelope[][]}                units      Batch grouped into
  *                                                       units (groupUnits),
  *                                                       in authoring order.
@@ -1096,17 +1166,99 @@ export function groupUnits( intents ) {
  *                                                       guarantee every
  *                                                       intent's baseSeq >=
  *                                                       firstSeq.
+ * @param {FrameState|null}                   [seed]     Frame state to
+ *                                                       start from: the
+ *                                                       actor's earlier
+ *                                                       set-aside intents
+ *                                                       (seedFrameState),
+ *                                                       left unchanged.
+ *                                                       Null starts clean.
  * @return {{ rows: PlanRow[], headDoc: EngineDocument }} { rows, headDoc }.
  *                  Each row: { intent, disposition, accepted, proposal } —
  *                  `accepted` is the transformed intent to append (null if
  *                  not accepted), `proposal` the proposal-lane record (null
- *                  if not escalated).
+ *                  if not escalated) carrying `atSeq`, the log index of the
+ *                  entry that settled it.
  */
-export function planBatch( units, log, docAt, firstSeq = 0 ) {
-	// Frame state spans the whole batch: one client's sequential authoring.
-	const frame = createFrameState();
+export function planBatch( units, log, docAt, firstSeq = 0, seed = null ) {
+	/** @type {SetAside} */
+	const setAside = new Map();
+	let plan = planUnits( units, log, docAt, firstSeq, seed, setAside );
+	while ( widenSetAside( plan, setAside ) ) {
+		plan = planUnits( units, log, docAt, firstSeq, seed, setAside );
+	}
+	return { rows: plan.rows, headDoc: plan.headDoc };
+}
+
+/**
+ * Intents to escalate before any check, by id: the reason and the settling
+ * log position each carries.
+ *
+ * @typedef {Map<string, { reason: string, atSeq: number }>} SetAside
+ */
+
+/**
+ * A rule-5 clash found by a pass: the batch index of the intent it was
+ * found on, the frame key, and the settling log position.
+ *
+ * @typedef {{ index: number, key: string, atSeq: number }} FrameClash
+ */
+
+/**
+ * Adds to the set-aside group, for each rule-5 clash a pass found, the
+ * author's accepted writes to that field from earlier in the batch.
+ *
+ * @param {{ rows: PlanRow[], triggers: FrameClash[] }} plan     The pass.
+ * @param {SetAside}                                    setAside The group
+ *                                                               (widened in
+ *                                                               place).
+ * @return {boolean} Whether the group grew.
+ */
+function widenSetAside( plan, setAside ) {
+	const before = setAside.size;
+	for ( const trigger of plan.triggers ) {
+		for ( let i = 0; i < trigger.index; i++ ) {
+			const row = plan.rows[ i ];
+			if (
+				row.accepted !== null &&
+				! setAside.has( row.intent.intentId ) &&
+				frameWriteTargets( row.intent ).some( ( written ) =>
+					frameKeysOverlap( written, trigger.key )
+				)
+			) {
+				setAside.set( row.intent.intentId, {
+					reason: 'frame-conflict',
+					atSeq: trigger.atSeq,
+				} );
+			}
+		}
+	}
+	return setAside.size > before;
+}
+
+/**
+ * One pass of planBatch: plans the units with the given intents set aside
+ * up front, and reports every rule-5 clash found (planBatch widens the
+ * group from them and runs the pass again).
+ *
+ * @param {IntentEnvelope[][]}                units    See planBatch.
+ * @param {IntentEnvelope[]}                  log      See planBatch.
+ * @param {( seq: number ) => EngineDocument} docAt    See planBatch.
+ * @param {number}                            firstSeq See planBatch.
+ * @param {FrameState|null}                   seed     See planBatch.
+ * @param {SetAside}                          setAside Intents to escalate
+ *                                                     before any check.
+ * @return {{ rows: PlanRow[], headDoc: EngineDocument, triggers: FrameClash[] }}
+ *         The plan and the rule-5 clashes found.
+ */
+function planUnits( units, log, docAt, firstSeq, seed, setAside ) {
+	// Frame state spans the whole batch: one client's sequential authoring,
+	// continued from the actor's earlier set-aside work when seeded.
+	const frame = seed ? cloneFrameState( seed ) : createFrameState();
 	/** @type {PlanRow[]} */
 	const rows = [];
+	/** @type {FrameClash[]} */
+	const triggers = [];
 	let headDoc = docAt( firstSeq + log.length );
 	// Intents in a batch rebase over the same log entries; build each
 	// document version once and share it.
@@ -1143,17 +1295,29 @@ export function planBatch( units, log, docAt, firstSeq = 0 ) {
 				);
 				return index === -1 ? null : intent.baseSeq + index;
 			};
-			const frameProblem = frameEscalation(
-				frame,
-				intent,
-				firstRemoteSeq
-			);
-			const conflictSeq = frameProblem
+			const aside = setAside.get( intent.intentId );
+			const frameProblem = aside
 				? null
-				: intraUnitConflictSeq( unit, j, firstRemoteSeq );
+				: frameEscalation( frame, intent, firstRemoteSeq );
+			if ( frameProblem?.key !== undefined ) {
+				triggers.push( {
+					index: rows.length + j,
+					key: frameProblem.key,
+					atSeq: frameProblem.atSeq,
+				} );
+			}
+			const conflictSeq =
+				aside || frameProblem
+					? null
+					: intraUnitConflictSeq( unit, j, firstRemoteSeq );
 			/** @type {RebaseOutcome} */
 			let result;
-			if ( frameProblem ) {
+			if ( aside ) {
+				result = {
+					...escalate( intent, aside.reason ),
+					atSeq: aside.atSeq,
+				};
+			} else if ( frameProblem ) {
 				result = {
 					...escalate( intent, frameProblem.reason ),
 					atSeq: frameProblem.atSeq,
@@ -1192,6 +1356,7 @@ export function planBatch( units, log, docAt, firstSeq = 0 ) {
 					intent: result.intent,
 					actorId: intent.actorId,
 					reason: escalation.reason,
+					atSeq: escalation.atSeq,
 				};
 			} else if ( result.outcome === 'void' ) {
 				disposition = { status: 'voided', reason: result.reason };
@@ -1223,7 +1388,7 @@ export function planBatch( units, log, docAt, firstSeq = 0 ) {
 			rows.push( { intent, disposition, accepted, proposal } );
 		}
 	}
-	return { rows, headDoc };
+	return { rows, headDoc, triggers };
 }
 
 /**
@@ -1270,11 +1435,20 @@ export function serverIngestBatch( server, intents ) {
 			} )
 		)
 		.filter( ( unit ) => unit.length > 0 );
+	// A batch is one actor's authoring (production stamps actorId from the
+	// authenticated request), so its frame continues from that actor's
+	// earlier set-aside intents (see seedFrameState).
+	const actorId = units[ 0 ]?.[ 0 ]?.actorId;
 	const { rows, headDoc } = planBatch(
 		units,
 		server.log,
 		( seq ) => serverDocAt( server, seq ),
-		server.firstSeq ?? 0
+		server.firstSeq ?? 0,
+		seedFrameState(
+			server.proposals.filter(
+				( proposal ) => proposal.actorId === actorId
+			)
+		)
 	);
 	for ( const row of rows ) {
 		server.dispositions.set( row.intent.intentId, row.disposition );

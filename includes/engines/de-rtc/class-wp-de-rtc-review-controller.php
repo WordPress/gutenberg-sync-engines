@@ -33,22 +33,30 @@ if ( ! class_exists( 'WP_De_RTC_Review_Controller' ) ) {
 					'callback'            => array( $this, 'resolve' ),
 					'permission_callback' => array( $this, 'check_permissions' ),
 					'args'                => array(
-						'room'       => array(
+						'room'        => array(
 							'type'     => 'string',
 							'required' => true,
 						),
-						'proposalId' => array(
+						'proposalId'  => array(
 							'type'     => 'string',
 							'required' => true,
 						),
-						'resolution' => array(
+						'resolution'  => array(
 							'type'     => 'string',
 							'required' => true,
-							'enum'     => array( 'restored', 'dismissed' ),
+							'enum'     => array( 'restored', 'dismissed', 'accepted' ),
 						),
-						'client_id'  => array(
+						'content'     => array(
+							'type'        => 'string',
+							'description' => 'The replacement content of an accepted resolution (serialized blocks, or the property value).',
+						),
+						'client_id'   => array(
 							'type'    => 'integer',
 							'default' => 0,
+						),
+						'seenVersion' => array(
+							'type'        => 'string',
+							'description' => 'The version the reviewer saw when they accepted. The accepted content is refused with a 409 (review_stale) when the parked blocks have changed since that version.',
 						),
 					),
 				)
@@ -56,14 +64,18 @@ if ( ! class_exists( 'WP_De_RTC_Review_Controller' ) ) {
 		}
 
 		/**
-		 * Mirrors the sync transports' capability gate.
+		 * Mirrors the sync transports' gate: the user must be able to edit
+		 * the post the room belongs to, not just posts in general. An
+		 * accepted resolution writes content into that post's room.
 		 *
 		 * @since 0.3.0
+		 * @since n.e.x.t Checks the room's post, as the transports do.
 		 *
-		 * @return bool Whether the current user may resolve review items.
+		 * @param WP_REST_Request $request Request.
+		 * @return true|WP_Error True when the current user may resolve review items in the room.
 		 */
-		public function check_permissions(): bool {
-			return current_user_can( 'edit_posts' );
+		public function check_permissions( WP_REST_Request $request ) {
+			return WP_Sync_Review_Permissions::check_room( (string) $request['room'] );
 		}
 
 		/**
@@ -94,7 +106,9 @@ if ( ! class_exists( 'WP_De_RTC_Review_Controller' ) ) {
 				$room,
 				(string) $request['proposalId'],
 				(string) $request['resolution'],
-				(int) $request['client_id']
+				(int) $request['client_id'],
+				isset( $request['content'] ) ? (string) $request['content'] : null,
+				isset( $request['seenVersion'] ) ? (string) $request['seenVersion'] : null
 			);
 			if ( is_wp_error( $disposition ) ) {
 				return $disposition;

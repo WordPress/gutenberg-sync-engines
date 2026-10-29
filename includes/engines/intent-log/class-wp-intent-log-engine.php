@@ -76,7 +76,8 @@ if ( ! class_exists( 'WP_Intent_Log_Engine' ) ) {
 		const PROTOCOL_VERSION = 2;
 
 		/**
-		 * Update type: client-authored intent (stored transformed).
+		 * Update type: client-authored intent (stored transformed; when the
+		 * transform moved it, `authoredPayload` keeps the payload as sent).
 		 *
 		 * @since 7.2.0
 		 * @var string
@@ -418,6 +419,7 @@ if ( ! class_exists( 'WP_Intent_Log_Engine' ) ) {
 				 */
 				$envelope_ok = null !== $intent_id &&
 					! array_key_exists( 'textSlices', $intent ) &&
+					! array_key_exists( 'authoredPayload', $intent ) &&
 					is_int( $intent['baseSeq'] ?? null ) && $intent['baseSeq'] >= 0 &&
 					$intent['baseSeq'] <= $head_seq &&
 					is_string( $intent['type'] ?? null ) &&
@@ -635,13 +637,37 @@ if ( ! class_exists( 'WP_Intent_Log_Engine' ) ) {
 				}
 			}
 
-			$plan = WP_Intent_Log_Planner::plan_batch( $units, $state['log'], $doc_at, $base_seq );
+			// The batch's frame continues from this actor's earlier set-aside
+			// intents, so a typist whose editor still shows a set-aside
+			// letter parks the keystrokes that follow it beside it (rule 6
+			// across requests) instead of landing them misplaced.
+			$plan = WP_Intent_Log_Planner::plan_batch(
+				$units,
+				$state['log'],
+				$doc_at,
+				$base_seq,
+				WP_Intent_Log_Planner::seed_frame_state( $state['parked'][ $actor_id ] ?? array() )
+			);
 
 			// Commit the plan to storage.
 			foreach ( $plan['rows'] as $row ) {
 				$intent_id = $row['intent']['intentId'];
 				if ( null !== $row['accepted'] ) {
-					$stored = $this->add_row( $room, $client_id, self::UPDATE_TYPE_INTENT, $row['accepted'] );
+					$accepted = $row['accepted'];
+
+					/*
+					 * The row stores the transformed form (its coordinates
+					 * hold at its log position). When the transform moved
+					 * it, the row also keeps the payload as the author sent
+					 * it: a set-aside edit by the same author is expressed
+					 * against the author's own view, which held this one at
+					 * its authored place, and the review lane rebuilds that
+					 * view from the log (see intent-log-conflicts.ts).
+					 */
+					if ( $accepted['payload'] !== $row['intent']['payload'] || isset( $accepted['textSlices'] ) ) {
+						$accepted['authoredPayload'] = $row['intent']['payload'];
+					}
+					$stored = $this->add_row( $room, $client_id, self::UPDATE_TYPE_INTENT, $accepted );
 				} elseif ( null !== $row['proposal'] ) {
 					/*
 					 * Review context, captured while the document is at hand:
@@ -967,7 +993,7 @@ if ( ! class_exists( 'WP_Intent_Log_Engine' ) ) {
 		 * not publish without `unfiltered_html`.
 		 *
 		 * Markup-bearing payload surfaces: format_text (the span format id,
-		 * when turning a format ON), insert_block (the block spec's field
+		 * whether turning it on OR off), insert_block (the block spec's field
 		 * formats, plus every attr's string leaves), set_attr (string
 		 * leaves; blocks like core/html render an attr as raw markup), and
 		 * set_property (string values — title and excerpt are kses-filtered
@@ -985,8 +1011,18 @@ if ( ! class_exists( 'WP_Intent_Log_Engine' ) ) {
 			$payload = $intent['payload'];
 			switch ( $intent['type'] ) {
 				case 'format_text':
-					return ! empty( $payload['on'] )
-						&& self::format_requires_unfiltered_html( $payload['format'] );
+					/*
+					 * Judged in BOTH directions. Applying a protected format
+					 * is the obvious case. REMOVING one is gated too: a
+					 * filtered author's change to protected markup derives
+					 * as an off/on format pair (a custom HTML block edit is
+					 * the canonical case), and letting the off half apply
+					 * would strip the previously approved markup out of the
+					 * canonical document while the on half parks. Parking
+					 * both keeps the block at its approved content until
+					 * review, and restoring re-authors the pair.
+					 */
+					return self::format_requires_unfiltered_html( $payload['format'] );
 				case 'insert_block':
 					return self::block_spec_requires_unfiltered_html( $payload['block'] );
 				case 'set_attr':
@@ -1338,6 +1374,7 @@ if ( ! class_exists( 'WP_Intent_Log_Engine' ) ) {
 			$settled        = array();
 			$proposals_open = array();
 			$resolved       = array();
+			$parked         = array();
 			$base_seq       = 0;
 
 			foreach ( $rows as $row ) {
@@ -1373,6 +1410,23 @@ if ( ! class_exists( 'WP_Intent_Log_Engine' ) ) {
 							'reason' => $decoded['reason'],
 						);
 						$proposals_open[ $decoded['intent']['intentId'] ] = true;
+
+						/*
+						 * A planner escalation stays part of its author's
+						 * frame until the author observes the clash
+						 * (resolved or not): later batches from that actor
+						 * plan from it (see seed_frame_state). The settling
+						 * seq rides the row. A row written before it was
+						 * recorded falls back to the head at parking, the
+						 * conservative choice. Security holds are not frame
+						 * phantoms and are left out.
+						 */
+						if ( self::ESCALATION_REQUIRES_APPROVAL !== $decoded['reason'] ) {
+							$parked[ $decoded['actorId'] ][] = array(
+								'intent' => $decoded['intent'],
+								'atSeq'  => isset( $decoded['atSeq'] ) ? (int) $decoded['atSeq'] : (int) ( $decoded['at'] ?? 0 ) - 1,
+							);
+						}
 						break;
 					case self::UPDATE_TYPE_RESOLVED:
 						unset( $proposals_open[ $decoded['proposalId'] ] );
@@ -1396,6 +1450,20 @@ if ( ! class_exists( 'WP_Intent_Log_Engine' ) ) {
 				}
 			}
 
+			// A park settled below the retained window is dropped from the
+			// seed: it cannot affect any intent that can still be planned,
+			// since stale bases are voided before planning.
+			foreach ( $parked as $actor => $parks ) {
+				$parked[ $actor ] = array_values(
+					array_filter(
+						$parks,
+						static function ( $park ) use ( $base_seq ) {
+							return $park['atSeq'] >= $base_seq;
+						}
+					)
+				);
+			}
+
 			$state                     = array(
 				'genesis'        => $genesis,
 				'log'            => $log,
@@ -1404,6 +1472,9 @@ if ( ! class_exists( 'WP_Intent_Log_Engine' ) ) {
 				// resolutions) and resolved ids, for resolution validation.
 				'proposals_open' => $proposals_open,
 				'resolved'       => $resolved,
+				// Each actor's planner escalations with their settling seq:
+				// the frame state the actor's next batch plans from.
+				'parked'         => $parked,
 				// Engine seq of the reconstructed genesis (0, or the
 				// checkpoint's seq): log[i] is engine seq base_seq + i.
 				'base_seq'       => $base_seq,

@@ -468,7 +468,7 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 		 *                        attempts are exhausted under contention.
 		 */
 		private function ingest_proposal( string $room, int $client_id, array &$state, array $proposal, &$review ) {
-			$base_content = $this->resolve_effective_base( $room, $state, $proposal );
+			$base_content = $this->resolve_effective_base( $room, $state, $proposal, $client_id, $review );
 			if ( null === $base_content ) {
 				return array(
 					'status' => 'voided',
@@ -565,7 +565,7 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 						);
 					}
 					$state        = $reloaded;
-					$base_content = $this->resolve_effective_base( $room, $state, $proposal );
+					$base_content = $this->resolve_effective_base( $room, $state, $proposal, $client_id, $review );
 					if ( null === $base_content ) {
 						// The base aged out of the snapshot window mid-retry.
 						return array(
@@ -1131,7 +1131,7 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 		 */
 		private function park_proposal( string $room, int $client_id, array $proposal, string $reason, string $base_content, &$review ): void {
 			$changed_blocks = $this->changed_blocks( $base_content, (string) $proposal['proposedContent'] );
-			$this->park_changed_blocks( $room, $client_id, (string) $proposal['proposalId'], $reason, (string) $proposal['baseVersion'], $changed_blocks, $review, false );
+			$this->park_changed_blocks( $room, $client_id, (string) $proposal['proposalId'], $reason, (string) $proposal['baseVersion'], $changed_blocks, $review, false, $base_content );
 		}
 
 		/**
@@ -1153,9 +1153,12 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 		 * @param array  $changed_blocks    Blocks to park ({index, html}).
 		 * @param array  $review            Review ledger (lazily loaded, by reference).
 		 * @param bool   $dedupe_by_content Whether to suppress same-content re-parks.
+		 * @param string $base_content      Content of the proposal's base version
+		 *                                  (stamps each block's `baseHtml`).
 		 * @return void
 		 */
-		private function park_changed_blocks( string $room, int $client_id, string $parked_id, string $reason, string $base_version, array $changed_blocks, &$review, bool $dedupe_by_content ): void {
+		private function park_changed_blocks( string $room, int $client_id, string $parked_id, string $reason, string $base_version, array $changed_blocks, &$review, bool $dedupe_by_content, string $base_content = '' ): void {
+			$changed_blocks = $this->stamp_base_html( $changed_blocks, $base_content );
 			if ( null === $review ) {
 				$review = $this->load_review_ledger( $room );
 			}
@@ -1174,6 +1177,8 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 					}
 				}
 			}
+
+			$replaced = $this->supersede_open_rows( $room, $client_id, $reason, $changed_blocks, $review );
 
 			$changed_text = '';
 			foreach ( $changed_blocks as $block ) {
@@ -1203,8 +1208,23 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 				self::UPDATE_TYPE_PARKED,
 				wp_json_encode( $payload )
 			);
-			if ( $stored ) {
-				$review['open'][ $parked_id ] = $payload;
+			if ( ! $stored ) {
+				return;
+			}
+			$review['open'][ $parked_id ] = $payload;
+
+			// The new row first, then the closures: a client that reads
+			// them in order never sees the block without a record.
+			foreach ( $replaced as $replaced_id ) {
+				$this->apply_resolution(
+					$room,
+					array(
+						'proposalId' => $replaced_id,
+						'resolution' => 'superseded',
+					),
+					$client_id,
+					$review
+				);
 			}
 		}
 
@@ -1295,7 +1315,8 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 				$by_identity = WP_De_RTC_Identity_Merge::sequester( $base_content, (string) $proposal['proposedContent'], $this->get_approved_blocks( $room ) );
 				if ( is_array( $by_identity ) ) {
 					if ( array() !== $by_identity['risky'] ) {
-						$this->park_changed_blocks( $room, $client_id, (string) $proposal['proposalId'], 'requires-unfiltered-html', (string) $proposal['baseVersion'], $by_identity['risky'], $review, true );
+						$risky = self::mark_blocks_not_in_document( $by_identity['risky'], $by_identity['laundered'] );
+						$this->park_changed_blocks( $room, $client_id, (string) $proposal['proposalId'], 'requires-unfiltered-html', (string) $proposal['baseVersion'], $risky, $review, true, $base_content );
 						// phpcs:ignore WordPress.NamingConventions.ValidHookName.UseUnderscores, WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- Query Monitor's debug hook.
 						do_action( 'qm/debug', 'wp-sync: de-rtc sequestered ' . count( $by_identity['risky'] ) . " risky block(s) by identity from a filtered author in {$room}" );
 					}
@@ -1357,7 +1378,7 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 				return implode( "\n\n", $laundered );
 			}
 
-			$this->park_changed_blocks( $room, $client_id, (string) $proposal['proposalId'], 'requires-unfiltered-html', (string) $proposal['baseVersion'], $risky, $review, true );
+			$this->park_changed_blocks( $room, $client_id, (string) $proposal['proposalId'], 'requires-unfiltered-html', (string) $proposal['baseVersion'], $risky, $review, true, $base_content );
 
 			// phpcs:ignore WordPress.NamingConventions.ValidHookName.UseUnderscores, WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- Query Monitor's debug hook.
 			do_action( 'qm/debug', 'wp-sync: de-rtc sequestered ' . count( $risky ) . " risky block(s) from a filtered author in {$room}" );
@@ -1445,7 +1466,7 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 				return null;
 			}
 
-			$this->park_changed_blocks( $room, $client_id, (string) $proposal['proposalId'], 'manual-conflict-required', (string) $proposal['baseVersion'], $conflicted, $review, false );
+			$this->park_changed_blocks( $room, $client_id, (string) $proposal['proposalId'], 'manual-conflict-required', (string) $proposal['baseVersion'], $conflicted, $review, false, $base_content );
 			$parked_count += count( $conflicted );
 
 			// phpcs:ignore WordPress.NamingConventions.ValidHookName.UseUnderscores, WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- Query Monitor's debug hook.
@@ -1486,7 +1507,8 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 				}
 				$parked_id = (string) $proposal['proposalId'];
 				$was_open  = isset( $review['open'][ $parked_id ] ) || isset( $review['resolved'][ $parked_id ] );
-				$this->park_changed_blocks( $room, $client_id, $parked_id, 'manual-conflict-required', (string) $proposal['baseVersion'], $identity['conflicts'], $review, false );
+				$conflicts = self::mark_blocks_not_in_document( $identity['conflicts'], $identity['merged_content'] );
+				$this->park_changed_blocks( $room, $client_id, $parked_id, 'manual-conflict-required', (string) $proposal['baseVersion'], $conflicts, $review, false, $base_content );
 				if ( ! $was_open ) {
 					$parked_count += count( $identity['conflicts'] );
 				}
@@ -1552,8 +1574,8 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 		 * Applies one proposal resolution against the room's review ledger:
 		 * an OPEN, un-resolved proposal gets a stamped `resolved` row (the
 		 * broadcastable advisory peers and late joiners replay); anything
-		 * else acks idempotently. Reached only through resolve_proposal()
-		 * (the REST review lane).
+		 * else acks idempotently. Reached through resolve_proposal() (the
+		 * REST review lane) and, for `superseded`, park_changed_blocks().
 		 *
 		 * @since 0.3.0
 		 *
@@ -1567,6 +1589,24 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 			$proposal_id = $resolution['proposalId'];
 			if ( isset( $review['open'][ $proposal_id ] ) && ! isset( $review['resolved'][ $proposal_id ] ) ) {
 				$parked = $review['open'][ $proposal_id ];
+
+				// Restoring a security hold is the approval act (it pins the
+				// held bytes as vetted, see below), so it takes the same gate
+				// as accepting one: only a user who may publish unfiltered
+				// HTML. Without it, the author of the held markup could
+				// approve it through the route and re-propose it unfiltered.
+				if (
+					'restored' === $resolution['resolution'] &&
+					'requires-unfiltered-html' === ( $parked['reason'] ?? null ) &&
+					! current_user_can( 'unfiltered_html' )
+				) {
+					return new WP_Error(
+						'rest_sync_forbidden',
+						__( 'Approving this content requires permission to publish unfiltered HTML.', 'gutenberg-sync-engines' ),
+						array( 'status' => 403 )
+					);
+				}
+
 				$stored = $this->add_row(
 					$room,
 					$client_id,
@@ -1622,22 +1662,49 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 		 *
 		 * @since 0.3.0
 		 *
-		 * @param string $room        Room identifier.
-		 * @param string $proposal_id Parked proposal id.
-		 * @param string $resolution  'restored' or 'dismissed'.
-		 * @param int    $client_id   Resolving client id (0 = none declared).
+		 * The `accepted` resolution carries the reviewer's replacement
+		 * content: it lands as an ordinary edit under the reviewer (see
+		 * apply_accepted_content()) and the parked id closes in the same
+		 * request, so the two can never race each other.
+		 *
+		 * An `accepted` resolution may name the version the reviewer saw.
+		 * When the parked blocks have changed since that version, the
+		 * replacement would write over a change the reviewer never saw:
+		 * the answer is a 409 `review_stale`, nothing is written, and the
+		 * record stays open.
+		 *
+		 * @since n.e.x.t Takes the version the reviewer saw.
+		 *
+		 * @param string      $room         Room identifier.
+		 * @param string      $proposal_id  Parked proposal id.
+		 * @param string      $resolution   'restored', 'dismissed', or 'accepted'.
+		 * @param int         $client_id    Resolving client id (0 = none declared).
+		 * @param string|null $content      The replacement for 'accepted'.
+		 * @param string|null $seen_version The version the reviewer saw, for
+		 *                                  'accepted' (null skips the check).
 		 * @return array|WP_Error Disposition, or error.
 		 */
-		public function resolve_proposal( string $room, string $proposal_id, string $resolution, int $client_id = 0 ) {
-			if ( '' === $proposal_id || ! in_array( $resolution, array( 'restored', 'dismissed' ), true ) ) {
+		public function resolve_proposal( string $room, string $proposal_id, string $resolution, int $client_id = 0, ?string $content = null, ?string $seen_version = null ) {
+			if (
+				'' === $proposal_id ||
+				! in_array( $resolution, array( 'restored', 'dismissed', 'accepted' ), true ) ||
+				( 'accepted' === $resolution && null === $content )
+			) {
 				return new WP_Error(
 					'rest_sync_invalid_intent',
 					__( 'Malformed proposal resolution.', 'gutenberg' ),
 					array( 'status' => 400 )
 				);
 			}
-			$review = $this->load_review_ledger( $room );
-			return $this->apply_resolution(
+			$review  = $this->load_review_ledger( $room );
+			$applied = null;
+			if ( 'accepted' === $resolution ) {
+				$applied = $this->apply_accepted_content( $room, $proposal_id, (string) $content, $client_id, $review, $seen_version );
+				if ( is_wp_error( $applied ) ) {
+					return $applied;
+				}
+			}
+			$disposition = $this->apply_resolution(
 				$room,
 				array(
 					'proposalId' => $proposal_id,
@@ -1646,6 +1713,654 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 				$client_id,
 				$review
 			);
+			if ( is_array( $disposition ) && null !== $applied ) {
+				$disposition['applied'] = $applied;
+			}
+			return $disposition;
+		}
+
+		/**
+		 * The base form of a block as the author's earliest open review
+		 * row stored it, or null when no open row of theirs holds the block.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param array  $review    Review ledger.
+		 * @param int    $client_id Author client id.
+		 * @param string $sync_id   The block's identity.
+		 * @return string|null The block's base form.
+		 */
+		private function open_row_block_base( array $review, int $client_id, string $sync_id ): ?string {
+			foreach ( $review['open'] as $proposal_id => $row ) {
+				if (
+					isset( $review['resolved'][ $proposal_id ] ) ||
+					! is_array( $row ) ||
+					(int) ( $row['authorClientId'] ?? -1 ) !== $client_id ||
+					! is_array( $row['changedBlocks'] ?? null )
+				) {
+					continue;
+				}
+				foreach ( $row['changedBlocks'] as $block ) {
+					if (
+						is_array( $block ) &&
+						( $block['syncId'] ?? null ) === $sync_id &&
+						is_string( $block['baseHtml'] ?? null ) &&
+						'' !== $block['baseHtml']
+					) {
+						return $block['baseHtml'];
+					}
+				}
+			}
+
+			return null;
+		}
+
+		/**
+		 * The blocks a review row covers, as one comparable key: each
+		 * block by identity when it carries one, else by index.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param array $changed_blocks Parked blocks.
+		 * @return string The key.
+		 */
+		private static function block_set_key( array $changed_blocks ): string {
+			$keys = array();
+			foreach ( $changed_blocks as $block ) {
+				if ( ! is_array( $block ) ) {
+					continue;
+				}
+				if ( is_string( $block['syncId'] ?? null ) && '' !== $block['syncId'] ) {
+					$keys[] = $block['syncId'];
+				} else {
+					$keys[] = (string) (int) ( $block['index'] ?? 0 );
+				}
+			}
+			sort( $keys );
+
+			return implode( ',', $keys );
+		}
+
+		/**
+		 * Closes the author's open review rows that a new row replaces:
+		 * same author, same reason, same blocks. Someone who keeps typing
+		 * after their edit was set aside parks a row per proposal, and the
+		 * newest row carries everything the earlier ones did, so one
+		 * record stays open per author and block set. Each replaced row's
+		 * base forms carry over to the new row, so the record keeps the
+		 * version the FIRST edit started from.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param string $room           Room identifier.
+		 * @param int    $client_id      Author client id.
+		 * @param string $reason         Escalation reason.
+		 * @param array  $changed_blocks The new row's blocks (by reference;
+		 *                               base forms carried over).
+		 * @param array  $review         Review ledger (by reference).
+		 * @return string[] The replaced rows' ids, oldest first.
+		 */
+		private function supersede_open_rows( string $room, int $client_id, string $reason, array &$changed_blocks, array &$review ): array {
+			$key      = self::block_set_key( $changed_blocks );
+			$replaced = array();
+			if ( '' === $key ) {
+				return $replaced;
+			}
+			foreach ( $review['open'] as $proposal_id => $row ) {
+				if (
+					isset( $review['resolved'][ $proposal_id ] ) ||
+					! is_array( $row ) ||
+					isset( $row['property'] ) ||
+					( $row['reason'] ?? null ) !== $reason ||
+					(int) ( $row['authorClientId'] ?? -1 ) !== $client_id ||
+					! is_array( $row['changedBlocks'] ?? null ) ||
+					self::block_set_key( $row['changedBlocks'] ) !== $key
+				) {
+					continue;
+				}
+				$replaced[] = (string) $proposal_id;
+			}
+			if ( array() === $replaced ) {
+				return $replaced;
+			}
+
+			// The earliest replaced row holds the oldest base forms.
+			$first = $review['open'][ $replaced[0] ]['changedBlocks'];
+			foreach ( $changed_blocks as &$block ) {
+				if ( ! is_array( $block ) ) {
+					continue;
+				}
+				foreach ( $first as $earlier ) {
+					if (
+						is_array( $earlier ) &&
+						is_string( $earlier['baseHtml'] ?? null ) &&
+						self::block_set_key( array( $earlier ) ) === self::block_set_key( array( $block ) )
+					) {
+						$block['baseHtml'] = $earlier['baseHtml'];
+						break;
+					}
+				}
+			}
+			unset( $block );
+
+			return $replaced;
+		}
+
+		/**
+		 * Stamps each changed block with `baseHtml`: the block as the
+		 * proposal's base version had it. That is its serialized form by
+		 * identity when the block carries a syncId (at any depth), else the
+		 * top-level record at the same index, or '' for a block the base
+		 * does not hold (a proposed insertion). The review UI's "base" side.
+		 * On freeform boundaries (no per-block records) the single
+		 * whole-content park takes the whole base.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param array  $changed_blocks Parked blocks ({index, html, syncId?}).
+		 * @param string $base_content   Content of the proposal's base version.
+		 * @return array The blocks with `baseHtml` stamped.
+		 */
+		private function stamp_base_html( array $changed_blocks, string $base_content ): array {
+			$records = wp_de_rtc_get_top_level_serialized_block_records( $base_content );
+			if ( is_wp_error( $records ) ) {
+				$records = null;
+			}
+			$by_id = null;
+			foreach ( $changed_blocks as &$block ) {
+				if ( ! is_array( $block ) ) {
+					continue;
+				}
+				$base_html = null;
+				if ( is_string( $block['syncId'] ?? null ) && '' !== $block['syncId'] ) {
+					if ( null === $by_id ) {
+						// The identity lanes' `html` is the block's subtree
+						// with core block names canonicalized. The base
+						// form takes the same shape so the two compare.
+						$by_id = array();
+						self::index_serialized_blocks_by_id( parse_blocks( wp_de_rtc_canonicalize_post_content_core_block_names( $base_content ) ), $by_id );
+					}
+					$base_html = $by_id[ $block['syncId'] ] ?? null;
+				}
+				if ( null === $base_html && isset( $block['index'] ) ) {
+					if ( null === $records ) {
+						$base_html = 0 === (int) $block['index'] ? $base_content : null;
+					} else {
+						$base_html = $records[ (int) $block['index'] ] ?? null;
+					}
+				}
+				$block['baseHtml'] = is_string( $base_html ) ? $base_html : '';
+			}
+			unset( $block );
+
+			return $changed_blocks;
+		}
+
+		/**
+		 * Marks the identified blocks that the given content does not hold
+		 * with `notInDocument`: the proposal's merge left them out (a held
+		 * new block dropped, a block one side deleted), so no block in the
+		 * document stands for them. An accepted resolution inserts such a
+		 * block. One without the mark replaces the block in the document,
+		 * and is refused once that block is gone (see replace_parked_span()).
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param array  $changed_blocks Blocks about to park ({index, html, syncId?}).
+		 * @param string $content        The content the proposal's merge produced.
+		 * @return array The blocks, marked.
+		 */
+		private static function mark_blocks_not_in_document( array $changed_blocks, string $content ): array {
+			$by_id = array();
+			self::index_serialized_blocks_by_id( parse_blocks( $content ), $by_id );
+			foreach ( $changed_blocks as &$block ) {
+				if (
+					is_array( $block ) &&
+					is_string( $block['syncId'] ?? null ) &&
+					'' !== $block['syncId'] &&
+					! isset( $by_id[ $block['syncId'] ] )
+				) {
+					$block['notInDocument'] = true;
+				}
+			}
+			unset( $block );
+
+			return $changed_blocks;
+		}
+
+		/**
+		 * Maps every identified block of a parsed tree (any depth) to its
+		 * serialized form.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param array $blocks Parsed blocks.
+		 * @param array $map    syncId => serialized block (by reference).
+		 * @return void
+		 */
+		private static function index_serialized_blocks_by_id( array $blocks, array &$map ): void {
+			foreach ( $blocks as $block ) {
+				$id = $block['attrs']['metadata']['syncId'] ?? null;
+				if ( is_string( $id ) && '' !== $id && ! isset( $map[ $id ] ) ) {
+					$map[ $id ] = serialize_block( $block );
+				}
+				if ( ! empty( $block['innerBlocks'] ) ) {
+					self::index_serialized_blocks_by_id( $block['innerBlocks'], $map );
+				}
+			}
+		}
+
+		/**
+		 * Applies an `accepted` resolution's replacement content: a proposal
+		 * authored by the resolving user against the CURRENT version, whose
+		 * content is the canonical content with the parked span replaced by
+		 * the reviewer's content (a parked property register takes the
+		 * content as its new value), run through the ordinary proposal path
+		 * so a concurrent change merges or parks the way any edit would.
+		 * The caller closes the parked id in the same request.
+		 *
+		 * A change that lands DURING this request is covered by that
+		 * ordinary path. A change that landed BEFORE it, after the version
+		 * the reviewer saw, is not: the replacement starts from the current
+		 * version, so it would simply write over the change. That case is
+		 * refused here (see is_parked_target_changed_since()).
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param string      $room         Room identifier.
+		 * @param string      $proposal_id  Parked proposal id.
+		 * @param string      $content      The reviewer's replacement
+		 *                                  (serialized blocks, or the
+		 *                                  property value).
+		 * @param int         $client_id    Resolving client id.
+		 * @param array       $review       Review ledger (by reference).
+		 * @param string|null $seen_version The version the reviewer saw
+		 *                                  (null skips the stale check).
+		 * @return array|WP_Error|null The replacement's disposition, null
+		 *                             when the record was already closed,
+		 *                             or an error.
+		 */
+		private function apply_accepted_content( string $room, string $proposal_id, string $content, int $client_id, array &$review, ?string $seen_version = null ) {
+			$parked = $review['open'][ $proposal_id ] ?? null;
+			if ( ! is_array( $parked ) || isset( $review['resolved'][ $proposal_id ] ) ) {
+				return null; // Closed elsewhere: nothing to apply, the ack is idempotent.
+			}
+
+			// The same gate restore enforces: accepting a security hold IS
+			// the approval, reserved for users who may publish unfiltered HTML.
+			if ( 'requires-unfiltered-html' === ( $parked['reason'] ?? null ) && ! current_user_can( 'unfiltered_html' ) ) {
+				return new WP_Error(
+					'rest_sync_forbidden',
+					__( 'Approving this content requires permission to publish unfiltered HTML.', 'gutenberg-sync-engines' ),
+					array( 'status' => 403 )
+				);
+			}
+
+			$state = $this->load_room( $room );
+			if ( is_wp_error( $state ) ) {
+				return $state;
+			}
+
+			if (
+				null !== $seen_version &&
+				'' !== $seen_version &&
+				(string) $state['version'] !== $seen_version &&
+				$this->is_parked_target_changed_since( $state, $parked, $seen_version )
+			) {
+				return new WP_Error(
+					'review_stale',
+					__( 'This content changed after the decision was made. Review it again.', 'gutenberg-sync-engines' ),
+					array( 'status' => 409 )
+				);
+			}
+
+			$proposal = array(
+				'proposalId'  => 'accept:' . $proposal_id,
+				'baseVersion' => (string) $state['version'],
+			);
+			if ( is_array( $parked['property'] ?? null ) && is_string( $parked['property']['name'] ?? null ) ) {
+				/*
+				 * The sides of a property record carry a string as it is and
+				 * any other value (a term list, a flag) as JSON, and the
+				 * decision sends the chosen side back in that encoding. A
+				 * non-string field takes the decoded value, never the JSON
+				 * text, or every client would set the field to a string.
+				 */
+				$value = $content;
+				if ( ! is_string( $parked['property']['value'] ?? '' ) ) {
+					$value = json_decode( $content, true );
+					if ( null === $value && 'null' !== trim( $content ) ) {
+						return new WP_Error(
+							'rest_invalid_param',
+							__( 'The accepted value is not valid for this field.', 'gutenberg-sync-engines' ),
+							array( 'status' => 400 )
+						);
+					}
+				}
+				$proposal['proposedContent']    = (string) $state['content'];
+				$proposal['proposedProperties'] = array( $parked['property']['name'] => $value );
+			} else {
+				$replaced = $this->replace_parked_span(
+					(string) $state['content'],
+					is_array( $parked['changedBlocks'] ?? null ) ? $parked['changedBlocks'] : array(),
+					$content
+				);
+				if ( null === $replaced ) {
+					return new WP_Error(
+						'rest_sync_invalid_intent',
+						__( 'The parked blocks could not be located in the current content.', 'gutenberg-sync-engines' ),
+						array( 'status' => 409 )
+					);
+				}
+				$proposal['proposedContent'] = $replaced;
+			}
+
+			$this->claim_retries = 0;
+			$disposition         = $this->ingest_proposal( $room, $client_id, $state, $proposal, $review );
+			if ( is_wp_error( $disposition ) ) {
+				return $disposition;
+			}
+			if ( null === $review ) {
+				$review = $this->load_review_ledger( $room );
+			}
+
+			return $disposition;
+		}
+
+		/**
+		 * Whether a parked record's target reads differently now than it
+		 * did at an earlier version: the parked blocks (or the parked
+		 * property) were changed in between. A version that is no longer
+		 * kept cannot be compared, and counts as changed.
+		 *
+		 * Example: a reviewer opens the dialog at version 7. A peer edits
+		 * the parked paragraph, which makes version 8. The reviewer accepts
+		 * with `seenVersion` 7: the paragraph differs between 7 and 8, so
+		 * the answer is true. Had the peer edited another paragraph, the
+		 * answer would be false and the accept would go ahead.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param array  $state        Room state.
+		 * @param array  $parked       The parked row.
+		 * @param string $seen_version The earlier version.
+		 * @return bool Whether the target changed.
+		 */
+		private function is_parked_target_changed_since( array $state, array $parked, string $seen_version ): bool {
+			if ( is_array( $parked['property'] ?? null ) && is_string( $parked['property']['name'] ?? null ) ) {
+				$name       = $parked['property']['name'];
+				$by_version = is_array( $state['properties_by_version'] ?? null ) ? $state['properties_by_version'] : array();
+				if ( ! is_array( $by_version[ $seen_version ] ?? null ) ) {
+					return true;
+				}
+				$now = is_array( $state['properties'] ?? null ) ? $state['properties'] : array();
+
+				return ! self::property_values_equal( $by_version[ $seen_version ][ $name ] ?? null, $now[ $name ] ?? null );
+			}
+
+			$seen_content = $this->resolve_base_content( $state, $seen_version );
+			if ( ! is_string( $seen_content ) ) {
+				return true;
+			}
+			$changed_blocks = is_array( $parked['changedBlocks'] ?? null ) ? $parked['changedBlocks'] : array();
+
+			return self::parked_span_form( $seen_content, $changed_blocks ) !== self::parked_span_form( (string) $state['content'], $changed_blocks );
+		}
+
+		/**
+		 * How a parked row's blocks are found in some content: their
+		 * syncIds, their top-level indexes, and whether to go by identity
+		 * (every block carries a syncId) rather than by the covering index
+		 * run. parked_span_form() and replace_parked_span() must agree on
+		 * this, since a stale check reads the span the write replaces.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param array $changed_blocks The parked row's changed blocks.
+		 * @return array{0: string[], 1: int[], 2: bool} ids, indexes, by identity.
+		 */
+		private static function parked_block_locators( array $changed_blocks ): array {
+			$ids     = array();
+			$indexes = array();
+			foreach ( $changed_blocks as $block ) {
+				if ( ! is_array( $block ) ) {
+					continue;
+				}
+				if ( is_string( $block['syncId'] ?? null ) && '' !== $block['syncId'] ) {
+					$ids[] = $block['syncId'];
+				}
+				if ( isset( $block['index'] ) ) {
+					$indexes[] = (int) $block['index'];
+				}
+			}
+
+			return array( $ids, $indexes, array() !== $ids && count( $ids ) === count( $changed_blocks ) );
+		}
+
+		/**
+		 * A parked span as some content has it (see parked_block_locators()):
+		 * by identity, a block the content does not hold reads as empty;
+		 * on freeform boundaries the span is the whole content.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param string $content        Serialized content.
+		 * @param array  $changed_blocks The parked row's changed blocks.
+		 * @return string The span's serialized form.
+		 */
+		private static function parked_span_form( string $content, array $changed_blocks ): string {
+			list( $ids, $indexes, $by_identity ) = self::parked_block_locators( $changed_blocks );
+
+			if ( $by_identity ) {
+				$by_id = array();
+				self::index_serialized_blocks_by_id( parse_blocks( $content ), $by_id );
+				$forms = array();
+				foreach ( $ids as $id ) {
+					$forms[] = $by_id[ $id ] ?? '';
+				}
+
+				return implode( "\n\n", $forms );
+			}
+
+			$records = wp_de_rtc_get_top_level_serialized_block_records( $content );
+			if ( is_wp_error( $records ) || array() === $indexes ) {
+				return $content;
+			}
+			$first = max( 0, min( $indexes ) );
+
+			return implode( "\n\n", array_slice( $records, $first, max( $indexes ) - $first + 1 ) );
+		}
+
+		/**
+		 * The current content with a parked span replaced: by identity when
+		 * every parked block carries a syncId (the first id met in document
+		 * order takes the replacement, the rest are removed, at any depth),
+		 * else the covering top-level index run. Empty replacement content
+		 * removes the span. On freeform boundaries the park covered the
+		 * whole document, so the replacement is the whole content.
+		 *
+		 * Identified blocks never fall back to the index run: once none of
+		 * them is in the document, that run holds other blocks. Blocks
+		 * marked `notInDocument` (see mark_blocks_not_in_document()) are
+		 * inserted at their recorded top-level index instead, and blocks
+		 * that were deleted after they parked cannot be located.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param string $current        Current canonical content.
+		 * @param array  $changed_blocks The parked row's changed blocks.
+		 * @param string $replacement    Serialized replacement blocks.
+		 * @return string|null The rewritten content, or null when the span
+		 *                     cannot be located.
+		 */
+		private function replace_parked_span( string $current, array $changed_blocks, string $replacement ): ?string {
+			list( $ids, $indexes, $by_identity ) = self::parked_block_locators( $changed_blocks );
+
+			$records = wp_de_rtc_get_top_level_serialized_block_records( $current );
+
+			if ( $by_identity ) {
+				$by_identity = self::replace_blocks_by_id( $current, $ids, $replacement );
+				if ( null !== $by_identity ) {
+					return $by_identity;
+				}
+
+				/*
+				 * None of the parked blocks is in the document. Blocks that
+				 * were in it when they parked have been deleted since, and
+				 * their recorded position now belongs to another block: the
+				 * span cannot be located. Blocks that were never in it (a
+				 * held new block, a block one side had deleted) go in at
+				 * the recorded position, beside what is there now.
+				 */
+				foreach ( $changed_blocks as $block ) {
+					if ( true !== ( $block['notInDocument'] ?? null ) ) {
+						return null;
+					}
+				}
+				if ( '' === trim( $replacement ) ) {
+					return $current; // Nothing to put in, nothing to remove.
+				}
+				if ( is_wp_error( $records ) ) {
+					return null;
+				}
+				$position = count( $records );
+				if ( array() !== $indexes ) {
+					$position = max( 0, min( $indexes ) );
+				}
+				array_splice( $records, $position, 0, array( trim( $replacement ) ) );
+
+				return implode( "\n\n", $records );
+			}
+
+			if ( is_wp_error( $records ) ) {
+				return $replacement;
+			}
+			if ( array() === $indexes ) {
+				return null;
+			}
+			$first = max( 0, min( $indexes ) );
+			$last  = min( max( $indexes ), count( $records ) - 1 );
+			if ( $first > count( $records ) ) {
+				return null;
+			}
+			$before = array_slice( $records, 0, $first );
+			$after  = $last >= $first ? array_slice( $records, $last + 1 ) : array_slice( $records, $first );
+			$middle = '' === trim( $replacement ) ? array() : array( trim( $replacement ) );
+
+			return implode( "\n\n", array_merge( $before, $middle, $after ) );
+		}
+
+		/**
+		 * Replaces identified blocks in serialized content: the first of
+		 * the ids met in document order takes the replacement blocks, the
+		 * others are removed. Null when none of the ids is present.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param string   $content     Serialized content.
+		 * @param string[] $ids         The blocks' syncIds.
+		 * @param string   $replacement Serialized replacement blocks ('' removes).
+		 * @return string|null The rewritten content, or null.
+		 */
+		private static function replace_blocks_by_id( string $content, array $ids, string $replacement ): ?string {
+			$replacement_blocks = array();
+			if ( '' !== trim( $replacement ) ) {
+				foreach ( parse_blocks( $replacement ) as $block ) {
+					if ( ! empty( $block['blockName'] ) ) {
+						$replacement_blocks[] = $block;
+					}
+				}
+			}
+			$found  = false;
+			$blocks = self::splice_blocks_by_id( parse_blocks( $content ), $ids, $replacement_blocks, $found );
+
+			return $found ? serialize_blocks( $blocks ) : null;
+		}
+
+		/**
+		 * The recursive half of replace_blocks_by_id(). A container whose
+		 * child count changes gets its inner content rebuilt from its own
+		 * prefix, separator, and suffix so the serializer's placeholders
+		 * match the children again.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param array    $blocks      Parsed blocks.
+		 * @param string[] $ids         The blocks' syncIds.
+		 * @param array    $replacement Parsed replacement blocks.
+		 * @param bool     $found       Whether an id was met (by reference).
+		 * @return array The rewritten blocks.
+		 */
+		private static function splice_blocks_by_id( array $blocks, array $ids, array $replacement, bool &$found ): array {
+			$out = array();
+			foreach ( $blocks as $block ) {
+				$id = $block['attrs']['metadata']['syncId'] ?? null;
+				if ( is_string( $id ) && in_array( $id, $ids, true ) ) {
+					if ( ! $found ) {
+						$found = true;
+						foreach ( $replacement as $replacement_block ) {
+							$out[] = $replacement_block;
+						}
+					}
+					continue;
+				}
+				if ( ! empty( $block['innerBlocks'] ) ) {
+					$inner = self::splice_blocks_by_id( $block['innerBlocks'], $ids, $replacement, $found );
+					if ( count( $inner ) !== count( $block['innerBlocks'] ) ) {
+						$block['innerContent'] = self::rebuild_inner_content( $block['innerContent'], count( $inner ) );
+					}
+					$block['innerBlocks'] = $inner;
+				}
+				$out[] = $block;
+			}
+
+			return $out;
+		}
+
+		/**
+		 * Rebuilds a container's innerContent for a new child count: the
+		 * prefix before the first child, one placeholder per child joined
+		 * by the original separator, and the suffix after the last child.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param array $inner_content The block's innerContent.
+		 * @param int   $count         The new number of children.
+		 * @return array The rebuilt innerContent.
+		 */
+		private static function rebuild_inner_content( array $inner_content, int $count ): array {
+			$prefix    = '';
+			$suffix    = '';
+			$separator = "\n\n";
+			$chunk     = '';
+			$seen      = 0;
+			foreach ( $inner_content as $piece ) {
+				if ( is_string( $piece ) ) {
+					$chunk .= $piece;
+					continue;
+				}
+				if ( 0 === $seen ) {
+					$prefix = $chunk;
+				} elseif ( 1 === $seen ) {
+					$separator = $chunk;
+				}
+				$chunk = '';
+				++$seen;
+			}
+			$suffix = $chunk;
+			if ( 0 === $count ) {
+				return array( $prefix . $suffix );
+			}
+			$rebuilt = array( $prefix );
+			for ( $i = 0; $i < $count; $i++ ) {
+				if ( $i > 0 ) {
+					$rebuilt[] = $separator;
+				}
+				$rebuilt[] = null;
+			}
+			$rebuilt[] = $suffix;
+
+			return $rebuilt;
 		}
 
 		/**
@@ -2146,13 +2861,22 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 		 *
 		 * @since 0.5.0
 		 *
-		 * @param string $room     Room identifier.
-		 * @param array  $state    Room state.
-		 * @param array  $proposal Decoded proposal payload.
+		 * A declared version the room no longer holds (the snapshots are
+		 * bounded, and a room that advances on every keystroke outruns
+		 * them within one sentence) falls back to the base form stored on
+		 * the author's own open review row for that block: someone who
+		 * keeps typing after their edit was set aside declares the same
+		 * true base on every proposal, and the row kept it.
+		 *
+		 * @param string     $room      Room identifier.
+		 * @param array      $state     Room state.
+		 * @param array      $proposal  Decoded proposal payload.
+		 * @param int        $client_id Proposing client id (0 = unknown).
+		 * @param array|null $review    Review ledger (lazily loaded, by reference).
 		 * @return string|null Effective base content, or null when the
 		 *                     whole-document base is unresolvable.
 		 */
-		private function resolve_effective_base( string $room, array $state, array $proposal ): ?string {
+		private function resolve_effective_base( string $room, array $state, array $proposal, int $client_id = 0, &$review = null ): ?string {
 			$base_content = $this->resolve_base_content( $state, $proposal['baseVersion'] );
 			if ( null === $base_content ) {
 				$base_content = $this->resolve_base_from_revisions( $room, (string) $proposal['baseVersion'] );
@@ -2189,6 +2913,12 @@ if ( ! class_exists( 'WP_De_RTC_Engine' ) && interface_exists( 'WP_Sync_Engine' 
 				$block_base = $this->resolve_base_content( $state, $block_version );
 				if ( null === $block_base ) {
 					$block_base = $this->resolve_base_from_revisions( $room, $block_version );
+				}
+				if ( null === $block_base && null !== $sync_id && $client_id > 0 ) {
+					if ( null === $review ) {
+						$review = $this->load_review_ledger( $room );
+					}
+					$block_base = $this->open_row_block_base( $review, $client_id, $sync_id );
 				}
 				if ( null === $block_base ) {
 					continue;

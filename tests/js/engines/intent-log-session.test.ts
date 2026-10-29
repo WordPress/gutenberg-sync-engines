@@ -449,6 +449,74 @@ describe( 'intent-log session codec', () => {
 		expect( wire.doc().root[ 0 ].attrs.align ).toBe( 'wide' );
 	} );
 
+	it( 'seeds replans from its own parked rows: a keystroke that still counts a set-aside letter is a dependent, on the client and the server alike', () => {
+		const wire = makeWireServer();
+		const alice = makeSession( 1, 11 );
+		const bob = makeSession( 2, 22 );
+		const aliceLink = connect( wire, alice );
+		const bobLink = connect( wire, bob );
+		aliceLink.poll();
+		bobLink.poll();
+
+		// Alice appends a space. Bob has not seen it when he types "ab".
+		alice.author( 'insert_text', { syncId: 'p1', offset: 11, text: ' ' } );
+		aliceLink.poll();
+		bob.author( 'insert_text', { syncId: 'p1', offset: 0, text: 'a' } );
+		bob.author( 'insert_text', { syncId: 'p1', offset: 1, text: 'b' } );
+		const first = bobLink.poll()!;
+		// "b" clashes and takes "a" with it: the burst parks whole.
+		expect( first.map( ( d ) => d.status ) ).toEqual( [
+			'escalated',
+			'escalated',
+		] );
+		// The parked rows carry the settling seq: Alice's entry at 0.
+		expect( bob.getProposals()[ 0 ] ).toMatchObject( {
+			reason: 'frame-conflict',
+			atSeq: 0,
+		} );
+		expect( bob.getProposals()[ 1 ] ).toMatchObject( {
+			reason: 'dependent-on-escalated',
+			atSeq: 0,
+		} );
+
+		// Bob's editor still shows the "b", so "c" is typed at offset 2
+		// (counting it) and at the frame Bob last displayed (seq 0).
+		const [ c ] = bob.authorBatch(
+			[
+				{
+					type: 'insert_text',
+					payload: { syncId: 'p1', offset: 2, text: 'c' },
+				},
+			],
+			{ baseSeq: 0, observe: false }
+		);
+		expect( c.baseSeq ).toBe( 0 );
+		// Predicted as the dependent it will be: absent from Bob's canvas.
+		expect( bob.getDocument()!.root[ 0 ].fields.content.text ).toBe(
+			'Hello world '
+		);
+		const second = bobLink.poll()!;
+		expect( second[ 0 ] ).toMatchObject( {
+			status: 'escalated',
+			reason: 'dependent-on-escalated',
+		} );
+		aliceLink.poll();
+		const serverJson = canonicalJson( wire.doc() );
+		expect( canonicalJson( bob.getDocument()! ) ).toBe( serverJson );
+		expect( canonicalJson( alice.getDocument()! ) ).toBe( serverJson );
+		expect( wire.doc().root[ 0 ].fields.content.text ).toBe(
+			'Hello world '
+		);
+
+		// Authored after Bob observed the clash (at his cursor): clean.
+		bob.author( 'insert_text', { syncId: 'p1', offset: 1, text: 'x' } );
+		const third = bobLink.poll()!;
+		expect( third[ 0 ] ).toMatchObject( { status: 'applied' } );
+		expect( wire.doc().root[ 0 ].fields.content.text ).toBe(
+			'Hxello world '
+		);
+	} );
+
 	it( 'settles a voided intent through its marker row', () => {
 		const wire = makeWireServer();
 		const alice = makeSession( 1, 11 );
@@ -569,5 +637,76 @@ describe( 'intent-log session codec', () => {
 		expect( canonicalJson( session.getDocument()! ) ).toBe(
 			canonicalJson( createDocument( fresh ) )
 		);
+	} );
+
+	it( 'keeps the log sliceable from the base of every open proposal', () => {
+		const session = createIntentLogSession( { userId: 7, clientId: 1 } );
+		const remote = ( intentId: string, offset: number ) => ( {
+			data: JSON.stringify( {
+				intentId,
+				actorId: 'u9c9',
+				baseSeq: 0,
+				txnId: null,
+				type: 'insert_text',
+				payload: {
+					syncId: 'p1',
+					field: 'content',
+					offset,
+					text: 'x',
+				},
+			} ),
+			type: INTENT_LOG_UPDATE_TYPES.INTENT,
+		} );
+		session.receiveUpdate( {
+			data: JSON.stringify( { doc: createDocument( GENESIS_BLOCKS ) } ),
+			type: INTENT_LOG_UPDATE_TYPES.SNAPSHOT,
+		} );
+		// The editor displays the genesis (the manager records this at
+		// bootstrap), so the log stays sliceable from it for now.
+		session.setObservedSeq( 0 );
+		session.receiveUpdate( remote( 'r1', 0 ) );
+		session.receiveUpdate( remote( 'r2', 1 ) );
+
+		// An edit authored against the genesis parks for review.
+		session.receiveUpdate( {
+			data: JSON.stringify( {
+				intent: {
+					intentId: 'parked-1',
+					actorId: 'u8c8',
+					baseSeq: 0,
+					txnId: null,
+					type: 'insert_text',
+					payload: {
+						syncId: 'p1',
+						field: 'content',
+						offset: 5,
+						text: '!',
+					},
+				},
+				actorId: 'u8c8',
+				reason: 'frame-conflict',
+			} ),
+			type: INTENT_LOG_UPDATE_TYPES.PARKED,
+		} );
+
+		// The editor catches up to the head. Without the open proposal the
+		// log would now trim up to the observed frame.
+		session.setObservedSeq( session.getSeq() );
+		session.receiveUpdate( remote( 'r3', 2 ) );
+		expect( session.getRetainedFloor() ).toBe( 0 );
+		expect( session.getDocumentAt( 0 ) ).not.toBeNull();
+
+		// Closing the proposal releases the floor.
+		session.receiveUpdate( {
+			data: JSON.stringify( {
+				proposalId: 'parked-1',
+				resolution: 'dismissed',
+			} ),
+			type: INTENT_LOG_UPDATE_TYPES.RESOLVED,
+		} );
+		session.setObservedSeq( session.getSeq() );
+		session.receiveUpdate( remote( 'r4', 3 ) );
+		expect( session.getRetainedFloor() ).toBeGreaterThan( 0 );
+		expect( session.getDocumentAt( 0 ) ).toBeNull();
 	} );
 } );

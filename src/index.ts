@@ -8,6 +8,8 @@
  *     `registerSyncEngine`
  *   - transport providers (http-polling, sse, websocket) via
  *     `registerSyncTransport`
+ *   - the conflict review UI (src/review/), fed by the conflict source
+ *     each engine adapter registers when it creates an engine
  *
  * With this plugin inactive the framework registers nothing, so a session
  * finds no engine/transport to negotiate and the editor falls back to the
@@ -31,6 +33,7 @@ import { unlock } from './lock-unlock';
 import { createIntentLogEngineAdapter } from './engines/intent-log-adapter';
 import { createYjsServerEngineAdapter } from './engines/yjs-server-adapter';
 import { createDeRtcEngineAdapter } from './engines/de-rtc-adapter';
+import './review';
 import { createHttpPollingProvider } from './providers/http-polling/http-polling-provider';
 import { createWebSocketProvider } from './providers/websocket/websocket-provider';
 import { createSseProvider } from './providers/sse/sse-provider';
