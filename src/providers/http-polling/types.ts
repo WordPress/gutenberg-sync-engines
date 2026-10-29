@@ -11,23 +11,6 @@ import type {
 export type { AwarenessState, LocalAwarenessState };
 
 /**
- * Well-known update types on the wire (originally defined by the retired
- * yjs-relay engine; yjs-server still speaks `update`):
- * - sync_step1: State vector announcement
- * - sync_step2: Acknowledgment, missing updates response
- * - update: Regular document update (persisted until save)
- * - compaction: Merged updates using Y.mergeUpdates replacing all prior updates
- *
- * The transport does not interpret these; it moves typed updates opaquely.
- * `compaction` still matters to the queue: restore() drops compaction rows
- * rather than re-queueing them.
- */
-export enum SyncUpdateType {
-	COMPACTION = 'compaction',
-	UPDATE = 'update',
-}
-
-/**
  * A typed update on the wire. The engine-defined `type` and base64 `data`
  * are opaque to the transport.
  */
@@ -78,7 +61,6 @@ interface SyncEnvelopeFromServer {
 	 * room-bound state and start over from cursor 0.
 	 */
 	generation?: string;
-	should_compact?: boolean;
 	room: string;
 	updates: SyncUpdate[];
 }
@@ -110,7 +92,6 @@ export interface UpdateQueue {
 	pause: () => void;
 	peek: () => SyncUpdate[];
 	restore: ( updates: SyncUpdate[] ) => void;
-	restoreExact: ( updates: SyncUpdate[] ) => void;
 	resume: () => void;
 	size: () => number;
 	take: ( count: number ) => SyncUpdate[];

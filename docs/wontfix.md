@@ -15,7 +15,6 @@ one of these without filing an issue first.
 - **Storing the shared document in the post itself.** Today the shared
   working copy lives in its own tables. The original Distributed Editing
   design keeps it in the post content, with revisions as the backup.
-  Every de-rtc save already writes the sync information into the post.
   *Why it waits:* it changes where the truth lives for every engine, so
   it is its own project.
 - **Four intent-log limits we accept.** Edits not yet sent are lost if
@@ -51,6 +50,3 @@ one of these without filing an issue first.
 - **New engines, new transports, a history slider, and
   hover-to-see-who-wrote-this.** Not planned. The last two have their
   data available already; no interface work is scheduled.
-- **Making the bundled Automerge library do real work.** The shipping
-  de-rtc merge never calls it. *Why it waits:* the reasons for and
-  against are in issue #44.

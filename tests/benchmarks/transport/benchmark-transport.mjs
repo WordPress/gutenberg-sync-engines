@@ -482,15 +482,6 @@ async function main() {
 							return false;
 						}
 						const url = decodeURIComponent( response.url() );
-						if ( settings.active.engine === 'de-rtc' ) {
-							return (
-								url.includes( '/autosaves' ) &&
-								response
-									.request()
-									.postData()
-									?.includes( 'benchrecoveryx' )
-							);
-						}
 						if ( ! url.includes( '/wp-sync/v1/updates' ) ) {
 							return false;
 						}
@@ -676,7 +667,9 @@ async function main() {
 		try {
 			restoreHostCache( hostCache );
 		} catch ( error ) {
-			console.warn( `WARNING: failed to restore the object cache: ${ error }` );
+			console.warn(
+				`WARNING: failed to restore the object cache: ${ error }`
+			);
 		}
 		const changedSettings =
 			settings &&

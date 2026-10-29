@@ -927,59 +927,6 @@ class Tests_Collaboration_GutenbergSyncEnginesAdvisoryPresence extends WP_UnitTe
 		$this->assertTrue( $this->room_is_empty( $storage ) );
 	}
 
-	public function test_a_reset_de_rtc_room_rebuilds_from_the_saved_post_not_its_old_canonical() {
-		$post_id  = self::factory()->post->create(
-			array(
-				'post_author'  => self::$editor_id,
-				'post_content' => "<!-- wp:paragraph -->\n<p>Hello</p>\n<!-- /wp:paragraph -->",
-			)
-		);
-		$room     = 'postType/post:' . $post_id;
-		$storage  = new WP_Sync_Post_Meta_Storage();
-		$presence = new Gutenberg_Sync_Engines_Advisory_Presence( $storage );
-		$engine   = new WP_De_RTC_Engine( $storage );
-		add_action( 'gutenberg_sync_engines_room_reset', array( 'WP_De_RTC_Engine', 'forget_room_state' ) );
-
-		// A session advances the room past its genesis (canonical lives in
-		// an options row the storage reset never sees).
-		$this->assertStringContainsString( 'Hello', (string) $engine->materialize( $room ) );
-		$result = $engine->handle_updates(
-			$room,
-			201,
-			0,
-			array(
-				array(
-					'type' => WP_De_RTC_Engine::UPDATE_TYPE_PROPOSAL,
-					'data' => wp_json_encode(
-						array(
-							'proposalId'      => 'p-1',
-							'baseVersion'     => 'v1',
-							'proposedContent' => "<!-- wp:paragraph -->\n<p>Hello, unsaved</p>\n<!-- /wp:paragraph -->",
-							'clientUpdate'    => null,
-						)
-					),
-				),
-			),
-			array()
-		);
-		$this->assertSame( 'applied', $result['dispositions'][0]['status'] );
-		$this->assertStringContainsString( 'unsaved', (string) $engine->materialize( $room ) );
-		$presence->answer_probe(
-			array(
-				'room'  => $room,
-				'token' => 'tab-a',
-			)
-		);
-
-		// The last tab leaves: the room is reset, INCLUDING the canonical
-		// row, so a fresh engine rebuilds genesis from the saved post.
-		$this->assertTrue( $presence->leave( $room, 'tab-a', 201 ) );
-		$fresh = new WP_De_RTC_Engine( $storage );
-		$this->assertStringNotContainsString( 'unsaved', (string) $fresh->materialize( $room ) );
-		$this->assertStringContainsString( 'Hello', (string) $fresh->materialize( $room ) );
-		wp_delete_post( $post_id, true );
-	}
-
 	public function test_presence_reads_never_create_a_storage_post() {
 		$this->beat( 'tok-a' );
 		$posts = get_posts(

@@ -17,7 +17,6 @@ import apiFetch from '@wordpress/api-fetch';
 /**
  * Internal dependencies
  */
-import { SyncUpdateType } from '../../../../src/providers/http-polling/types';
 import { MAX_UPDATE_SIZE_IN_BYTES } from '../../../../src/providers/http-polling/config';
 import {
 	base64ToUint8Array,
@@ -33,13 +32,6 @@ const mockApiFetch = jest.mocked( apiFetch );
 const SERVER_MAX_UPDATE_DATA_SIZE_IN_BYTES = 1024 * 1024;
 
 describe( 'http-polling utils', () => {
-	describe( 'SyncUpdateType', () => {
-		it( 'has the expected enum values', () => {
-			expect( SyncUpdateType.COMPACTION ).toBe( 'compaction' );
-			expect( SyncUpdateType.UPDATE ).toBe( 'update' );
-		} );
-	} );
-
 	describe( 'uint8ArrayToBase64', () => {
 		it( 'converts an empty array', () => {
 			const input = new Uint8Array( [] );
@@ -139,7 +131,7 @@ describe( 'http-polling utils', () => {
 		it( 'keeps the largest allowed raw update within the server encoded update limit', () => {
 			const result = createSyncUpdate(
 				new Uint8Array( MAX_UPDATE_SIZE_IN_BYTES ),
-				SyncUpdateType.UPDATE
+				'update'
 			);
 
 			expect( result.data.length ).toBeLessThanOrEqual(
@@ -149,33 +141,33 @@ describe( 'http-polling utils', () => {
 
 		it( 'creates a typed update with UPDATE type', () => {
 			const data = new Uint8Array( [ 1, 2, 3 ] );
-			const result = createSyncUpdate( data, SyncUpdateType.UPDATE );
+			const result = createSyncUpdate( data, 'update' );
 
-			expect( result.type ).toBe( SyncUpdateType.UPDATE );
+			expect( result.type ).toBe( 'update' );
 			expect( result.data ).toBe( uint8ArrayToBase64( data ) );
 		} );
 
 		it( 'creates a typed update with COMPACTION type', () => {
 			const data = new Uint8Array( [ 4, 5, 6 ] );
-			const result = createSyncUpdate( data, SyncUpdateType.COMPACTION );
+			const result = createSyncUpdate( data, 'compaction' );
 
-			expect( result.type ).toBe( SyncUpdateType.COMPACTION );
+			expect( result.type ).toBe( 'compaction' );
 			expect( result.data ).toBe( uint8ArrayToBase64( data ) );
 		} );
 
 		it( 'creates a typed update with UPDATE type', () => {
 			const data = new Uint8Array( [ 7, 8, 9 ] );
-			const result = createSyncUpdate( data, SyncUpdateType.UPDATE );
+			const result = createSyncUpdate( data, 'update' );
 
-			expect( result.type ).toBe( SyncUpdateType.UPDATE );
+			expect( result.type ).toBe( 'update' );
 			expect( result.data ).toBe( uint8ArrayToBase64( data ) );
 		} );
 
 		it( 'handles empty data', () => {
 			const data = new Uint8Array( [] );
-			const result = createSyncUpdate( data, SyncUpdateType.UPDATE );
+			const result = createSyncUpdate( data, 'update' );
 
-			expect( result.type ).toBe( SyncUpdateType.UPDATE );
+			expect( result.type ).toBe( 'update' );
 			expect( result.data ).toBe( '' );
 		} );
 	} );
@@ -190,14 +182,8 @@ describe( 'http-polling utils', () => {
 
 			it( 'creates a queue with initial updates', () => {
 				const initial = [
-					createSyncUpdate(
-						new Uint8Array( [ 1 ] ),
-						SyncUpdateType.UPDATE
-					),
-					createSyncUpdate(
-						new Uint8Array( [ 2 ] ),
-						SyncUpdateType.UPDATE
-					),
+					createSyncUpdate( new Uint8Array( [ 1 ] ), 'update' ),
+					createSyncUpdate( new Uint8Array( [ 2 ] ), 'update' ),
 				];
 
 				const queue = createUpdateQueue( initial );
@@ -208,10 +194,7 @@ describe( 'http-polling utils', () => {
 			it( 'creates a paused queue by default', () => {
 				const queue = createUpdateQueue();
 				queue.add(
-					createSyncUpdate(
-						new Uint8Array( [ 1 ] ),
-						SyncUpdateType.UPDATE
-					)
+					createSyncUpdate( new Uint8Array( [ 1 ] ), 'update' )
 				);
 
 				// get() returns empty when paused
@@ -222,10 +205,7 @@ describe( 'http-polling utils', () => {
 			it( 'can create an unpaused queue', () => {
 				const queue = createUpdateQueue( [], false );
 				queue.add(
-					createSyncUpdate(
-						new Uint8Array( [ 1 ] ),
-						SyncUpdateType.UPDATE
-					)
+					createSyncUpdate( new Uint8Array( [ 1 ] ), 'update' )
 				);
 
 				expect( queue.get() ).toHaveLength( 1 );
@@ -233,19 +213,13 @@ describe( 'http-polling utils', () => {
 
 			it( 'does not modify the initial array', () => {
 				const initial = [
-					createSyncUpdate(
-						new Uint8Array( [ 1 ] ),
-						SyncUpdateType.UPDATE
-					),
+					createSyncUpdate( new Uint8Array( [ 1 ] ), 'update' ),
 				];
 				const initialCopy = [ ...initial ];
 
 				const queue = createUpdateQueue( initial );
 				queue.add(
-					createSyncUpdate(
-						new Uint8Array( [ 2 ] ),
-						SyncUpdateType.UPDATE
-					)
+					createSyncUpdate( new Uint8Array( [ 2 ] ), 'update' )
 				);
 
 				expect( initial ).toEqual( initialCopy );
@@ -257,7 +231,7 @@ describe( 'http-polling utils', () => {
 				const queue = createUpdateQueue();
 				const update = createSyncUpdate(
 					new Uint8Array( [ 1 ] ),
-					SyncUpdateType.UPDATE
+					'update'
 				);
 
 				queue.add( update );
@@ -269,11 +243,11 @@ describe( 'http-polling utils', () => {
 				const queue = createUpdateQueue( [], false );
 				const update1 = createSyncUpdate(
 					new Uint8Array( [ 1 ] ),
-					SyncUpdateType.UPDATE
+					'update'
 				);
 				const update2 = createSyncUpdate(
 					new Uint8Array( [ 2 ] ),
-					SyncUpdateType.UPDATE
+					'update'
 				);
 
 				queue.add( update1 );
@@ -290,18 +264,9 @@ describe( 'http-polling utils', () => {
 			it( 'adds multiple updates at once', () => {
 				const queue = createUpdateQueue();
 				const updates = [
-					createSyncUpdate(
-						new Uint8Array( [ 1 ] ),
-						SyncUpdateType.UPDATE
-					),
-					createSyncUpdate(
-						new Uint8Array( [ 2 ] ),
-						SyncUpdateType.UPDATE
-					),
-					createSyncUpdate(
-						new Uint8Array( [ 3 ] ),
-						SyncUpdateType.UPDATE
-					),
+					createSyncUpdate( new Uint8Array( [ 1 ] ), 'update' ),
+					createSyncUpdate( new Uint8Array( [ 2 ] ), 'update' ),
+					createSyncUpdate( new Uint8Array( [ 3 ] ), 'update' ),
 				];
 
 				queue.addBulk( updates );
@@ -321,17 +286,11 @@ describe( 'http-polling utils', () => {
 				const queue = createUpdateQueue();
 				const existing = createSyncUpdate(
 					new Uint8Array( [ 0 ] ),
-					SyncUpdateType.UPDATE
+					'update'
 				);
 				const newUpdates = [
-					createSyncUpdate(
-						new Uint8Array( [ 1 ] ),
-						SyncUpdateType.UPDATE
-					),
-					createSyncUpdate(
-						new Uint8Array( [ 2 ] ),
-						SyncUpdateType.UPDATE
-					),
+					createSyncUpdate( new Uint8Array( [ 1 ] ), 'update' ),
+					createSyncUpdate( new Uint8Array( [ 2 ] ), 'update' ),
 				];
 
 				queue.add( existing );
@@ -346,7 +305,7 @@ describe( 'http-polling utils', () => {
 				const queue = createUpdateQueue();
 				const update = createSyncUpdate(
 					new Uint8Array( [ 1 ] ),
-					SyncUpdateType.UPDATE
+					'update'
 				);
 
 				queue.add( update );
@@ -360,7 +319,7 @@ describe( 'http-polling utils', () => {
 				const queue = createUpdateQueue( [], false );
 				const update = createSyncUpdate(
 					new Uint8Array( [ 1 ] ),
-					SyncUpdateType.UPDATE
+					'update'
 				);
 
 				queue.add( update );
@@ -375,18 +334,9 @@ describe( 'http-polling utils', () => {
 			it( 'returns updates in FIFO order', () => {
 				const queue = createUpdateQueue( [], false );
 				const updates = [
-					createSyncUpdate(
-						new Uint8Array( [ 1 ] ),
-						SyncUpdateType.UPDATE
-					),
-					createSyncUpdate(
-						new Uint8Array( [ 2 ] ),
-						SyncUpdateType.UPDATE
-					),
-					createSyncUpdate(
-						new Uint8Array( [ 3 ] ),
-						SyncUpdateType.COMPACTION
-					),
+					createSyncUpdate( new Uint8Array( [ 1 ] ), 'update' ),
+					createSyncUpdate( new Uint8Array( [ 2 ] ), 'update' ),
+					createSyncUpdate( new Uint8Array( [ 3 ] ), 'compaction' ),
 				];
 
 				updates.forEach( ( u ) => queue.add( u ) );
@@ -400,16 +350,10 @@ describe( 'http-polling utils', () => {
 			it( 'removes all updates from the queue', () => {
 				const queue = createUpdateQueue();
 				queue.add(
-					createSyncUpdate(
-						new Uint8Array( [ 1 ] ),
-						SyncUpdateType.UPDATE
-					)
+					createSyncUpdate( new Uint8Array( [ 1 ] ), 'update' )
 				);
 				queue.add(
-					createSyncUpdate(
-						new Uint8Array( [ 2 ] ),
-						SyncUpdateType.UPDATE
-					)
+					createSyncUpdate( new Uint8Array( [ 2 ] ), 'update' )
 				);
 
 				expect( queue.size() ).toBe( 2 );
@@ -422,19 +366,13 @@ describe( 'http-polling utils', () => {
 			it( 'pause prevents get from returning updates', () => {
 				const queue = createUpdateQueue( [], false );
 				queue.add(
-					createSyncUpdate(
-						new Uint8Array( [ 1 ] ),
-						SyncUpdateType.UPDATE
-					)
+					createSyncUpdate( new Uint8Array( [ 1 ] ), 'update' )
 				);
 
 				expect( queue.get() ).toHaveLength( 1 );
 
 				queue.add(
-					createSyncUpdate(
-						new Uint8Array( [ 2 ] ),
-						SyncUpdateType.UPDATE
-					)
+					createSyncUpdate( new Uint8Array( [ 2 ] ), 'update' )
 				);
 				queue.pause();
 
@@ -445,10 +383,7 @@ describe( 'http-polling utils', () => {
 			it( 'resume allows get to return updates', () => {
 				const queue = createUpdateQueue(); // paused by default
 				queue.add(
-					createSyncUpdate(
-						new Uint8Array( [ 1 ] ),
-						SyncUpdateType.UPDATE
-					)
+					createSyncUpdate( new Uint8Array( [ 1 ] ), 'update' )
 				);
 
 				expect( queue.get() ).toEqual( [] );
@@ -465,13 +400,10 @@ describe( 'http-polling utils', () => {
 				const queue = createUpdateQueue( [], false );
 				const existing = createSyncUpdate(
 					new Uint8Array( [ 2 ] ),
-					SyncUpdateType.UPDATE
+					'update'
 				);
 				const toRestore = [
-					createSyncUpdate(
-						new Uint8Array( [ 1 ] ),
-						SyncUpdateType.UPDATE
-					),
+					createSyncUpdate( new Uint8Array( [ 1 ] ), 'update' ),
 				];
 
 				queue.add( existing );
@@ -482,36 +414,25 @@ describe( 'http-polling utils', () => {
 				expect( result[ 1 ] ).toEqual( existing );
 			} );
 
-			it( 'filters out compaction updates', () => {
+			it( 'preserves every engine-defined row type in order', () => {
 				const queue = createUpdateQueue( [], false );
 				const toRestore = [
-					createSyncUpdate(
-						new Uint8Array( [ 1 ] ),
-						SyncUpdateType.UPDATE
-					),
-					createSyncUpdate(
-						new Uint8Array( [ 2 ] ),
-						SyncUpdateType.COMPACTION
-					),
-					createSyncUpdate(
-						new Uint8Array( [ 3 ] ),
-						SyncUpdateType.UPDATE
-					),
+					createSyncUpdate( new Uint8Array( [ 1 ] ), 'update' ),
+					createSyncUpdate( new Uint8Array( [ 2 ] ), 'compaction' ),
+					createSyncUpdate( new Uint8Array( [ 3 ] ), 'update' ),
 				];
 
 				queue.restore( toRestore );
 
 				const result = queue.get();
-				expect( result ).toHaveLength( 2 );
-				expect( result[ 0 ].type ).toBe( SyncUpdateType.UPDATE );
-				expect( result[ 1 ].type ).toBe( SyncUpdateType.UPDATE );
+				expect( result ).toEqual( toRestore );
 			} );
 
 			it( 'handles empty restore array', () => {
 				const queue = createUpdateQueue();
 				const existing = createSyncUpdate(
 					new Uint8Array( [ 1 ] ),
-					SyncUpdateType.UPDATE
+					'update'
 				);
 
 				queue.add( existing );
@@ -524,20 +445,17 @@ describe( 'http-polling utils', () => {
 				const queue = createUpdateQueue();
 				const existing = createSyncUpdate(
 					new Uint8Array( [ 1 ] ),
-					SyncUpdateType.UPDATE
+					'update'
 				);
 				const toRestore = [
-					createSyncUpdate(
-						new Uint8Array( [ 2 ] ),
-						SyncUpdateType.COMPACTION
-					),
+					createSyncUpdate( new Uint8Array( [ 2 ] ), 'compaction' ),
 				];
 
 				queue.add( existing );
 				queue.restore( toRestore );
 
-				// Only the existing update should remain
-				expect( queue.size() ).toBe( 1 );
+				// Restoring keeps all rows, even while the queue is paused.
+				expect( queue.size() ).toBe( 2 );
 			} );
 		} );
 
@@ -552,7 +470,7 @@ describe( 'http-polling utils', () => {
 				const queue = createUpdateQueue( [], false );
 				const update = createSyncUpdate(
 					new Uint8Array( [ 1 ] ),
-					SyncUpdateType.UPDATE
+					'update'
 				);
 
 				expect( queue.size() ).toBe( 0 );

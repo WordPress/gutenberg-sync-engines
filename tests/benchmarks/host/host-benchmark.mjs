@@ -9,7 +9,7 @@
  * in the json= report as engine.job).
  *
  *   npm run bench                            # this report, defaults
- *   npm run bench -- --engine=de-rtc --windows=3
+ *   npm run bench -- --engine=yjs-server --windows=3
  *   npm run bench -- --metrics=requests,cpu --json=host.json
  *
  * Phases, all real browser windows against a live site:
@@ -50,7 +50,7 @@
  * Arguments (bare key=value, like every benchmark here):
  *
  *   engine=     the ONE engine to measure (intent-log | yjs-server |
- *               de-rtc | current; default: the site's current engine —
+ *               current; default: the site's current engine —
  *               comparing engines is what --suite=engines is for)
  *   transport=  http-polling | sse | websocket | current
  *   cache=      none | redis | current: the persistent object cache the
@@ -171,7 +171,7 @@ const HELP = `node tests/benchmarks/host/host-benchmark.mjs [key=value …]
 (or: npm run bench -- [--key=value …])
 
   engine=     the ONE engine to measure (intent-log | yjs-server |
-              de-rtc | current; default: the site's current engine —
+              current; default: the site's current engine —
               comparing engines is what --suite=engines is for)
   transport=  http-polling | sse | websocket
               (default: the site's current transport)

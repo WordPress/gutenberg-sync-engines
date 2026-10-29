@@ -13,7 +13,7 @@ pluggable engines and transports.
 npm run fuzz
 ```
 
-That runs the default matrix — `{intent-log, yjs-server, de-rtc} ×
+That runs the default matrix — `{intent-log, yjs-server} ×
 {http-polling, sse, sse-daemon, websocket}` — with 5 seeds per combo,
 12 actions per seed, 2 collaborating browsers. It starts the TESTS wp-env
 (`.wp-env.tests.json`) if needed, flips the engine/transport per combo,
@@ -185,11 +185,6 @@ Conflict cards are resolved one at a time through a reachable button; card
 positions are read again after each choice.
 
 Run the runner's focused checks with `node --test tests/fuzzer/runner.test.mjs`.
-
-`cases/` keeps reproduction settings and filtered evidence for confirmed
-product failures. These are investigation records, not passing tests. See
-[`de-rtc-heading-duplication.json`](cases/de-rtc-heading-duplication.json)
-for a duplicate block reproduced without a participant leaving or rejoining.
 
 ## Choosing a campaign
 

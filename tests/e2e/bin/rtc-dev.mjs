@@ -39,14 +39,6 @@
  * (In the lifecycle script, `|| true` keeps a daemon failure — e.g. an
  * unbuilt subtree — from failing `wp-env start` itself; the diagnosis
  * still prints.)
- *
- * The serverless peer-relay test WebSocket provider this script used to
- * manage is only useful to client-merging engines; since the yjs-relay
- * engine was removed, both remaining engines are server-authoritative and
- * the relay demonstrates nothing. The e2e websocket suite manages that
- * fixture itself (tests/e2e/config/rtc-websocket-setup.ts); this script now
- * deactivates the fixture plugin in both modes so it never shadows the real
- * transport.
  */
 
 import { spawn, spawnSync } from 'node:child_process';
@@ -59,8 +51,6 @@ import process from 'node:process';
 import { parseArgs } from 'node:util';
 
 const REPO_ROOT = process.cwd();
-const TEST_PROVIDER_PLUGIN_SLUG =
-	'sync-engines-test-plugins/rtc-websocket-provider';
 const TRANSPORT_OPTION = 'gutenberg_sync_engines_transport';
 const ADVISORY_OPTION = 'gutenberg_sync_engines_advisory_channel';
 const DAEMON_CONTAINER_NAME = 'wp-sync-ws-daemon';
@@ -452,14 +442,6 @@ async function runWebSocketsMode( mode ) {
 	if ( 'websockets' === mode || 'sse-daemon' === mode ) {
 		const transport = 'websockets' === mode ? 'websocket' : 'sse-daemon';
 
-		process.stdout.write(
-			'Deactivating the e2e test provider plugin (if active)... '
-		);
-		await runWpCli( [ 'plugin', 'deactivate', TEST_PROVIDER_PLUGIN_SLUG ], {
-			allowFailure: true,
-		} );
-		process.stdout.write( 'done\n' );
-
 		process.stdout.write( `Selecting the ${ transport } transport... ` );
 		await enableCollaborationExperiment();
 		await runWpCli( [ 'option', 'update', TRANSPORT_OPTION, transport ] );
@@ -573,14 +555,6 @@ async function runWebSocketsMode( mode ) {
 }
 
 async function runHttpMode() {
-	process.stdout.write(
-		'Deactivating the e2e test provider plugin (if active)... '
-	);
-	await runWpCli( [ 'plugin', 'deactivate', TEST_PROVIDER_PLUGIN_SLUG ], {
-		allowFailure: true,
-	} );
-	process.stdout.write( 'done\n' );
-
 	process.stdout.write( 'Selecting the http-polling transport... ' );
 	await runWpCli( [ 'option', 'update', TRANSPORT_OPTION, 'http-polling' ] );
 	process.stdout.write( 'done\n' );

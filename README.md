@@ -1,7 +1,7 @@
 # Gutenberg sync engines
 
 An exploratory WordPress plugin for trying out **server-aware** real-time
-collaboration in Gutenberg. It provides three candidate sync **engines**
+collaboration in Gutenberg. It provides two candidate sync **engines**
 (how the server merges edits from several people) and several
 **transports** (how updates move between the editor and WordPress). Each
 can be selected from a settings screen, so they can be compared on the
@@ -60,12 +60,6 @@ https://github.com/user-attachments/assets/3563cba8-0537-4aa1-8794-9c712439b3a4
 A PHP implementation of Yjs. The server holds a shared document for each post in a format built to merge automatically (a CRDT), merges every update into it, keeps it small by itself, and can produce the post content from it.
 
 https://github.com/user-attachments/assets/d408357a-499e-446b-8d97-732d22c8b4a6
-
-#### de-rtc
-
-Distributed Editing: the server compares three versions of the post, the latest saved version, the editor's proposed version, and the version the editor started from, and combines the changes (a three-way merge). Sync happens on save or autosave, not on every change. Genuine conflicts are flagged for someone to review instead of silently merging.
-
-https://github.com/user-attachments/assets/deeb6012-d708-433c-9514-12b81fc870a1
 
 To choose one, and see what each gives up, read
 [docs/engine-comparison.md](docs/engine-comparison.md).

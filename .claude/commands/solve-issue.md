@@ -105,8 +105,8 @@ those notes accurate, and stop.
    and from whom, move it to `agent:parked`, and go on to the next
    issue:
    - a change inside the `gutenberg/` copy of the framework
-   - a change to frozen code: the intent-log core and its PHP twin, the
-     de-rtc merge core, or the bundled y-php and automerge-php
+   - a change to frozen code: the intent-log core and its PHP twin, or
+     the bundled y-php
    - a change to the shape of anything sent over the wire or stored
    - weakening or deleting a test to get a pass
    - a product decision that is genuinely the human's to make

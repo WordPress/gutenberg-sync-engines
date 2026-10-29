@@ -516,8 +516,6 @@ describe( 'intent-log session codec', () => {
 		const session = makeSession( 1, 11 );
 		expect( session.getInitialUpdates() ).toEqual( [] );
 		// No client-side compaction: the optional members are absent.
-		expect( session.createCompactionUpdate ).toBeUndefined();
-		expect( session.createCompactionFromUpdates ).toBeUndefined();
 
 		session.setLocalAwareness( { user: 'alice' } );
 		expect( session.getLocalAwareness() ).toEqual( { user: 'alice' } );

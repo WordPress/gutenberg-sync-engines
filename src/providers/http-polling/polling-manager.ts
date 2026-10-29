@@ -58,7 +58,6 @@ import type {
 	EngineDisposition,
 	EngineSessionCodec,
 } from '../../sync';
-import type { TransportSessionCodec } from '../session-extensions';
 import {
 	installSyncDebug,
 	isSyncDebugEnabled,
@@ -129,7 +128,6 @@ interface HeldTail {
 	endCursor: number;
 	updates: SyncUpdate[];
 	dispositions?: EngineDisposition[];
-	shouldCompact?: boolean;
 }
 
 interface RoomState {
@@ -141,8 +139,6 @@ interface RoomState {
 	isPrimaryRoom: boolean;
 	/** The awareness map the last poll response carried for this room. */
 	lastServerAwareness: AwarenessState;
-	/** Whether this room's queue is held while the tab is alone. */
-	holdWhileAlone: boolean;
 	log: LogFunction;
 	onStatusChange: ( status: ConnectionStatus ) => void;
 	room: string;
@@ -413,8 +409,7 @@ let syncRequestBodySizeLimit = MAX_SYNC_REQUEST_BODY_SIZE_IN_BYTES;
  *   30 s discovery window after load and after regaining focus), and the
  *   room queues are HELD — local edits wait in the
  *   browser until company arrives, a save (flush-before-save), or the
- *   tab going hidden. Codecs that declare `sendsWhileAlone` (de-rtc) are
- *   exempt. Company (a heartbeat or poll answer, or an awareness map
+ *   tab going hidden. Company (a heartbeat or poll answer, or an awareness map
  *   with more than one client) releases the queues and the cadence.
  * - Company, but some known peer is NOT reachable over the advisory
  *   channel: today's timer cadence (the configured interval).
@@ -498,7 +493,7 @@ function applyHolds(): void {
 	// them; a poll finishing meanwhile must not pause them again.
 	const alone = isAlone() && 0 === sendDoneResolvers.length;
 	roomStates.forEach( ( state ) => {
-		if ( alone && state.holdWhileAlone ) {
+		if ( alone ) {
 			state.updateQueue.pause();
 		} else {
 			state.updateQueue.resume();
@@ -1354,13 +1349,13 @@ function buildPayloadForRequest(
 	return { payload, roomsInRequest };
 }
 
-function restoreExactUpdates( payload: SyncPayload ): void {
+function restoreUpdates( payload: SyncPayload ): void {
 	for ( const room of payload.rooms ) {
 		if ( ! roomStates.has( room.room ) || room.updates.length === 0 ) {
 			continue;
 		}
 
-		roomStates.get( room.room )!.updateQueue.restoreExact( room.updates );
+		roomStates.get( room.room )!.updateQueue.restore( room.updates );
 	}
 }
 
@@ -1375,21 +1370,18 @@ function restoreExactUpdates( payload: SyncPayload ): void {
 type ResponseLane = 'receive' | 'send';
 
 /**
- * Applies one room's rows, then its dispositions, then a compaction
- * request, in that order. Rows already settle the pending state they
- * supersede, so the ack covers only outcomes without a row and the
+ * Applies one room's rows, then its dispositions. Rows already settle the
+ * pending state they supersede, so the ack covers only outcomes without a row and the
  * session's state never regresses mid-response.
  *
- * @param state         The room.
- * @param updates       The rows to apply.
- * @param dispositions  The server's verdicts on rows this client sent.
- * @param shouldCompact Whether the server nominated this client to compact.
+ * @param state        The room.
+ * @param updates      The rows to apply.
+ * @param dispositions The server's verdicts on rows this client sent.
  */
 function applyRoomRows(
 	state: RoomState,
 	updates: SyncUpdate[],
-	dispositions: EngineDisposition[] | undefined,
-	shouldCompact: boolean | undefined
+	dispositions: EngineDisposition[] | undefined
 ): void {
 	// Process each incoming update and collect any responses.
 	const responseUpdates: SyncUpdate[] = [];
@@ -1429,32 +1421,6 @@ function applyRoomRows(
 			);
 		}
 	}
-
-	// Respond to compaction requests from server. The server asks only one
-	// client at a time to compact (lowest active client ID). We encode our
-	// full document state to replace all prior updates on the server.
-	// (No current engine nominates a client — they all compact
-	// server-side — so codecs without the optional method are
-	// simply never asked, and a request to one is ignored.)
-	if ( shouldCompact ) {
-		state.log( 'Server requested compaction update' );
-		try {
-			// Create BEFORE clearing: a failed creation must not
-			// destroy the queued updates for nothing.
-			const compactionUpdate = state.session.createCompactionUpdate?.();
-			if ( compactionUpdate ) {
-				state.updateQueue.clear();
-				state.updateQueue.add( compactionUpdate );
-			}
-		} catch ( error ) {
-			state.log(
-				'Failed to create compaction update',
-				{ error },
-				'error',
-				true // force
-			);
-		}
-	}
 }
 
 /**
@@ -1470,12 +1436,7 @@ function drainHeldTails( state: RoomState ): void {
 		state.heldTails[ 0 ].endCursor <= state.endCursor
 	) {
 		const tail = state.heldTails.shift()!;
-		applyRoomRows(
-			state,
-			tail.updates,
-			tail.dispositions,
-			tail.shouldCompact
-		);
+		applyRoomRows( state, tail.updates, tail.dispositions );
 	}
 }
 
@@ -1582,23 +1543,16 @@ function applyRoomResponse(
 		}
 		if (
 			room.updates.length > 0 ||
-			( room.dispositions && room.dispositions.length > 0 ) ||
-			room.should_compact
+			( room.dispositions && room.dispositions.length > 0 )
 		) {
 			state.heldTails.push( {
 				endCursor: room.end_cursor,
 				updates: room.updates,
 				dispositions: room.dispositions,
-				shouldCompact: room.should_compact,
 			} );
 		}
 	} else {
-		applyRoomRows(
-			state,
-			room.updates,
-			room.dispositions,
-			room.should_compact
-		);
+		applyRoomRows( state, room.updates, room.dispositions );
 	}
 
 	drainHeldTails( state );
@@ -1736,7 +1690,7 @@ function handleRequestFailure(
 		pollInterval = hasCollaborators
 			? ERROR_RETRY_DELAYS_WITH_COLLABORATORS_MS[ 0 ]
 			: ERROR_RETRY_DELAYS_SOLO_MS[ 0 ];
-		restoreExactUpdates( payload );
+		restoreUpdates( payload );
 
 		for ( const room of payload.rooms ) {
 			if ( ! roomStates.has( room.room ) ) {
@@ -1810,8 +1764,8 @@ function handleRequestFailure(
 	// Recover from the failed request. We don't know whether the
 	// server stored our updates before the error occurred (e.g. a
 	// network timeout after a successful write). Recovery is
-	// CODEC-DRIVEN: an engine whose updates are not idempotent on
-	// the server (Yjs deltas) provides createRecoveryUpdate — a
+	// CODEC-DRIVEN: an engine that needs full-state recovery after
+	// an uncertain send provides createRecoveryUpdate — a
 	// full-state update that safely supersedes either outcome.
 	// Engines without it (the intent log dedupes ingest by
 	// intentId) get their exact updates restored and re-sent.
@@ -1886,8 +1840,7 @@ function handleRequestFailure(
  * work does not wait for the stream and does not close it: it goes out
  * on the updates request beside the stream, marked `rows_received_separately: true`.
  * The server stores the updates and answers with its verdicts, any
- * never-stored row an engine synthesizes for this client (de-rtc's
- * fetch answer), and the room's head cursor — but no stored rows, and
+ * response rows, and the room's head cursor — but no stored rows, and
  * the answer moves no cursor. The stream stays the only path that
  * delivers stored rows, so nothing is delivered twice or skipped, and
  * the answer is held (see applyRoomResponse) until the stream has
@@ -2216,7 +2169,7 @@ function restartRoom(
 	generation: string,
 	updates: SyncUpdate[]
 ): void {
-	const session = roomState.session as TransportSessionCodec;
+	const session = roomState.session;
 	const previous = roomState.generation;
 	let decision: 'rebootstrap' | 'disconnect' = 'rebootstrap';
 	try {
@@ -2256,7 +2209,7 @@ function restartRoom(
 	// The queue held work written against the old room; the session
 	// re-derives anything still relevant after it re-bootstraps.
 	roomState.updateQueue.clear();
-	roomState.updateQueue.restoreExact( session.getInitialUpdates() );
+	roomState.updateQueue.restore( session.getInitialUpdates() );
 	repollImmediately = true;
 }
 
@@ -2276,18 +2229,9 @@ function registerRoom( {
 	// the inspector is enabled).
 	registerDebugSession( room, session );
 
-	/*
-	 * A lone tab holds its queue until company arrives (released by a
-	 * heartbeat or poll answer, a save, or the tab going hidden). Codecs
-	 * that declare `sendsWhileAlone` (de-rtc: commits ride the autosave
-	 * lane, and its queued rows are advisories that must flow) are exempt.
-	 */
-	const holdWhileAlone = ! (
-		session as EngineSessionCodec & { sendsWhileAlone?: boolean }
-	 ).sendsWhileAlone;
 	const updateQueue = createUpdateQueue(
 		[ ...session.getInitialUpdates(), ...initialUpdates ],
-		holdWhileAlone && isAlone()
+		isAlone()
 	);
 
 	/**
@@ -2350,9 +2294,9 @@ function registerRoom( {
 
 		updateQueue.add( update );
 
-		// A held queue (alone, holdable codec) waits for company or a
+		// A held queue waits for company or a
 		// flush; see wakeForLocalWork for when a wake is needed.
-		wakeForLocalWork( holdWhileAlone && isAlone() );
+		wakeForLocalWork( isAlone() );
 	}
 
 	function unregister(): void {
@@ -2367,7 +2311,7 @@ function registerRoom( {
 				'error',
 				true // force
 			);
-			( session as TransportSessionCodec ).onUpdatesDiscarded?.( unsent );
+			session.onUpdatesDiscarded?.( unsent );
 		}
 		session.destroy();
 	}
@@ -2377,7 +2321,6 @@ function registerRoom( {
 		heldTails: [],
 		isPrimaryRoom,
 		lastServerAwareness: {},
-		holdWhileAlone,
 		log,
 		onStatusChange,
 		room,

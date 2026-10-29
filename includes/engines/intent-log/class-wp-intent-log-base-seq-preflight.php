@@ -28,7 +28,7 @@ if ( ! class_exists( 'WP_Intent_Log_Base_Seq_Preflight' ) ) {
 	 * since the declared base merge by transform; genuine collisions park
 	 * for review — surfaced, never lost, never silently overwritten.
 	 *
-	 * Unlike de-rtc's base-version lane, conflicts never REJECT the save:
+	 * Conflicts do not reject the save:
 	 * intent-log's per-intent model lands the clean intents and parks the
 	 * contested ones, which is the engine's normal policy. Only an
 	 * unusable base (below the retained floor, ahead of head, or no

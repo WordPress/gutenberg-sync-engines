@@ -4,16 +4,15 @@
  * against measured end-to-end totals.
  *
  *   node tests/debugging/soak-transport.mjs \
- *       engine=de-rtc transport=http-polling windows=3 soak=3600 \
- *       json=soak-de-rtc.json
+ *       engine=yjs-server transport=http-polling windows=3 soak=3600 \
+ *       json=soak-yjs-server.json
  *
  * N browser windows (same logged-in session; window 0 creates the post,
  * the rest join) collaborate for `soak` seconds. Each window owns ONE
  * paragraph and edits only it — staggered typing bursts with think time,
  * the shape of real co-editing without constant same-block conflict.
  * Window 0 saves the post periodically (drafts through the ordinary REST
- * save; under de-rtc the save-through-the-room middleware carries
- * base_version). Every `probe` seconds window 0 inserts a probe token
+ * save). Every `probe` seconds window 0 inserts a probe token
  * and every other window's in-page watcher stamps its arrival —
  * edit-to-visible latency sampled across the whole soak. Wire counters
  * are sampled per minute per window; the plugin's diagnostics request
@@ -26,7 +25,7 @@
  *
  * Arguments (bare key=value, like the other benchmarks):
  *
- *   engine=     intent-log | yjs-server | de-rtc | current
+ *   engine=     intent-log | yjs-server | current
  *   transport=  http-polling | sse | websocket | current
  *   windows=    collaborator windows (default 3, min 2)
  *   soak=       soak duration in seconds (default 3600)

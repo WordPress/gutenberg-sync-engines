@@ -86,9 +86,7 @@ module.exports = {
 		// The slow-awareness store is a @wordpress/data store; resolve the
 		// package from the subtree (the single wp.data at runtime).
 		'^@wordpress/data$': path.join( FRAMEWORK_MODULES, '@wordpress/data' ),
-		// The de-rtc doc bridge serializes/parses through the editor's block
-		// library (the single wp.blocks at runtime); resolve it from the
-		// subtree. Tests mock it — block registration is editor state.
+		// Use the editor's block library from the pinned subtree.
 		'^@wordpress/blocks$': path.join(
 			FRAMEWORK_MODULES,
 			'@wordpress/blocks'

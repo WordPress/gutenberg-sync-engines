@@ -230,8 +230,7 @@ class Tests_Collaboration_WpSyncEngineBenchmark extends WP_UnitTestCase {
 					// Every text edit carries an abstract position the
 					// profiles map to engine coordinates (intent-log: an
 					// offset from the client's observed field length;
-					// yjs: an index in the client's own Y.Text; de-rtc: a
-					// splice before the closing tag).
+					// yjs: an index in the client's own Y.Text).
 					$this->assertContains( $edit['position'], array( 'head', 'tail' ) );
 					$positions[ $edit['position'] ] = true;
 				} else {
@@ -325,7 +324,7 @@ class Tests_Collaboration_WpSyncEngineBenchmark extends WP_UnitTestCase {
 
 	public function test_structural_churn_converges_on_every_engine() {
 		$workload = WP_Sync_Bench_Workload::build( 'structural-churn', 7, 30, 3, 4 );
-		foreach ( array( 'WP_Intent_Log_Engine', 'WP_Yjs_Server_Engine', 'WP_De_RTC_Engine' ) as $engine_class ) {
+		foreach ( array( 'WP_Intent_Log_Engine', 'WP_Yjs_Server_Engine' ) as $engine_class ) {
 			$post_id = self::factory()->post->create(
 				array( 'post_content' => $workload['post_content'] )
 			);
@@ -342,7 +341,7 @@ class Tests_Collaboration_WpSyncEngineBenchmark extends WP_UnitTestCase {
 	}
 
 	public function test_save_sync_session_converges_on_every_engine() {
-		// DE-RTC's native cadence, applied to every engine:
+		// Batched editing cadence, applied to every engine:
 		// staggered ~10s save beats, 10s sync reads. The fair measurement
 		// for the save-centric design; every engine must still converge
 		// with zero loss at this cadence.
@@ -356,7 +355,7 @@ class Tests_Collaboration_WpSyncEngineBenchmark extends WP_UnitTestCase {
 		}
 		$this->assertSame( array( 10, 10, 10 ), $workload['read_every'] );
 
-		foreach ( array( 'WP_Intent_Log_Engine', 'WP_Yjs_Server_Engine', 'WP_De_RTC_Engine' ) as $engine_class ) {
+		foreach ( array( 'WP_Intent_Log_Engine', 'WP_Yjs_Server_Engine' ) as $engine_class ) {
 			$post_id = self::factory()->post->create(
 				array( 'post_content' => $workload['post_content'] )
 			);
@@ -487,7 +486,7 @@ class Tests_Collaboration_WpSyncEngineBenchmark extends WP_UnitTestCase {
 	public function test_field_sync_converges_on_every_engine() {
 		$workload = WP_Sync_Bench_Workload::build( 'field-sync', 7, 30, 3, 4 );
 		$reports  = array();
-		foreach ( array( 'WP_Intent_Log_Engine', 'WP_Yjs_Server_Engine', 'WP_De_RTC_Engine' ) as $engine_class ) {
+		foreach ( array( 'WP_Intent_Log_Engine', 'WP_Yjs_Server_Engine' ) as $engine_class ) {
 			$post_id = self::factory()->post->create(
 				array( 'post_content' => $workload['post_content'] )
 			);
@@ -505,18 +504,14 @@ class Tests_Collaboration_WpSyncEngineBenchmark extends WP_UnitTestCase {
 
 		// The register-contention policies: intent-log escalates the later
 		// writers of a same-register race (property-conflict); the CRDT
-		// resolves silently (escalated is always 0). De-rtc parks property
-		// conflicts as their own rows at PROPERTY grain while the proposal
-		// reports applied, so field conflicts do not move its escalated
-		// count — asserted implicitly by the profile's parked-row model
-		// check inside the convergence assertions above.
+		// resolves silently (escalated is always 0).
 		$this->assertGreaterThan( 0, $reports['WP_Intent_Log_Engine']['quality']['dispositions']['escalated'] );
 		$this->assertSame( 0, $reports['WP_Yjs_Server_Engine']['quality']['dispositions']['escalated'] );
 	}
 
 	public function test_remove_contention_converges_on_every_engine() {
 		$workload = WP_Sync_Bench_Workload::build( 'remove-contention', 7, 30, 3, 4 );
-		foreach ( array( 'WP_Intent_Log_Engine', 'WP_Yjs_Server_Engine', 'WP_De_RTC_Engine' ) as $engine_class ) {
+		foreach ( array( 'WP_Intent_Log_Engine', 'WP_Yjs_Server_Engine' ) as $engine_class ) {
 			$post_id = self::factory()->post->create(
 				array( 'post_content' => $workload['post_content'] )
 			);
@@ -639,135 +634,6 @@ class Tests_Collaboration_WpSyncEngineBenchmark extends WP_UnitTestCase {
 		$this->assertTrue( $report['quality']['converged'] );
 		$this->assertSame( array(), $report['quality']['convergence_failures'] );
 		$this->assertSame( 0, $report['quality']['lost_work'] );
-	}
-
-	/**
-	 * Runs a workload for one scenario against the de-rtc engine (the
-	 * whole-content proposal profile with the lineage oracle).
-	 *
-	 * @param string $scenario Scenario slug.
-	 * @param int    $rounds   Rounds.
-	 * @param int    $clients  Clients.
-	 * @return array Report.
-	 */
-	private function run_de_rtc( string $scenario, int $rounds = 8, int $clients = 3 ): array {
-		$workload = WP_Sync_Bench_Workload::build( $scenario, 7, $rounds, $clients, 4 );
-		$post_id  = self::factory()->post->create(
-			array( 'post_content' => $workload['post_content'] )
-		);
-		$storage  = new WP_Sync_Bench_Memory_Storage();
-		$engine   = new WP_De_RTC_Engine( $storage );
-		return WP_Sync_Bench_Runner::run( $engine, $storage, $post_id, $workload );
-	}
-
-	public function test_de_rtc_gets_the_proposal_profile_and_observable_quality() {
-		$report = $this->run_de_rtc( 'parallel-paragraphs' );
-
-		$this->assertSame( 'de-rtc', $report['engine'] );
-		$this->assertSame( 'de-rtc', $report['profile'] );
-		$this->assertTrue( $report['quality']['observable'] );
-		$this->assertTrue( $report['quality']['converged'] );
-		$this->assertSame( array(), $report['quality']['convergence_failures'] );
-		$this->assertSame( 0, $report['quality']['lost_work'] );
-		// Distinct paragraphs three-way merge clean: everything applies.
-		$this->assertSame( $report['requests'], $report['quality']['dispositions']['applied'] );
-		$this->assertSame( 0, $report['quality']['dispositions']['escalated'] );
-		// Whole-content proposals: request bytes scale with the document.
-		$this->assertGreaterThan( 0, $report['payload_bytes']['request_p50'] );
-		$this->assertGreaterThan( 0, $report['storage']['bytes'] );
-	}
-
-	public function test_de_rtc_contended_paragraph_salvages_conflicts_and_loses_nothing() {
-		$workload = WP_Sync_Bench_Workload::build( 'contended-paragraph', 7, 8, 3, 4 );
-		$post_id  = self::factory()->post->create(
-			array( 'post_content' => $workload['post_content'] )
-		);
-		$storage  = new WP_Sync_Bench_Memory_Storage();
-		$engine   = new WP_De_RTC_Engine( $storage );
-		$report   = WP_Sync_Bench_Runner::run( $engine, $storage, $post_id, $workload );
-
-		// Concurrent restyles of the same block from the same base are a
-		// genuine conflict. Since per-block salvage landed, the clean
-		// remainder of each proposal lands while exactly the conflicted
-		// blocks park for a human decision — surfaced as durable review
-		// rows, never silently merged, never dropped.
-		$response = $engine->get_updates_since( 'postType/post:' . $post_id, 999, 0, array() );
-		$parked   = array_filter(
-			$response['updates'],
-			static function ( $update ) {
-				return WP_De_RTC_Engine::UPDATE_TYPE_PARKED === $update['type'];
-			}
-		);
-		$this->assertGreaterThan( 0, count( $parked ), 'Conflicts must surface as parked review rows.' );
-		$this->assertSame( 0, $report['quality']['lost_work'] );
-		$this->assertSame( array(), $report['quality']['convergence_failures'] );
-		$this->assertTrue( $report['quality']['converged'] );
-	}
-
-	public function test_de_rtc_laggy_clients_converge_and_lose_nothing() {
-		// The laggy client reads every 10th round while peers land ~3
-		// versions per round. Its base still stays mostly fresh: like the
-		// shipping codec (whose polling transport returns rows and
-		// dispositions in the same response), every APPLIED proposal
-		// advances the base at settle, so steady-state lag alone no longer
-		// ages a base out of the version-snapshot window — deep transforms
-		// and escalations happen, lost work must not.
-		$report = $this->run_de_rtc( 'laggy-newsroom', 30, 4 );
-
-		$this->assertSame( 0, $report['quality']['lost_work'] );
-		$this->assertSame( array(), $report['quality']['convergence_failures'] );
-		$this->assertTrue( $report['quality']['converged'] );
-	}
-
-	public function test_de_rtc_stale_base_voids_retry_after_deep_read_gap() {
-		// The reconnect shape. Since per-block salvage landed, a
-		// PRESENT client can barely age out anymore — even its conflicts
-		// partially apply and advance its base. What still produces
-		// stale-base voids is genuine ABSENCE: a client that goes silent
-		// (offline tab) while peers advance the canonical past the
-		// engine's bounded version-snapshot window (20; no aware saves
-		// happen in this workload, so no revision carries the base
-		// either), then writes from its ancient base before its first
-		// read back. Those proposals void `unknown-base-version` and the
-		// profile's retry-at-fresh-base lane re-proposes them after the
-		// reconnect read.
-		$workload                  = WP_Sync_Bench_Workload::build( 'contended-paragraph', 7, 30, 3, 4 );
-		$workload['read_every'][2] = 25;
-		foreach ( $workload['rounds'] as $i => $round ) {
-			// Client 2 falls silent for rounds 2..24 (0-based 1..23).
-			if ( $i >= 1 && $i < 24 && is_array( $round ) && ! isset( $round['edits'] ) ) {
-				$workload['rounds'][ $i ] = array_values(
-					array_filter(
-						$round,
-						static function ( $edit ) {
-							return 2 !== (int) ( $edit['client'] ?? -1 );
-						}
-					)
-				);
-			}
-		}
-		$post_id = self::factory()->post->create(
-			array( 'post_content' => $workload['post_content'] )
-		);
-		$storage = new WP_Sync_Bench_Memory_Storage();
-		$engine  = new WP_De_RTC_Engine( $storage );
-
-		$report = WP_Sync_Bench_Runner::run( $engine, $storage, $post_id, $workload );
-
-		$this->assertGreaterThan( 0, $report['quality']['dispositions']['voided'], 'expected stale-base voids to exercise the retry lane' );
-		$this->assertGreaterThan( 0, $report['storage']['followups'], 'expected retry follow-up proposals' );
-		$this->assertSame( 0, $report['quality']['lost_work'] );
-		$this->assertSame( array(), $report['quality']['convergence_failures'] );
-		$this->assertTrue( $report['quality']['converged'] );
-	}
-
-	public function test_de_rtc_solo_typing_is_all_applied() {
-		$report = $this->run_de_rtc( 'solo-typing', 8, 1 );
-
-		$this->assertSame( $report['requests'], $report['quality']['dispositions']['applied'] );
-		$this->assertSame( 0, $report['quality']['dispositions']['escalated'] );
-		$this->assertSame( 0, $report['quality']['lost_work'] );
-		$this->assertTrue( $report['quality']['converged'] );
 	}
 
 	public function test_unknown_engine_falls_back_to_the_opaque_relay_profile() {

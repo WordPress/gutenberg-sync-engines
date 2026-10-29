@@ -197,7 +197,7 @@ interface EntityState {
 	 * landing mid-burst remounts the block under the caret and the
 	 * user's next keystrokes die in a detached node (found by the
 	 * real-websocket e2e lane, where remote rows arrive per-keystroke
-	 * instead of per poll; de-rtc got the equivalent gate first).
+	 * instead of per poll).
 	 */
 	lastEditorEditAt: number;
 	/**

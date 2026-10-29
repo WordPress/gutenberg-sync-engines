@@ -89,9 +89,7 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 
 		/**
 		 * Interval (in seconds) between out-of-band room scans. Rows can land
-		 * in a room WITHOUT a socket message touching it — de-rtc sessions
-		 * commit through the ordinary autosave endpoint (a web request), and
-		 * healing/unaware-writer lanes append rows from web requests too. A
+		 * in a room through HTTP or a different daemon process. A
 		 * push-only-on-message daemon never delivers those rows to its
 		 * subscribers, so the scan re-reads each subscribed room on the
 		 * polling transports' cadence and broadcasts when new rows exist.
@@ -1210,9 +1208,7 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 					$validated['after'],
 					(int) $this->clients[ $key ]['rooms'][ $room ]['cursor']
 				);
-
-				$this->refresh_engine_state( $room );
-				$room_response = $this->sync->process_room_request( $validated );
+				$room_response      = $this->sync->process_room_request( $validated );
 
 				if ( is_wp_error( $room_response ) ) {
 					$this->send_error( $key, $room_response );
@@ -1671,7 +1667,6 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 		 * @param int|null $exclude_key Client key to skip (the sender), or null.
 		 */
 		private function broadcast_room( string $room, ?int $exclude_key = null ): void {
-			$this->refresh_engine_state( $room );
 
 			// Convert the raw storage entries to the client_id => state map
 			// clients expect (the shape process_awareness_update() responds
@@ -1710,26 +1705,6 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 						)
 					)
 				);
-			}
-		}
-
-		/**
-		 * Restores the web process's per-request state boundary for one
-		 * room's engine. The registry holds ONE engine instance for this
-		 * process's lifetime, and engines cache room state per "request";
-		 * in this long-lived process that cache goes stale the moment
-		 * another process (a web request — e.g. a de-rtc autosave commit)
-		 * advances the room. Called before every message-driven
-		 * process_room_request and every broadcast read.
-		 *
-		 * @since 0.3.0
-		 *
-		 * @param string $room Room identifier.
-		 */
-		private function refresh_engine_state( string $room ): void {
-			$engine = $this->sync->get_engine_registry()->get_engine_for_room( $room );
-			if ( null !== $engine && method_exists( $engine, 'flush_room_state_cache' ) ) {
-				$engine->flush_room_state_cache();
 			}
 		}
 
@@ -1798,10 +1773,6 @@ if ( ! class_exists( 'WP_WebSocket_Sync_Server' ) ) {
 			/*
 			 * Out-of-band room scan (see ROOM_SCAN_INTERVAL_S): deliver rows
 			 * that landed through web requests rather than socket messages.
-			 * Without this, a de-rtc session's accepted commit (which rides
-			 * the autosave endpoint) stores its announce row but no peer on
-			 * this transport ever hears about it — the whole lane silently
-			 * fails to converge (found by the post-inversion websocket fuzz).
 			 */
 			if ( $now - $this->last_room_scan_at >= self::ROOM_SCAN_INTERVAL_S ) {
 				$this->last_room_scan_at = $now;

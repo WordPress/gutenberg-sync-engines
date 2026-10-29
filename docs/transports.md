@@ -47,7 +47,7 @@ The channel decides how often a tab polls:
    browser until someone else arrives, until a save (the edits go
    through the room first), or until the tab is hidden. A reload loses
    them, which is what the editor's own unsaved-changes warning says.
-   De-rtc keeps sending its commits anyway. The heartbeat's answer names the room's
+   The heartbeat's answer names the room's
    newest row, so a script or WP-CLI saving the post still wakes the
    tab.
 2. **When a peer cannot be reached, the tab polls on a timer**: the
@@ -146,16 +146,14 @@ at once on the last leave or when a new tab arrives and finds nobody
 there. Every room response carries a generation token (the id of the
 room's first row), so a tab whose room was reset under it starts over
 from the saved post. The alternative, `keep`, lets the room live on as
-a shared working copy. Engines that keep data elsewhere clear it on the
-`gutenberg_sync_engines_room_reset` action. Rooms not tied to one post
+a shared working copy. Rooms not tied to one post
 (a taxonomy's list) are never reset this way.
 
 ## Presence on a slow connection
 
 Live cursors only work when every editor holds the same document and
 updates arrive before the other person moves on. Over polling every few
-seconds they always show a spot someone has left. Intent-log and
-de-rtc have no shared document to place them in at all. The "Awareness
+seconds they always show a spot someone has left. Intent-log has no shared document to place them in at all. The "Awareness
 interval" setting replaces cursors with block presence: once per
 interval each editor names the block its selection is in (`gseBlock`),
 sent only when it changes, and other editors see Gutenberg's block

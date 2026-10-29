@@ -5,7 +5,7 @@
  *
  * The intent-log engine's genesis-seeding tests (wpIntentLogEngineInternals)
  * exercise the same helper through delegation; this file pins the helper's
- * own contract so yjs-server and de-rtc genesis can rely on it directly.
+ * own contract so yjs-server genesis can rely on it directly.
  *
  * @package Gutenberg
  */

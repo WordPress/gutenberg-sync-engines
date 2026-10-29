@@ -48,8 +48,8 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 	 * history below the PREVIOUS checkpoint (the intent-log retention
 	 * invariant: at least one full interval of history is always kept), and
 	 * records the floor. Clients whose cursor falls below the floor are
-	 * served from the retained checkpoint and re-bootstrap. `should_compact`
-	 * is always false — no client is ever nominated.
+	 * served from the retained checkpoint and re-bootstrap. No client is
+	 * nominated to compact the history.
 	 *
 	 * Clients may only SEND `update` rows (incremental Yjs V2 updates).
 	 * There is no sync_step1/step2 peer dance: a joining client receives
@@ -645,11 +645,10 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 			}
 
 			$response = array(
-				'end_cursor'     => $this->storage->get_cursor( $room ),
-				'room'           => $room,
-				'should_compact' => false,
-				'total_updates'  => $this->storage->get_update_count( $room ),
-				'updates'        => $typed_updates,
+				'end_cursor'    => $this->storage->get_cursor( $room ),
+				'room'          => $room,
+				'total_updates' => $this->storage->get_update_count( $room ),
+				'updates'       => $typed_updates,
 			);
 
 			// The debug envelope: engine facts from this request's ingest
@@ -1030,8 +1029,8 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 		 * normally, and older clients re-bootstrap from the retained
 		 * checkpoint row.
 		 *
-		 * Server-driven: no client is nominated, and `should_compact` never
-		 * fires. Requires room-meta support; skips silently otherwise.
+		 * Server-driven: no client is nominated. Requires room-meta support;
+		 * skips silently otherwise.
 		 *
 		 * @since 0.2.0
 		 *
@@ -1180,7 +1179,7 @@ if ( ! class_exists( 'WP_Yjs_Server_Engine' ) ) {
 				 * The shared REST-shaped property seed (title with the
 				 * auto-draft placeholder blanked, the scalar whitelist gated
 				 * on post-type supports, taxonomies by rest_base, registered
-				 * meta) — the same map intent-log and de-rtc genesis seed,
+				 * meta) — the same map intent-log genesis seed,
 				 * so a joiner sees identical field state under any engine.
 				 * Values byte-match the joiner's REST record, so the
 				 * client's change detection reports nothing and the post

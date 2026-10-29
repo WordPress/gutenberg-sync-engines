@@ -31,7 +31,7 @@
  *   a numerically-sorted term-ID array; the engines compare term sets
  *   order-insensitively, exactly like the shipping clients send them.
  * - `set_meta` — set a registered post-meta register (`meta.<key>` names
- *   from META_PALETTE). Intent-log and de-rtc carry these as flat
+ *   from META_PALETTE). Intent-log carry these as flat
  *   per-name registers; the CRDT codec nests them per key under the
  *   document's `meta` Y.Map. The harness registers the palette's keys
  *   (see register_bench_meta()) because synced meta IS registered meta.
@@ -79,7 +79,7 @@ if ( ! class_exists( 'WP_Sync_Bench_Workload' ) ) {
 		 *
 		 * Scalar registers from the shared genesis property seed
 		 * (WP_Sync_Post_Genesis_Props) that EVERY engine's session codec
-		 * transmits as a plain last-writer register: intent-log and de-rtc
+		 * transmits as a plain last-writer register: intent-log
 		 * as per-name registers, the CRDT codec via a plain Y.Map value.
 		 * `title`/`excerpt` are deliberately excluded — the CRDT codec
 		 * models them as merging Y.Text, so they are not registers there.
@@ -141,7 +141,7 @@ if ( ! class_exists( 'WP_Sync_Bench_Workload' ) ) {
 				'field-sync'          => 'Entity-field register writes (scalar properties, taxonomy term sets, post meta) alongside typing: clean parallel field sync plus rounds where every client writes the SAME register (the register-contention analog of contended-paragraph).',
 				'remove-contention'   => 'One client edits an inserted block another client concurrently removes (edit-vs-remove conflict class; degenerates to sequential same-client edit-then-remove at clients=1).',
 				'editorial-session'   => 'A wall-clock editing session: one round per second, staggered joins/leaves, typing bursts with think-time pauses, every present client polling every round, periodic saves. rounds=3600 clients=3 is a one-hour three-user session.',
-				'save-sync-session'   => 'DE-RTC\'s native cadence, applied to every engine: rounds are wall-clock seconds, each client submits its typing burst only on staggered ~10s save beats and syncs every 10th round — the "$3/mo host polling every ten seconds" shape the Distributed Editing vision prescribes.',
+				'save-sync-session'   => 'Batched editing cadence, applied to every engine: rounds are wall-clock seconds, each client submits its typing burst only on staggered ~10s save beats and syncs every 10th round — the "$3/mo host polling every ten seconds" shape the Distributed Editing vision prescribes.',
 			);
 		}
 
@@ -344,7 +344,7 @@ if ( ! class_exists( 'WP_Sync_Bench_Workload' ) ) {
 
 					case 'save-sync-session':
 						/*
-						 * DE-RTC's native cadence: rounds are wall-clock
+						 * Batched editing cadence: rounds are wall-clock
 						 * seconds; a client WRITES only on its staggered
 						 * ~10s save beats, submitting the burst it typed
 						 * since its last save as one batch, and reads
@@ -396,7 +396,7 @@ if ( ! class_exists( 'WP_Sync_Bench_Workload' ) ) {
 						// sets, post meta). ~25% of rounds every client
 						// writes the SAME register concurrently from the same
 						// observed base (contention: intent-log escalates the
-						// later writers, de-rtc parks property-conflict rows,
+						// later writers,
 						// the CRDT resolves by its own rules); the rest is
 						// clean parallel field sync — each client on its own
 						// register — mixed with typing so field and content
@@ -773,8 +773,8 @@ if ( ! class_exists( 'WP_Sync_Bench_Workload' ) ) {
 		 *
 		 * Distinctness is what isolates POLICY in the cross-engine
 		 * escalation comparison: identical concurrent register writes read
-		 * as agreement to de-rtc's three-way merge but escalate under
-		 * intent-log's version check regardless of value, so any accidental
+		 * as the same value but still escalate under intent-log's version
+		 * check. Any accidental
 		 * value agreement between contending writers turns part of the
 		 * measured difference into an artifact of the value scheme. Clients
 		 * beyond the palette get a numbered variant, which keeps the values

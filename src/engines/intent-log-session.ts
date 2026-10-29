@@ -830,9 +830,6 @@ export function createIntentLogSession(
 			}
 		},
 
-		// No client-side compaction: snapshotting is a server concern for
-		// this engine, so the codec omits the optional compaction members.
-
 		onLocalUpdate: ( listener: EngineLocalUpdateListener ) => {
 			localUpdateListener = listener;
 		},

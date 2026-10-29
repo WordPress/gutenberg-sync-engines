@@ -59,20 +59,8 @@ const DEV_WS_DAEMON_CONTAINER = 'wp-sync-ws-daemon';
 // are plain `cli`/`wordpress`, port from WP_ENV_PORT).
 const TESTS_CONFIG = '.wp-env.tests.json';
 
-const DEFAULT_ENGINES = [ 'intent-log', 'yjs-server', 'de-rtc' ];
+const DEFAULT_ENGINES = [ 'intent-log', 'yjs-server' ];
 
-/*
- * Documented engine capability gaps the fuzzer must not "rediscover"
- * (docs/engine-comparison.md): an action an engine cannot sync is dropped
- * from that engine's lanes instead of being reported as divergence.
- *
- * No engine declares a gap today. De-rtc used to declare `syncsTitle:
- * false`, but it syncs the title now — the whole entity property map rides
- * every commit (src/engines/de-rtc/doc-bridge.ts, readFlatProperties) and
- * the server merges it per property. Add an entry here only alongside the
- * doc that documents the gap.
- */
-const ENGINE_CAPABILITIES = {};
 const DEFAULT_TRANSPORTS = [ 'http-polling', 'sse', 'sse-daemon', 'websocket' ];
 
 const CLI_OPTIONS = {
@@ -149,7 +137,7 @@ function printUsage() {
 		[
 			'Usage: npm run fuzz -- [options]',
 			'',
-			'  --engines=a,b        Engines to sweep (default: intent-log,yjs-server,de-rtc)',
+			'  --engines=a,b        Engines to sweep (default: intent-log,yjs-server)',
 			'  --transports=a,b     Transports to sweep (default: http-polling,sse,sse-daemon,websocket)',
 			'  --combos=e/t,...     Explicit engine/transport pairs (overrides the cross product)',
 			'  --seeds=N            Seeds per combo (default: 5)',
@@ -671,7 +659,6 @@ async function runPlaywright( {
 	const outputDir = path.join( comboDir, `${ phase }-artifacts` );
 	await fs.mkdir( outputDir, { recursive: true } );
 
-	const capabilities = ENGINE_CAPABILITIES[ combo.engine ] || {};
 	const env = {
 		RTC_FUZZ_ENGINE: combo.engine,
 		RTC_FUZZ_JSON_REPORT: reportPath,
@@ -684,9 +671,6 @@ async function runPlaywright( {
 		RTC_FUZZ_USERS: String( args.users ),
 		WP_BASE_URL: baseUrl,
 	};
-	if ( false === capabilities.syncsTitle ) {
-		env.RTC_FUZZ_SYNC_TITLE = '0';
-	}
 	if ( args.noFaults ) {
 		env.RTC_FUZZ_DISABLE_SYNC_FAULTS = '1';
 	}

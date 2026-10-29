@@ -15,7 +15,6 @@ them meaning. The intent-log vocabulary itself is in
 | `POST /wp-sync/v1/updates` | Polling, and the send path for both stream transports: one request carries every open room. |
 | `POST /wp-sync/v1/sse` | The event stream from the web tier: the same envelope with no updates, answered as a long-lived `text/event-stream`. |
 | `POST /wp-sync/v1/ws-token` | Mints the daemon credential: a one-time token, or a signed access token when a secret is configured. Answer `{ token, expires_in }`. |
-| `POST /wp-sync/v1/de-rtc/resolve` | A reviewer's decision on a de-rtc edit held for review (`room`, `proposalId`, `resolution`: `restored` or `dismissed`). Posts and pages only; other types send a `resolved` row. |
 | `POST /wp-sync/v1/save` | The bundled framework's own route for saving a CRDT document copy with a post. |
 | `POST /gutenberg-sync-engines/v1/advisory/leave` | The leave beacon a tab sends on `pagehide`, so its presence goes at once. |
 | `rtc-test/v1/*` | The per-request benchmark log, dev-only (`GUTENBERG_SYNC_ENGINES_DIAGNOSTICS`). |
@@ -66,11 +65,7 @@ is at most 1 MB. Shapes: `src/providers/http-polling/types.ts`.
 
 Other statuses: 403 `rest_cannot_edit`, 413 when a body or a room is
 too large (yjs-server also for a document over its size limits), 503
-when the intent-log room lock or a de-rtc version claim could not be
-taken in time, which the client retries. A different 409 comes from
-the ordinary post save route: under de-rtc a save that names a base
-version and genuinely conflicts is refused with one, and the conflict
-is set aside for review.
+when a room lock could not be taken in time, which the client retries.
 
 Over the socket the same envelope travels as `{ "type": "sync", "rooms": [ … ] }`
 frames both ways, plus `type: "advisory"` frames on the advisory link
@@ -78,6 +73,8 @@ and `type: "error"` frames when the daemon refuses something. The event
 stream writes each room response as `event: sync`, a `: keepalive`
 comment at least every five seconds, and `event: retry` when it ends on
 purpose.
+
+Both engines compact history on the server. The browser no longer accepts client-compaction requests.
 
 ## Row types per engine
 
@@ -94,15 +91,9 @@ marked "client".
 | | `cancel` | client, never stored | Cancels edits the server has not accepted yet; all or nothing. |
 | yjs-server (protocol 1) | `update` | client | One incremental Yjs update, base64; the server stores only what it did not have. |
 | | `snapshot` | server | A full copy, `{ doc: <base64> }`. |
-| de-rtc | `proposal` | client | Whole content against a base version. Posts and pages send theirs through the ordinary autosave endpoint instead (`base_version`, `block_base_versions`, `clientUpdate`). |
-| | `announce` | server | Tells tabs that version N exists, with a short fingerprint of its content and the merged property values; about 200 bytes and no content. |
-| | `fetch` | client, never stored | "My version is behind"; answered with one snapshot built on the fly. |
-| | `snapshot` | server | The first version and each checkpoint. |
-| | `parked` / `resolved` | server / client | As for intent-log. |
 
 A script or plugin that saves a post needs none of this. If it names
-the version it read (`base_seq` for intent-log, `base_version` for
-de-rtc), the server merges its save with other people's edits
+the version it read (`base_seq` under intent-log), the server merges its save with other people's edits
 ([engine-comparison.md](engine-comparison.md)).
 
 ## Who may do what
@@ -127,10 +118,6 @@ trusted like a web worker and must sit behind TLS. A relay sees only
 who is present and "go and poll" notices; the worst a bad one can do is
 cause extra polls or show false presence. Redis carries only change
 notices.
-
-One known gap: the de-rtc review route checks `edit_posts` only. It has
-no per-post check and no `unfiltered_html` check on a restore. The
-browser's review panel applies those rules; the route does not.
 
 ## Adding an engine or a transport
 
@@ -162,3 +149,9 @@ Every filter and action the plugin offers:
 The plugin selects `gutenberg-sync-engines` in `window._wpEntitySyncProvider` before core-data loads. Its single `registerEntitySyncProvider` registration supplies the entity manager in `src/entity-sync/manager.ts`. The factory receives Gutenberg's record configuration and callbacks for remote edits, selection restoration, and connection state. Record loads, edits, saves, undo, snapshot reads, and completed block-editor actions all use that selected provider. Another provider is never started as a fallback when the selected one is missing.
 
 The optional `onEditorAction` callback observes accepted reducer actions with the owning registry and the before/after states. It must only capture evidence; it must not write back into the editor synchronously. The development history fixture receives these callbacks through the plugin. It does not register a second Gutenberg observer. Engine translation still checks the entity, block identity, and old text, and uses the existing comparison when a change is unsupported.
+
+## Removed engine
+
+DE-RTC is no longer registered. Its autosave commit hooks, review route, send-interval setting, and Automerge dependency have been removed. A site still configured for that engine uses the registry's existing fallback (yjs-server with this plugin's registration order). A post room that still carries a DE-RTC marker is refused with an engine-mismatch response. This upgrade performs no data conversion or deletion; the existing policy for discarding empty rooms still applies. Save or recover the old session with the previous version before changing its engine.
+
+The `wp_sync_cas_backend` contract now needs only `swap`, `read`, and `reset`; the unused prefix comparison has been removed. The unused `gutenberg_sync_engines_room_reset` action has also been removed; both engines keep their state in room storage and need no separate cleanup callback.

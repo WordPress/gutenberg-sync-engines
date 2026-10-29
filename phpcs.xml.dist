@@ -13,14 +13,6 @@
 	<!-- Vendored y-php library (deliberately mirrors JS Yjs, not WPCS; it
 	     carries its own phpcs.xml.dist). -->
 	<exclude-pattern>/includes/lib/y-php/*</exclude-pattern>
-	<!-- Vendored automerge-php library (deliberately mirrors upstream
-	     Automerge style, PHP 8.2+, not WPCS; ported verbatim from the
-	     wordpress-develop add/distributed-editing branch). -->
-	<exclude-pattern>/includes/lib/automerge-php/*</exclude-pattern>
-	<!-- The DE-RTC merge core is ported verbatim from wordpress-develop
-	     (upstream style, core text domain, wp_de_rtc_ prefix); frozen like
-	     the intent-log cross-language core. -->
-	<exclude-pattern>/includes/engines/de-rtc/merge-core.php</exclude-pattern>
 	<!-- Frozen JS engine core + vectors are not PHP. -->
 	<exclude-pattern>*/engines/intent-log/*.js</exclude-pattern>
 
@@ -103,7 +95,6 @@
 				<!-- Engine/transport classes implement framework contracts and
 				     keep their framework-canonical WP_* names. -->
 				<element value="WP_Intent_Log"/>
-				<element value="WP_De_RTC"/>
 				<element value="WP_Yjs_Server"/>
 				<element value="WP_HTTP_Polling"/>
 				<element value="WP_HTTP_Long_Polling"/>

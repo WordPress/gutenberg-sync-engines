@@ -628,7 +628,7 @@ describe( 'websocket manager', () => {
 		} as Partial< EngineSessionCodec > ) as EngineSessionCodec & {
 			onRoomRestart: jest.Mock;
 		};
-		session.onRoomRestart = jest.fn( () => 'rebootstrap' );
+		session.onRoomRestart = jest.fn( () => 'rebootstrap' as const );
 		websocketManager.registerRoom( {
 			room: 'postType/post:1',
 			session,
@@ -681,7 +681,7 @@ describe( 'websocket manager', () => {
 		const session = fakeSession() as EngineSessionCodec & {
 			onRoomRestart: jest.Mock;
 		};
-		session.onRoomRestart = jest.fn( () => 'disconnect' );
+		session.onRoomRestart = jest.fn( () => 'disconnect' as const );
 		const onStatusChange = jest.fn();
 		websocketManager.registerRoom( {
 			room: 'postType/post:1',

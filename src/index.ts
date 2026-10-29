@@ -8,7 +8,6 @@
 import { registerSyncEngine, registerSyncTransport } from './framework';
 import { createIntentLogEngineAdapter } from './engines/intent-log-adapter';
 import { createYjsServerEngineAdapter } from './engines/yjs-server-adapter';
-import { createDeRtcEngineAdapter } from './engines/de-rtc-adapter';
 import { createHttpPollingProvider } from './providers/http-polling/http-polling-provider';
 import { createWebSocketProvider } from './providers/websocket/websocket-provider';
 import { createSseProvider } from './providers/sse/sse-provider';
@@ -19,7 +18,6 @@ import { registerPluginEntitySync } from './entity-sync';
 // Engines: how concurrent edits merge.
 registerSyncEngine( createIntentLogEngineAdapter() );
 registerSyncEngine( createYjsServerEngineAdapter() );
-registerSyncEngine( createDeRtcEngineAdapter() );
 
 // Transports: how updates move. Each carries the slug + protocol the server
 // announces and negotiates against.

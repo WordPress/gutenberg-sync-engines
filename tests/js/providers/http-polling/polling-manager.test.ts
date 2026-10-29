@@ -107,10 +107,6 @@ function createMockSession( clientId = 1 ) {
 	return {
 		applyRemoteAwareness: jest.fn(),
 		clientId,
-		createCompactionUpdate: jest.fn( () => ( {
-			data: '',
-			type: 'compaction',
-		} ) ),
 		// Mirrors the Yjs codec: full-state recovery for unknown outcomes.
 		createRecoveryUpdate: jest.fn( () => ( {
 			data: '',
@@ -1206,7 +1202,6 @@ describe( 'polling-manager', () => {
 				}
 			 ).rooms[ 0 ].updates;
 			expect( retryUpdates ).toEqual( failedUpdates );
-			expect( session.createCompactionUpdate ).not.toHaveBeenCalled();
 		} );
 
 		it( 'REGRESSION: the real intent-log session survives a poll error without losing queued intents or killing polling', async () => {
@@ -1337,82 +1332,6 @@ describe( 'polling-manager', () => {
 			expect( thirdCallPayload.rooms[ 0 ].updates ).toHaveLength( 0 );
 		} );
 
-		it( 'REGRESSION: a should_compact response with a codec that cannot compact preserves queued updates', async () => {
-			// The queue was cleared BEFORE createCompactionUpdate(), so a
-			// codec that throws there (intent-log) lost every update queued
-			// while the poll was in flight.
-			mockPostSyncUpdate.mockResolvedValueOnce( {
-				rooms: [
-					{
-						room: 'test-room',
-						end_cursor: 1,
-						awareness: { 1: {}, 2: {} },
-						updates: [],
-					},
-				],
-			} );
-
-			const session = createMockSession( 1 );
-			session.createCompactionUpdate.mockImplementation( () => {
-				throw new Error( 'intent-log sessions do not compact' );
-			} );
-			const log = jest.fn();
-			pollingManager.registerRoom( {
-				room: 'test-room',
-				session,
-				log,
-				onStatusChange: jest.fn(),
-			} );
-
-			await jest.advanceTimersByTimeAsync( 0 );
-			expect( mockPostSyncUpdate ).toHaveBeenCalledTimes( 1 );
-
-			// Hold the next poll in flight; the server will answer it with
-			// should_compact.
-			const deferred = createDeferred< SyncResponse >();
-			mockPostSyncUpdate.mockReturnValueOnce( deferred.promise );
-			await jest.advanceTimersByTimeAsync( 1000 );
-			expect( mockPostSyncUpdate ).toHaveBeenCalledTimes( 2 );
-
-			// Typed while that poll is in flight: queued, not yet sent.
-			const onLocalUpdate = getOnLocalUpdate( session );
-			const typed = createMockUpdate( 3 );
-			onLocalUpdate( typed, 3 );
-
-			deferred.resolve( {
-				rooms: [
-					{
-						room: 'test-room',
-						end_cursor: 2,
-						awareness: { 1: {}, 2: {} },
-						updates: [],
-						should_compact: true,
-					},
-				],
-			} );
-			await jest.advanceTimersByTimeAsync( 0 );
-			expect( session.createCompactionUpdate ).toHaveBeenCalledTimes( 1 );
-
-			// The typed update survives to the next poll; no compaction was
-			// queued in its place.
-			mockPostSyncUpdate.mockResolvedValueOnce( syncResponse );
-			await jest.advanceTimersByTimeAsync( 1000 );
-			expect( mockPostSyncUpdate ).toHaveBeenCalledTimes( 3 );
-			const finalUpdates = (
-				mockPostSyncUpdate.mock.calls[ 2 ][ 0 ] as {
-					rooms: Array< {
-						updates: Array< { type: string; data: string } >;
-					} >;
-				}
-			 ).rooms[ 0 ].updates;
-			expect( finalUpdates ).toContainEqual( typed );
-			expect(
-				finalUpdates.some( ( u ) => 'compaction' === u.type )
-			).toBe( false );
-		} );
-	} );
-
-	describe( 'visibility change', () => {
 		it( 'does not spawn a duplicate poll when a request is in-flight', () => {
 			// Keep the first postSyncUpdate pending so we can simulate
 			// a visibility change while the request is in-flight.
@@ -2671,7 +2590,7 @@ describe( 'polling-manager', () => {
 		} );
 
 		it( "applies a send's answer at once when the stream is already at that head", async () => {
-			// A never-stored row (de-rtc's fetch answer) and the verdicts
+			// Response rows and the verdicts
 			// ride the answer; the head is where the tab already is.
 			streamHarness();
 			const snapshot = { data: 'snap', type: 'snapshot' };
@@ -2934,7 +2853,6 @@ describe( 'polling-manager', () => {
 				...createMockSession( 1 ),
 				getInitialUpdates: jest.fn( () => [ initial ] ),
 				onRoomRestart: jest.fn( () => 'rebootstrap' as const ),
-				syncWhileSolo: true as const,
 			};
 			const log = jest.fn();
 			pollingManager.registerRoom( {

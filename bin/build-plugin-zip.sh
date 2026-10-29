@@ -30,7 +30,7 @@ mkdir -p "$DIST"
 echo "Staging plugin files..."
 cp gutenberg-sync-engines.php README.md CHANGELOG.md LICENSE "$DIST/"
 rsync -a build/ "$DIST/build/"
-# Server PHP, including the vendored y-php / automerge-php libraries.
+# Server PHP, including the vendored y-php library.
 # Their dev-only artifacts (composer vendor dirs from running their own
 # test suites locally) are excluded.
 rsync -a --exclude vendor/ --exclude node_modules/ includes/ "$DIST/includes/"

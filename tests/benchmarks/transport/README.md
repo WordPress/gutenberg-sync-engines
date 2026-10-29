@@ -68,7 +68,7 @@ Arguments are bare `key=value` tokens (the engine benchmark's convention):
 | ------------ | --------- | --------------------------------------------------- |
 | `transport=` | `current` | Transport to measure; switched via the Settings →   |
 |              |           | Collaboration screen and restored afterwards.       |
-| `engine=`    | `current` | Engine to measure under (`intent-log`, `yjs-server`, `de-rtc`). |
+| `engine=`    | `current` | Engine to measure under (`intent-log`, `yjs-server`).                                                                                                                                                  |
 | `cache=`     | `current` | Persistent object cache for the run: `none`, `redis` (the Redis Object Cache drop-in on the env's Redis; this checkout's wp-env sites only), or leave alone. Restored after. |
 | `wake=`      | `auto`    | What an SSE stream sleeps on: `auto` (whatever the site has), `redis`, `cache` (needs `cache=redis`), `table` (needs `cache=none`). The report's `sseWaitObserved` says what the streams actually got. |
 | `trials=`    | `30`      | Measured token round-trips.                         |

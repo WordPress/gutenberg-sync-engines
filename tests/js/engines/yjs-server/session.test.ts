@@ -13,7 +13,6 @@ import {
 	YJS_SERVER_ENGINE_SLUG,
 	YJS_SERVER_SNAPSHOT_TYPE,
 } from '../../../../src/engines/yjs-server/session';
-import { SyncUpdateType } from '../../../../src/providers/http-polling/types';
 import { base64ToUint8Array } from '../../../../src/providers/http-polling/utils';
 
 /**
@@ -53,7 +52,7 @@ describe( 'createYjsServerSessionCodec', () => {
 
 		const initial = session.getInitialUpdates();
 		expect( initial ).toHaveLength( 1 );
-		expect( initial[ 0 ].type ).toBe( SyncUpdateType.UPDATE );
+		expect( initial[ 0 ].type ).toBe( 'update' );
 
 		// The upload replays into an empty doc (what the server merges).
 		const server = new Y.Doc();
@@ -87,7 +86,7 @@ describe( 'createYjsServerSessionCodec', () => {
 
 		peer.getMap( 'document' ).set( 'title', 'From peer' );
 		session.receiveUpdate( {
-			type: SyncUpdateType.UPDATE,
+			type: 'update',
 			data: buffer.toBase64( Y.encodeStateAsUpdateV2( peer ) ),
 		} );
 
@@ -104,7 +103,7 @@ describe( 'createYjsServerSessionCodec', () => {
 		const peer = new Y.Doc();
 		peer.getMap( 'document' ).set( 'title', 'Remote' );
 		session.receiveUpdate( {
-			type: SyncUpdateType.UPDATE,
+			type: 'update',
 			data: buffer.toBase64( Y.encodeStateAsUpdateV2( peer ) ),
 		} );
 		expect( listener ).not.toHaveBeenCalled();
@@ -115,7 +114,7 @@ describe( 'createYjsServerSessionCodec', () => {
 		const [ update ] = listener.mock.calls[ 0 ] as [
 			{ type: string; data: string },
 		];
-		expect( update.type ).toBe( SyncUpdateType.UPDATE );
+		expect( update.type ).toBe( 'update' );
 
 		// The emitted update is INCREMENTAL: it depends on the prior state
 		// (it overwrites the remote title), so the replica needs that state
@@ -132,7 +131,7 @@ describe( 'createYjsServerSessionCodec', () => {
 		const session = createYjsServerSessionCodec( { doc } );
 
 		const update = session.createRecoveryUpdate!();
-		expect( update.type ).toBe( SyncUpdateType.UPDATE );
+		expect( update.type ).toBe( 'update' );
 		const replica = new Y.Doc();
 		Y.applyUpdateV2( replica, base64ToUint8Array( update.data ) );
 		// Idempotent: applying twice changes nothing.
@@ -214,7 +213,7 @@ describe( 'createYjsServerSessionCodec', () => {
 				},
 			] );
 			expect( sent ).toHaveLength( 3 );
-			expect( sent[ 2 ].type ).toBe( SyncUpdateType.UPDATE );
+			expect( sent[ 2 ].type ).toBe( 'update' );
 
 			Y.applyUpdateV2( server, base64ToUint8Array( sent[ 2 ].data ) );
 			expect( server.getText( 'content' ).toString() ).toBe(

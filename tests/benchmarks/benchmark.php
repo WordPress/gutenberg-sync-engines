@@ -91,7 +91,7 @@ if ( ! in_array( $engine_slug, $wp_sync_bench_engine_slugs, true ) ) {
  * options-row lock (WP_Sync_Room_Lock, the GET_LOCK replacement) for the
  * length of the request, so each timed request includes one
  * claim/release pair of DB writes that lock-free engines (yjs-server's
- * CRDT ingest, de-rtc's optimistic version claims) do not pay.
+ * CRDT ingest, server-side merge operations) do not pay.
  *
  * @return array db_rtt and lock_pair p50, in milliseconds.
  */
@@ -237,7 +237,7 @@ if ( ! empty( $wp_sync_bench_workload['seconds_per_round'] ) ) {
 	 * measured — `npm run bench -- --concurrency=N` measures it for real.
 	 */
 	$wp_sync_bench_histogram  = WP_Sync_Bench_Workload::ingest_concurrency_histogram( $wp_sync_bench_workload['rounds'] );
-	$wp_sync_bench_serialized = in_array( $engine_slug, array( 'intent-log', 'de-rtc' ), true );
+	$wp_sync_bench_serialized = in_array( $engine_slug, array( 'intent-log' ), true );
 	$wp_sync_bench_wait_ms    = 0.0;
 	$wp_sync_bench_wait_max   = 0.0;
 	$wp_sync_bench_hist_edits = 0;
@@ -344,7 +344,7 @@ printf(
 	"calibration: db rtt p50=%.4f ms, lock pair p50=%.4f ms%s\n",
 	$report['calibration']['db_rtt_p50_ms'],
 	$report['calibration']['lock_pair_p50_ms'],
-	in_array( $engine_slug, array( 'intent-log', 'de-rtc' ), true ) ? ' (each request below holds one lock pair)' : ''
+	in_array( $engine_slug, array( 'intent-log' ), true ) ? ' (each request below holds one lock pair)' : ''
 );
 printf( "requests: %d per rep\n", $report['requests'] );
 printf(

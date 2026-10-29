@@ -11,8 +11,7 @@ a usage block in its header.
   live environment: prints each tab's block store, canvas, and console
   errors for a scripted scenario.
 - `generate-planner-vectors.js`, `generate-rich-text-vectors.js`,
-  `generate-sync-id-vectors.js`, `generate-de-rtc-descriptor-vectors.mjs`
-  and `.php` — the test-vector generators. The intent-log vectors are
+  `generate-sync-id-vectors.js` — the test-vector generators. The intent-log vectors are
   written to two places (Jest and PHPUnit); always update both.
 - `doc-lint.mjs` — checks the prose files against the code
   (`npm run lint:docs`, run by CI): backticked paths exist, documented

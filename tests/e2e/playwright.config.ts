@@ -29,7 +29,7 @@ const globalSetup = fileURLToPath(
 // side by side. Specs that belong to an engine carry an `@engine-<slug>`
 // tag in their describe title. An engine slug runs only that engine's
 // specs; `none` runs every spec without an engine tag. Unset runs all.
-const ENGINES = [ 'intent-log', 'yjs-server', 'de-rtc' ];
+const ENGINES = [ 'intent-log', 'yjs-server' ];
 const engineSlice = process.env.RTC_E2E_ENGINE || '';
 if ( engineSlice && ! [ ...ENGINES, 'none' ].includes( engineSlice ) ) {
 	throw new Error(

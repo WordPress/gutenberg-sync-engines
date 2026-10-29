@@ -10,7 +10,6 @@ import {
 	type SyncPayload,
 	type SyncResponse,
 	type SyncUpdate,
-	SyncUpdateType,
 	type UpdateQueue,
 } from './types';
 
@@ -37,10 +36,7 @@ export function base64ToUint8Array( base64: string ): Uint8Array {
 	return bytes;
 }
 
-export function createSyncUpdate(
-	data: Uint8Array,
-	type: SyncUpdateType
-): SyncUpdate {
+export function createSyncUpdate( data: Uint8Array, type: string ): SyncUpdate {
 	return {
 		data: uint8ArrayToBase64( data ),
 		type,
@@ -93,18 +89,6 @@ export function createUpdateQueue(
 			return [ ...updates ];
 		},
 		restore( restoredUpdates: SyncUpdate[] ): void {
-			// Restore to front of the queue on failure. Remove compaction updates.
-			const filtered = restoredUpdates.filter(
-				( u ) => u.type !== SyncUpdateType.COMPACTION
-			);
-
-			if ( 0 === filtered.length ) {
-				return;
-			}
-
-			updates.unshift( ...filtered );
-		},
-		restoreExact( restoredUpdates: SyncUpdate[] ): void {
 			if ( 0 === restoredUpdates.length ) {
 				return;
 			}

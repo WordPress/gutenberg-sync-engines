@@ -29,17 +29,6 @@
  * Known limitation: classic (freeform) content occupies a path index in the
  * editor but not in the server's parse — such posts fall back to adoption.
  *
- * ENGINES SERVED: the plugin enqueues this stamper for every engine whose
- * blocks carry `metadata.syncId` — intent-log and de-rtc. Under de-rtc the
- * editor is the identity authority for blocks born in a session (the
- * server stamps only room genesis, deterministically, and the blocks of
- * engine-unaware writers), so all three lanes run: genesis, random, and
- * dedupe. For de-rtc creations, both capture and this stamper use the
- * block's clientId (a UUID Gutenberg assigned at creation). Capture can
- * therefore send an identified block before this deferred editor write,
- * without the two paths assigning different identities to the same block.
- * The stand-down below is intent-log's alone.
- *
  * IN-SESSION STAND-DOWN: while the intent-log engine is ANNOUNCED
  * (window._wpCollaborationSync.engine), only the genesis pass runs here.
  * The capture bridge mints identity for blocks created during a live
@@ -63,13 +52,9 @@
 	 * Random syncId for a block born (or first observed dirty) in this
 	 * session.
 	 *
-	 * @param {string} clientId Gutenberg's UUID for this creation.
 	 * @return {string} Opaque syncId.
 	 */
-	function mintSyncId( clientId ) {
-		if ( 'de-rtc' === window._wpCollaborationSync?.engine ) {
-			return clientId;
-		}
+	function mintSyncId() {
 		return crypto.randomUUID();
 	}
 
@@ -110,8 +95,7 @@
 	/**
 	 * Collects blocks missing a `metadata.syncId` and blocks whose ID
 	 * duplicates another one, with each block's tree path for genesis
-	 * derivation. De-rtc reserves creation IDs for their original clientId;
-	 * otherwise the first holder keeps the ID.
+	 * derivation. The first holder keeps the ID.
 	 *
 	 * @return {Array<Object>} { clientId, metadata, path, duplicate } rows.
 	 */
@@ -138,14 +122,9 @@
 				walk( clientId, blockPath );
 			}
 		} )( '', [] );
-		const clientIds = new Set( blocks.map( ( block ) => block.clientId ) );
-		const deRtc = 'de-rtc' === window._wpCollaborationSync?.engine;
 		return blocks.filter( ( block ) => {
 			const syncId = block.metadata?.syncId;
-			// Match de-rtc capture even when a copy precedes its source.
-			const belongsToAnother =
-				deRtc && syncId !== block.clientId && clientIds.has( syncId );
-			if ( ! syncId || seen.has( syncId ) || belongsToAnother ) {
+			if ( ! syncId || seen.has( syncId ) ) {
 				block.duplicate = !! syncId;
 				return true;
 			}
@@ -230,7 +209,7 @@
 					syncId:
 						useGenesis && ! update.duplicate
 							? await genesisSyncId( postId, update.path )
-							: mintSyncId( update.clientId ),
+							: mintSyncId(),
 				} ) )
 			);
 

@@ -176,7 +176,7 @@ class HardenedCollaborationUtils extends CollaborationUtils {
 	 * a block that changed type keeps its old keys first (`content,
 	 * metadata, level`), while the editor that made the change built the
 	 * block fresh (`content, level, metadata`). With every block carrying
-	 * `metadata.syncId` under de-rtc, that difference shows up on any
+	 * `metadata.syncId`, that difference shows up on any
 	 * type-changing edit (a paste over the document). Sort keys before
 	 * comparing: two editors agree when their attributes agree.
 	 *

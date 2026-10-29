@@ -128,12 +128,11 @@ function response( clients: number[], cursor = 1 ) {
 	};
 }
 
-function createMockSession( clientId = 1, sendsWhileAlone = false ) {
+function createMockSession( clientId = 1 ) {
 	return {
 		applyRemoteAwareness: jest.fn(),
 		clientId,
 		engineSlug: 'intent-log',
-		...( sendsWhileAlone ? { sendsWhileAlone: true } : {} ),
 		destroy: jest.fn(),
 		getInitialUpdates: jest.fn( () => [] ),
 		getLocalAwareness: jest.fn( () => ( { user: clientId } ) ),
@@ -347,26 +346,10 @@ describe( 'polling-manager cadence', () => {
 		} );
 	} );
 
-	it( 'a codec that sends while alone (de-rtc) is exempt from the hold and polls on demand', async () => {
-		mockPostSyncUpdate.mockResolvedValue( response( [ 1 ] ) );
-		const session = register( createMockSession( 1, true ) );
-		await jest.advanceTimersByTimeAsync( 0 );
-		const onLocalUpdate = session.onLocalUpdate.mock.calls[ 0 ][ 0 ] as (
-			update: unknown,
-			size: number
-		) => void;
-		onLocalUpdate( { type: 'fetch', data: 'AA==' }, 1 );
-		await jest.advanceTimersByTimeAsync( 300 );
-		expect( mockPostSyncUpdate ).toHaveBeenCalledTimes( 2 );
-		expect(
-			mockPostSyncUpdate.mock.calls[ 1 ][ 0 ].rooms[ 0 ].updates
-		).toHaveLength( 1 );
-	} );
-
-	it( "updates queued while a lone (exempt) tab's poll is in flight go out right after it returns", async () => {
+	it( "updates queued while a tab's poll is in flight go out right after it returns", async () => {
 		let release!: ( value: ReturnType< typeof response > ) => void;
-		mockPostSyncUpdate.mockResolvedValueOnce( response( [ 1 ] ) );
-		const session = register( createMockSession( 1, true ) );
+		mockPostSyncUpdate.mockResolvedValueOnce( response( [ 1, 2 ] ) );
+		const session = register( createMockSession( 1 ) );
 		await jest.advanceTimersByTimeAsync( 0 );
 		const onLocalUpdate = session.onLocalUpdate.mock.calls[ 0 ][ 0 ] as (
 			update: unknown,
@@ -381,14 +364,14 @@ describe( 'polling-manager cadence', () => {
 				} )
 		);
 		onLocalUpdate( { type: 'update', data: 'AA==' }, 1 );
-		await jest.advanceTimersByTimeAsync( 300 );
+		await jest.advanceTimersByTimeAsync( 5000 );
 		expect( mockPostSyncUpdate ).toHaveBeenCalledTimes( 2 );
 		onLocalUpdate( { type: 'update', data: 'AA==' }, 1 );
 		await jest.advanceTimersByTimeAsync( 300 );
 		expect( mockPostSyncUpdate ).toHaveBeenCalledTimes( 2 );
 
-		mockPostSyncUpdate.mockResolvedValueOnce( response( [ 1 ], 2 ) );
-		release( response( [ 1 ], 2 ) );
+		mockPostSyncUpdate.mockResolvedValueOnce( response( [ 1, 2 ], 2 ) );
+		release( response( [ 1, 2 ], 2 ) );
 		await jest.advanceTimersByTimeAsync( 0 );
 		expect( mockPostSyncUpdate ).toHaveBeenCalledTimes( 3 );
 		expect(
@@ -909,7 +892,7 @@ describe( 'polling-manager cadence', () => {
 
 	it( 'SSE: a send answered after the loop stopped is settled by one receive', async () => {
 		/*
-		 * A codec that sends while alone (de-rtc). Its send goes out
+		 * A tab sends while a peer is present. Its send goes out
 		 * beside the stream, marked receive:false, and its answer waits
 		 * for the stream to carry the cursor to the head the write saw.
 		 * If the loop stops meanwhile (a stream event shows the tab alone
@@ -943,13 +926,13 @@ describe( 'polling-manager cadence', () => {
 					}
 				 ).rooms[ 0 ].rows_received_separately
 					? send
-					: Promise.resolve( response( [ 1 ] ) ) ) as ReturnType<
+					: Promise.resolve( response( [ 1, 2 ] ) ) ) as ReturnType<
 					typeof mockPostSyncUpdate
 				>
 		);
 		const dispositions = [ { intentId: 'p-1', status: 'applied' } ];
 		const session = {
-			...createMockSession( 1, true ),
+			...createMockSession( 1 ),
 			receiveDispositions: jest.fn(),
 		};
 		register( session );

@@ -14,7 +14,7 @@
   },
   "vary": [
     {
-      "engine": [ "intent-log", "yjs-server", "de-rtc" ],
+      "engine": [ "intent-log", "yjs-server" ],
       "transport": [ "http-polling", "sse", "websocket" ]
     }
   ],

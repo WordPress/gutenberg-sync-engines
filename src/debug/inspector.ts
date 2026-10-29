@@ -194,9 +194,6 @@ function decodeUpdate(
 			12
 		) } @${ decoded.baseSeq })`;
 	} else if ( 'parked' === update.type ) {
-		// Both review-lane engines park with this row type. intent-log parks
-		// one intent (`intent`, `actorId`); de-rtc parks a proposal
-		// (`proposalId`, `authorClientId`, `excerpt`).
 		const intent = decoded.intent as
 			| { type?: string; intentId?: string }
 			| undefined;

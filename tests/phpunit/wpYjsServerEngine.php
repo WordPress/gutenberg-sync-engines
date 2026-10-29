@@ -759,7 +759,7 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 				$this->assertSame( 'applied', $result['dispositions'][0]['status'] );
 				$read     = $this->engine()->get_updates_since( $this->room(), 101, $cursor_a, array() );
 				$cursor_a = (int) $read['end_cursor'];
-				$this->assertFalse( $read['should_compact'] );
+				$this->assertArrayNotHasKey( 'should_compact', $read );
 			}
 
 			$storage = new WP_Sync_Table_Storage();

@@ -14,10 +14,9 @@ const expected: Record< string, Record< string, string[] > > = {
 		append: [ 'Hello!', 'World' ],
 		format: [ 'Hel<strong>lor</strong>', 'World' ],
 	},
-	'de-rtc': { append: [ 'Hello!', 'World' ], format: [ 'Hello', 'World' ] },
 };
 
-for ( const engine of [ 'intent-log', 'yjs-server', 'de-rtc' ] ) {
+for ( const engine of [ 'intent-log', 'yjs-server' ] ) {
 	test.describe( `Text across a split - ${ engine }`, () => {
 		test.beforeEach( async ( { requestUtils } ) => {
 			await requestUtils.rest( {
@@ -76,8 +75,6 @@ for ( const engine of [ 'intent-log', 'yjs-server', 'de-rtc' ] ) {
 						( response ) =>
 							/wp-sync|autosaves/.test( response.url() ) &&
 							response.status() === 200 &&
-							( engine !== 'de-rtc' ||
-								response.url().includes( 'autosaves' ) ) &&
 							( engine !== 'intent-log' ||
 								(
 									response.request().postData() ?? ''
@@ -126,11 +123,6 @@ for ( const engine of [ 'intent-log', 'yjs-server', 'de-rtc' ] ) {
 				} ).toPass( { timeout: 20000 } );
 				const actual = await contents( editor );
 				expect( actual ).toEqual( expected[ engine ][ edit ] );
-				if ( engine === 'de-rtc' && edit === 'format' ) {
-					await expect(
-						page2.getByText( /set aside/ ).first()
-					).toBeVisible( { timeout: 15000 } );
-				}
 				await testInfo.attach( 'split-result', {
 					body: JSON.stringify( { engine, actual }, null, 2 ),
 					contentType: 'application/json',

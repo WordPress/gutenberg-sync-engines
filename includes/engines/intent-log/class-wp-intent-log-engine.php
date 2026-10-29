@@ -1226,11 +1226,10 @@ if ( ! class_exists( 'WP_Intent_Log_Engine' ) ) {
 			}
 
 			$response = array(
-				'end_cursor'     => $this->storage->get_cursor( $room ),
-				'room'           => $room,
-				'should_compact' => false,
-				'total_updates'  => $this->storage->get_update_count( $room ),
-				'updates'        => $typed_updates,
+				'end_cursor'    => $this->storage->get_cursor( $room ),
+				'room'          => $room,
+				'total_updates' => $this->storage->get_update_count( $room ),
+				'updates'       => $typed_updates,
 			);
 
 			// The debug envelope: engine facts from this request's ingest

@@ -7,7 +7,7 @@
  *                                        # measured against the same site
  *                                        # with the plugin deactivated
  *                                        # (tests/benchmarks/host/)
- *   npm run bench -- --engine=de-rtc --peers=3     # host report, targeted
+ *   npm run bench -- --engine=yjs-server --peers=3     # host report, targeted
  *   npm run bench -- --suite=engines     # engine-decision matrix (below)
  *   npm run bench -- --suite=transport --transport=http-polling --trials=30
  *   npm run bench -- --peers=5 --p95-ms=2000
@@ -32,7 +32,7 @@
  * invariant-certification sweep, from a single invocation.
  *
  *   npm run bench -- --suite=engines     # every engine x the decision matrix
- *   npm run bench -- --engines=de-rtc --scenarios=editorial-session
+ *   npm run bench -- --engines=yjs-server --scenarios=editorial-session
  *   npm run bench -- --certify=10        # invariant sweep across 10 seeds
  *
  * The matrix runs each engine over six complementary scenarios
@@ -86,7 +86,7 @@ Suites (--suite=; default: host):
              deactivated) — so the delta isolates what real-time
              collaboration itself costs. Arguments:
                --engine=     the one engine to measure (intent-log |
-                             yjs-server | de-rtc | current; default: the
+                             yjs-server | current; default: the
                              site's current engine — comparing engines
                              is what --suite=engines is for)
                --transport=  http-polling | sse | websocket
@@ -145,7 +145,7 @@ WP_USERNAME/WP_PASSWORD.
 
 Examples:
   npm run bench
-  npm run bench -- --engine=de-rtc --peers=3 --polling-interval=2
+  npm run bench -- --engine=yjs-server --peers=3 --polling-interval=2
   npm run bench -- --suite=sweep --plan=scaling
   npm run bench -- --suite=engines --scenarios=editorial-session
   npm run bench -- --certify=10
@@ -235,7 +235,7 @@ const ENV_CONFIG = process.env.BENCH_WPENV_CONFIG ?? '.wp-env.tests.json';
 const ENV_CWD = `wp-content/plugins/${ path.basename( process.cwd() ) }`;
 const OUT_DIR = args.out ?? 'bench-results';
 const SEED = Number( args.seed ?? 42 );
-const ENGINES = ( args.engines ?? 'intent-log,yjs-server,de-rtc' )
+const ENGINES = ( args.engines ?? 'intent-log,yjs-server' )
 	.split( ',' )
 	.filter( Boolean );
 
@@ -283,7 +283,7 @@ const MATRIX = {
 		reps: 3,
 		warmup: 1,
 	},
-	// DE-RTC's native cadence applied to every engine: two
+	// Batched editing cadence applied to every engine: two
 	// minutes of staggered ~10s save beats + 10s sync reads. The fair
 	// measurement for the save-centric design; compare its byte and
 	// escalation shapes against the per-second scenarios above.

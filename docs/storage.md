@@ -31,13 +31,8 @@ with an underscore belong to the storage:
 | `generation` | The id of the room's first row; changes on every reset, so clients start over. |
 | `intent_log_checkpoint`, `intent_log_floor` | intent-log's latest full copy of the document (a checkpoint, saved every so often so older rows can be deleted) and the oldest row still kept (the floor). |
 | `yjs_server_doc`, `yjs_server_checkpoint`, `yjs_server_floor`, `yjs_server_wrappers` | yjs-server's server copy of the document, snapshot, floor, and each block's saved HTML. |
-| `de_rtc_checkpoint`, `de_rtc_floor`, `de_rtc_approved_blocks` | de-rtc's snapshot, floor, and blocks a reviewer approved despite unsafe markup. |
 
-De-rtc keeps its current content and version claim in options rows,
-swapped atomically by `WP_Sync_Atomic_Option` (a compare-and-swap:
-change a value only if nobody changed it first; the
-`wp_sync_cas_backend` filter can substitute Redis). Intent-log's
-per-room lock is an options row too (`WP_Sync_Room_Lock`, replaceable
+Intent-log's per-room lock is an options row (`WP_Sync_Room_Lock`, replaceable
 through `wp_sync_lock_backend`).
 
 There is no per-room parent row, so looking at a room never creates it;

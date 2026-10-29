@@ -9,8 +9,8 @@
  *
  *   "center": { "engine": "intent-log", "windows": 2, "postSize": "medium" },
  *   "vary": [
- *     { "engine": [ "intent-log", "de-rtc" ], "windows": [ 1, 2, 3 ] },
- *     { "engine": [ "intent-log", "de-rtc" ], "postSize": [ "empty", "large" ] }
+ *     { "engine": [ "intent-log" ], "windows": [ 1, 2, 3 ] },
+ *     { "engine": [ "intent-log" ], "postSize": [ "empty", "large" ] }
  *   ]
  *
  * is 6 + 4 = 10 setups, each with every other variable at its center
@@ -34,7 +34,7 @@ import { canonical, seededRandom, shortHash } from './record.mjs';
 export const VARIABLES = {
 	engine: {
 		arg: 'engine',
-		check: ( v ) => [ 'intent-log', 'yjs-server', 'de-rtc' ].includes( v ),
+		check: ( v ) => [ 'intent-log', 'yjs-server' ].includes( v ),
 	},
 	transport: {
 		arg: 'transport',

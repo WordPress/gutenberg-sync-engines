@@ -126,9 +126,9 @@ describe( 'plans', () => {
 	const plan = {
 		center: { engine: 'intent-log', windows: 2, postSize: 'medium' },
 		vary: [
-			{ engine: [ 'intent-log', 'de-rtc' ], windows: [ 1, 2, 3 ] },
+			{ engine: [ 'intent-log', 'yjs-server' ], windows: [ 1, 2, 3 ] },
 			{
-				engine: [ 'intent-log', 'de-rtc' ],
+				engine: [ 'intent-log', 'yjs-server' ],
 				postSize: [ 'empty', 'medium' ],
 			},
 		],
@@ -168,16 +168,19 @@ describe( 'plans', () => {
 		[ { center: { windows: 2 } }, 'must name an engine' ],
 		[ { center: { engine: 'nope' } }, 'engine cannot be' ],
 		[
-			{ center: { engine: 'de-rtc', people: 2 } },
+			{ center: { engine: 'yjs-server', people: 2 } },
 			'unknown plan variable',
 		],
-		[ { center: { engine: 'de-rtc', windows: 6 } }, 'windows cannot be' ],
 		[
-			{ center: { engine: 'de-rtc' }, vary: [ { windows: [] } ] },
+			{ center: { engine: 'yjs-server', windows: 6 } },
+			'windows cannot be',
+		],
+		[
+			{ center: { engine: 'yjs-server' }, vary: [ { windows: [] } ] },
 			'non-empty list',
 		],
 		[
-			{ center: { engine: 'de-rtc', wake: 'cache' } },
+			{ center: { engine: 'yjs-server', wake: 'cache' } },
 			'needs cache "redis"',
 		],
 	] )( 'refuses a bad plan: %j', ( bad, message ) => {
@@ -187,13 +190,13 @@ describe( 'plans', () => {
 	it( 'turns a setup into host benchmark arguments', () => {
 		expect(
 			setupArgs( {
-				engine: 'de-rtc',
+				engine: 'yjs-server',
 				postSize: 'large',
 				editSeconds: 90,
 				pollingInterval: 0,
 			} )
 		).toEqual( [
-			'engine=de-rtc',
+			'engine=yjs-server',
 			'post-size=large',
 			'edit-seconds=90',
 			'polling-interval=0',
@@ -384,7 +387,7 @@ describe( 'result lines', () => {
 					repeat
 				)
 			);
-		expect( key( { engine: 'de-rtc', transport: 'sse' } ) ).toBe(
+		expect( key( { engine: 'yjs-server', transport: 'sse' } ) ).toBe(
 			key( {} )
 		);
 		expect( key( { windows: 3 } ) ).not.toBe( key( {} ) );
@@ -402,7 +405,7 @@ describe( 'readers', () => {
 	const record = {
 		run: { plan: 'p', cell: 'c1', repeat: 1, startedAt: 't' },
 		setup: {
-			engine: 'de-rtc',
+			engine: 'yjs-server',
 			transport: 'http-polling',
 			delivery: 'polling, webrtc',
 			windows: 2,
@@ -447,7 +450,7 @@ describe( 'readers', () => {
 	it( 'builds chart data keyed by phase, metric, and side', () => {
 		const data = chartData( [ record ] );
 		expect( data.runs[ 0 ] ).toMatchObject( {
-			engine: 'de-rtc',
+			engine: 'yjs-server',
 			peers: 2,
 			commit: 'abcdef12',
 		} );
@@ -466,11 +469,11 @@ describe( 'readers', () => {
 		} );
 		const { runs, held } = holdFixed(
 			[
-				run( 'de-rtc', 1, 'medium', 'own-paragraph' ),
-				run( 'de-rtc', 2, 'medium', 'own-paragraph' ),
-				run( 'de-rtc', 2, 'large', 'own-paragraph' ),
-				run( 'de-rtc', 2, 'large', 'own-paragraph' ),
-				run( 'de-rtc', 2, 'medium', 'new-blocks' ),
+				run( 'yjs-server', 1, 'medium', 'own-paragraph' ),
+				run( 'yjs-server', 2, 'medium', 'own-paragraph' ),
+				run( 'yjs-server', 2, 'large', 'own-paragraph' ),
+				run( 'yjs-server', 2, 'large', 'own-paragraph' ),
+				run( 'yjs-server', 2, 'medium', 'new-blocks' ),
 			],
 			{ postSize: 'medium' }
 		);

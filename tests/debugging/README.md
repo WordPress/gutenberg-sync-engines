@@ -28,16 +28,15 @@ cost cards' composed projections:
 
 ```bash
 node tests/debugging/soak-transport.mjs \
-    engine=de-rtc transport=http-polling windows=3 soak=3600 \
-    json=soak-de-rtc.json
+    engine=yjs-server transport=http-polling windows=3 soak=3600 \
+    json=soak-yjs-server.json
 ```
 
 N windows share one post; each window owns ONE paragraph and edits only
 it in staggered bursts with think time (deterministic jitter — reruns
 pace the same), so the run has real multi-writer merge traffic without
 constant same-block conflict. Window 0 saves the post periodically
-(`save=` seconds; under de-rtc the save carries `base_version` through
-the room) and inserts a latency probe every `probe=` seconds that every
+(`save=` seconds) and inserts a latency probe every `probe=` seconds that every
 other window's in-page watcher stamps on arrival. Wire counters are
 sampled per minute per window (`minuteSamples` in the JSON), and the
 diagnostics request log — cleared at start, scenario-tagged `soak` —

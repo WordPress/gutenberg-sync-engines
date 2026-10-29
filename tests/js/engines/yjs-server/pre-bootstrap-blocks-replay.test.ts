@@ -10,7 +10,6 @@ import * as buffer from 'lib0/buffer';
  */
 import { createYjsServerEngine } from '../../../../src/engines/yjs-server/engine';
 import { YJS_SERVER_SNAPSHOT_TYPE } from '../../../../src/engines/yjs-server/session';
-import { SyncUpdateType } from '../../../../src/providers/http-polling/types';
 import {
 	CRDT_RECORD_MAP_KEY,
 	CRDT_STATE_MAP_KEY,
@@ -255,7 +254,7 @@ function room( snapshotBlocks: any[], liveBlocks: any[] ) {
 			data: JSON.stringify( { doc: buffer.toBase64( snapshotState ) } ),
 		},
 		tail: {
-			type: SyncUpdateType.UPDATE,
+			type: 'update',
 			data: buffer.toBase64( tailState ),
 		},
 		/**

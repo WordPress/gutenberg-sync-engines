@@ -344,11 +344,11 @@ class Tests_Collaboration_WpSyncTableStorage extends WP_UnitTestCase {
 		$storage = $this->storage();
 		$room    = $this->room();
 
-		$storage->set_room_engine( $room, 'de-rtc' );
+		$storage->set_room_engine( $room, 'yjs-server' );
 		$storage->set_awareness_state( $room, array( array( 'client_id' => 1 ) ) );
 
-		$this->assertSame( 1, $this->count_queries( fn() => $this->assertSame( 'de-rtc', $storage->get_room_engine( $room ) ) ) );
-		$this->assertSame( 1, $this->count_queries( fn() => $this->assertSame( 'de-rtc', $storage->get_room_engine( $room ) ) ) );
+		$this->assertSame( 1, $this->count_queries( fn() => $this->assertSame( 'yjs-server', $storage->get_room_engine( $room ) ) ) );
+		$this->assertSame( 1, $this->count_queries( fn() => $this->assertSame( 'yjs-server', $storage->get_room_engine( $room ) ) ) );
 		$this->assertSame( 1, $this->count_queries( fn() => $this->assertCount( 1, $storage->get_awareness_state( $room ) ) ) );
 		$this->assertSame( 1, $this->count_queries( fn() => $this->assertCount( 1, $storage->get_awareness_state( $room ) ) ) );
 	}
@@ -415,7 +415,7 @@ class Tests_Collaboration_WpSyncTableStorage extends WP_UnitTestCase {
 		$storage->set_awareness_state( $room, array( array( 'client_id' => 1 ) ) );
 		$storage->set_room_meta( $room, 'checkpoint', 1 );
 		$storage->add_update( $other, 'other row' );
-		$storage->set_room_engine( $other, 'de-rtc' );
+		$storage->set_room_engine( $other, 'yjs-server' );
 		$storage->get_updates_after_cursor( $room, 0 );
 
 		$this->assertTrue( $storage->reset_room( $room ) );
@@ -428,7 +428,7 @@ class Tests_Collaboration_WpSyncTableStorage extends WP_UnitTestCase {
 		$this->assertFalse( $storage->get_room_size( $room )['found'] );
 
 		$this->assertSame( array( 'other row' ), $storage->get_updates_after_cursor( $other, 0 ) );
-		$this->assertSame( 'de-rtc', $storage->get_room_engine( $other ) );
+		$this->assertSame( 'yjs-server', $storage->get_room_engine( $other ) );
 
 		$this->assertTrue( $storage->reset_room( $room ), 'A room with nothing stored is already reset.' );
 	}

@@ -63,6 +63,9 @@ export interface EngineDisposition {
 	reason?: string;
 }
 
+/** Whether the session can safely join a room after its state was reset. */
+export type RoomRestartDecision = 'rebootstrap' | 'disconnect';
+
 /**
  * The transport-facing session for one entity/room: creates outgoing updates,
  * interprets received ones, and encodes/applies awareness states. Created by
@@ -70,6 +73,16 @@ export interface EngineDisposition {
  * state) and consumed by transport providers.
  */
 export interface EngineSessionCodec {
+	/** Called with unsent updates discarded at room unregistration. */
+	onUpdatesDiscarded?: ( updates: EngineUpdate[] ) => void;
+	/**
+	 * The server reset this room. Inspect its new initial rows and either
+	 * discard old room state and rejoin (`rebootstrap`), or keep local edits
+	 * outside sync (`disconnect`). Without this callback, the transport
+	 * restarts at cursor zero.
+	 */
+	onRoomRestart?: ( updates: EngineUpdate[] ) => RoomRestartDecision;
+
 	/** Applies awareness states received from the server. */
 	applyRemoteAwareness: ( state: AwarenessState ) => void;
 
@@ -90,36 +103,11 @@ export interface EngineSessionCodec {
 	engineProtocol?: number;
 
 	/**
-	 * Creates a single update representing the full local state, replacing
-	 * all prior updates (compaction-on-request). Optional: every current
-	 * engine compacts server-side and never nominates a client
-	 * (`should_compact` is always false), so codecs omit this; a transport
-	 * receiving a compaction request from an engine whose codec has no
-	 * answer simply ignores it.
-	 */
-	createCompactionUpdate?: () => EngineUpdate;
-
-	/**
-	 * Creates the update the transport should send after a request whose
-	 * outcome is unknown (e.g. a network timeout after a possible write).
-	 * Only engines whose UPDATES ARE NOT IDEMPOTENT need this: re-sending a
-	 * Yjs delta the server already stored would grow storage unboundedly, so
-	 * the Yjs codec answers with a full-state compaction that safely
-	 * supersedes either outcome. Engines with server-side idempotent ingest
-	 * (e.g. the intent log's per-intentId dedup) OMIT this method and the
-	 * transport simply re-sends the original updates.
+	 * Builds a replacement upload after a request with an unknown outcome.
+	 * Yjs sends its full state so the server can recover missing dependencies.
+	 * Engines without this callback resend the original updates unchanged.
 	 */
 	createRecoveryUpdate?: () => EngineUpdate;
-
-	/**
-	 * Creates a compaction by merging the given server-provided updates,
-	 * preserving their operation metadata. Optional and unused: no server
-	 * sends the old `compaction_request` field anymore; the member remains
-	 * only so an out-of-tree codec that still implements it stays type-valid.
-	 *
-	 * @deprecated Compaction is server-side for every current engine.
-	 */
-	createCompactionFromUpdates?: ( updates: EngineUpdate[] ) => EngineUpdate;
 
 	/**
 	 * Detaches the transport-facing subscriptions registered via

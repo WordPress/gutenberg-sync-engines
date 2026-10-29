@@ -8,8 +8,7 @@
 if ( ! class_exists( 'Gutenberg_Sync_Engines_Request_Log' ) ) {
 
 	/**
-	 * Per-request server-side metrics for tagged `/wp-sync/` REST requests
-	 * (plus tagged autosave requests — de-rtc commits travel there),
+	 * Per-request server-side metrics for tagged `/wp-sync/` REST requests,
 	 * following the conventions of the community RTC performance harness
 	 * (WordPress/distributed-rtc-performance-testing) so numbers line up with
 	 * community-published tables:
@@ -328,7 +327,6 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Request_Log' ) ) {
 				'updates_out'     => 0,
 				'response_bytes'  => 0,
 				'awareness_count' => 0,
-				'should_compact'  => 0,
 				'total_updates'   => 0,
 				'concurrent'      => 0,
 				'option_writes'   => 0,
@@ -527,7 +525,6 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Request_Log' ) ) {
 					updates_out int(11) NOT NULL DEFAULT 0,
 					response_bytes int(11) NOT NULL DEFAULT 0,
 					awareness_count int(11) NOT NULL DEFAULT 0,
-					should_compact tinyint(1) NOT NULL DEFAULT 0,
 					total_updates int(11) NOT NULL DEFAULT 0,
 					concurrent int(11) NOT NULL DEFAULT 0,
 					option_writes int(11) NOT NULL DEFAULT 0,
@@ -576,12 +573,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Request_Log' ) ) {
 		 */
 		public function pre_dispatch( $result, $server, $request ) {
 			$route = $request->get_route();
-			// Tagged autosave requests are measured too: de-rtc sessions
-			// commit through the ordinary autosave endpoint (the Save/Sync
-			// inversion), so its merge cost lives on that route. Only a
-			// client that explicitly tags an autosave (the host benchmark
-			// tags commit-shaped ones) opts it into the log.
-			if ( ! $this->is_tagged( $request ) || ( false === strpos( $route, '/wp-sync/' ) && false === strpos( $route, '/autosaves' ) ) ) {
+			if ( ! $this->is_tagged( $request ) || false === strpos( $route, '/wp-sync/' ) ) {
 				return $result;
 			}
 
@@ -684,7 +676,6 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Request_Log' ) ) {
 				'updates_out'     => $updates_out,
 				'response_bytes'  => strlen( (string) wp_json_encode( $data ) ),
 				'awareness_count' => $awareness_count,
-				'should_compact'  => empty( $first_out['should_compact'] ) ? 0 : 1,
 				'total_updates'   => isset( $first_out['total_updates'] ) ? (int) $first_out['total_updates'] : 0,
 				'concurrent'      => $this->start['concurrent'],
 				'option_writes'   => self::$option_writes - $this->start['option_writes'],
@@ -737,7 +728,6 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Request_Log' ) ) {
 				'%f',
 				'%d',
 				'%f',
-				'%d',
 				'%d',
 				'%d',
 				'%d',
@@ -1344,8 +1334,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Request_Log' ) ) {
 				foreach ( $float_cols as $col ) {
 					$row[ $col ] = (float) $row[ $col ];
 				}
-				$row['should_compact'] = (bool) $row['should_compact'];
-				$row['timeline']       = ! empty( $row['timeline'] ) ? json_decode( $row['timeline'], true ) : null;
+				$row['timeline'] = ! empty( $row['timeline'] ) ? json_decode( $row['timeline'], true ) : null;
 			}
 			unset( $row );
 
@@ -1359,8 +1348,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Request_Log' ) ) {
 		 * delay, update size) the mean of `ms` (dispatch wall), `total_ms`,
 		 * `cpu_ms`, `total_cpu_ms`, the stddev of `ms`, mean `db_queries`,
 		 * `db_time_ms`, mean peak memory in MB, updates in/out sums,
-		 * should_compact sum, max concurrent — then every non-baseline
-		 * group's mean as a ratio to the `baseline` scenario's mean.
+		 * max concurrent, and every non-baseline group's mean as a ratio to the `baseline` scenario's mean.
 		 *
 		 * @since 0.4.0
 		 *
@@ -1386,41 +1374,39 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Request_Log' ) ) {
 
 				if ( ! isset( $agg[ $approach ][ $scenario ][ $pd ][ $sz ] ) ) {
 					$agg[ $approach ][ $scenario ][ $pd ][ $sz ] = array(
-						'n'                  => 0,
-						'ms_sum'             => 0.0,
-						'ms_sq_sum'          => 0.0,
-						'total_ms_sum'       => 0.0,
-						'cpu_ms_sum'         => 0.0,
-						'total_cpu_ms_sum'   => 0.0,
-						'db_queries_sum'     => 0.0,
-						'db_time_ms_sum'     => 0.0,
-						'peak_memory_sum'    => 0.0,
-						'updates_in_sum'     => 0,
-						'updates_out_sum'    => 0,
-						'should_compact_sum' => 0,
-						'max_concurrent'     => 0,
+						'n'                => 0,
+						'ms_sum'           => 0.0,
+						'ms_sq_sum'        => 0.0,
+						'total_ms_sum'     => 0.0,
+						'cpu_ms_sum'       => 0.0,
+						'total_cpu_ms_sum' => 0.0,
+						'db_queries_sum'   => 0.0,
+						'db_time_ms_sum'   => 0.0,
+						'peak_memory_sum'  => 0.0,
+						'updates_in_sum'   => 0,
+						'updates_out_sum'  => 0,
+						'max_concurrent'   => 0,
 					);
 				}
 				$a  = &$agg[ $approach ][ $scenario ][ $pd ][ $sz ];
 				$ms = (float) $row['ms'];
 				++$a['n'];
-				$a['ms_sum']             += $ms;
-				$a['ms_sq_sum']          += $ms * $ms;
-				$a['total_ms_sum']       += (float) $row['total_ms'];
-				$a['cpu_ms_sum']         += (float) $row['cpu_ms'];
-				$a['total_cpu_ms_sum']   += (float) $row['total_cpu_ms'];
-				$a['db_queries_sum']     += (float) $row['db_queries'];
-				$a['db_time_ms_sum']     += (float) $row['db_time_ms'];
-				$a['peak_memory_sum']    += (float) $row['peak_memory'];
-				$a['updates_in_sum']     += (int) $row['updates_in'];
-				$a['updates_out_sum']    += (int) $row['updates_out'];
-				$a['should_compact_sum'] += $row['should_compact'] ? 1 : 0;
-				$a['max_concurrent']      = max( $a['max_concurrent'], (int) $row['concurrent'] );
+				$a['ms_sum']           += $ms;
+				$a['ms_sq_sum']        += $ms * $ms;
+				$a['total_ms_sum']     += (float) $row['total_ms'];
+				$a['cpu_ms_sum']       += (float) $row['cpu_ms'];
+				$a['total_cpu_ms_sum'] += (float) $row['total_cpu_ms'];
+				$a['db_queries_sum']   += (float) $row['db_queries'];
+				$a['db_time_ms_sum']   += (float) $row['db_time_ms'];
+				$a['peak_memory_sum']  += (float) $row['peak_memory'];
+				$a['updates_in_sum']   += (int) $row['updates_in'];
+				$a['updates_out_sum']  += (int) $row['updates_out'];
+				$a['max_concurrent']    = max( $a['max_concurrent'], (int) $row['concurrent'] );
 				unset( $a );
 			}
 
-			$fmt_h = "%-18s %4s %-7s %6s %8s %8s %8s %11s %8s %8s %8s %6s %6s %6s %5s %5s\n";
-			$fmt_r = "%-18s %4s %-7s %6d %8.1f %8.1f %8.1f %11.1f %8.1f %8.1f %8.1f %6.1f %6d %6d %5d %5d\n";
+			$fmt_h = "%-18s %4s %-7s %6s %8s %8s %8s %11s %8s %8s %8s %6s %6s %6s %5s\n";
+			$fmt_r = "%-18s %4s %-7s %6d %8.1f %8.1f %8.1f %11.1f %8.1f %8.1f %8.1f %6.1f %6d %6d %5d\n";
 			$sep   = sprintf(
 				$fmt_h,
 				str_repeat( '-', 18 ),
@@ -1437,7 +1423,6 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Request_Log' ) ) {
 				str_repeat( '-', 6 ),
 				str_repeat( '-', 6 ),
 				str_repeat( '-', 6 ),
-				str_repeat( '-', 5 ),
 				str_repeat( '-', 5 )
 			);
 
@@ -1448,8 +1433,8 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Request_Log' ) ) {
 					// characters, which renders broken in terminal clients.
 					$out .= sprintf( "\n--- Approach: %s ---\n", $approach );
 				}
-				$out .= sprintf( $fmt_h, 'Scenario', 'dly', 'sz', 'n', 'disp_ms', 'total_ms', 'cpu_ms', 'tot_cpu_ms', 'sd_disp', 'db_q', 'db_t_ms', 'mem_mb', 'ui_tot', 'uo_tot', 'sc', 'conc' );
-				$out .= sprintf( $fmt_h, '', '', '', '', 'avg', 'avg', 'avg', 'avg', 'stddev', 'avg', 'avg', 'avg', 'sum', 'sum', 'sum', 'max' );
+				$out .= sprintf( $fmt_h, 'Scenario', 'dly', 'sz', 'n', 'disp_ms', 'total_ms', 'cpu_ms', 'tot_cpu_ms', 'sd_disp', 'db_q', 'db_t_ms', 'mem_mb', 'ui_tot', 'uo_tot', 'conc' );
+				$out .= sprintf( $fmt_h, '', '', '', '', 'avg', 'avg', 'avg', 'avg', 'stddev', 'avg', 'avg', 'avg', 'sum', 'sum', 'max' );
 				$out .= $sep;
 
 				$baseline_sum = 0.0;
@@ -1486,7 +1471,6 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Request_Log' ) ) {
 								$a['peak_memory_sum'] / $n / 1048576,
 								$a['updates_in_sum'],
 								$a['updates_out_sum'],
-								$a['should_compact_sum'],
 								$a['max_concurrent']
 							);
 						}

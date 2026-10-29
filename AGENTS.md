@@ -26,11 +26,11 @@ shared editing session.
 ## Repo layout
 
 - `gutenberg-sync-engines.php` — plugin entry.
-- `includes/` — server PHP: `engines/{intent-log,yjs-server,de-rtc}/`
+- `includes/` — server PHP: `engines/{intent-log,yjs-server}/`
   (one folder per engine; none uses another's classes), `shared/`,
   `transports/` (polling, `sse/`, `websocket/`), `admin/` (the settings
   screen), `storage/`, `diagnostics/` (dev-only), `lib/` (vendored
-  y-php and automerge-php, frozen; see Traps).
+  y-php, frozen; see Traps).
 - `src/` — client TypeScript; `src/index.ts` builds `build/sync-engines.js`
   with `@wordpress/sync` and `yjs` external: `engines/`, `shared/`,
   `providers/{http-polling,sse,sse-daemon,websocket,advisory}/`,
@@ -114,7 +114,6 @@ npm run test:e2e:sse        # sse-only suite (needs the tests Redis)
 npm run test:e2e:sse-daemon # sse-daemon-only suite (runs the daemon)
 npm run lint:docs           # the prose against the code (see Commits / PRs)
 composer --working-dir=includes/lib/y-php install && composer --working-dir=includes/lib/y-php test
-php includes/lib/automerge-php/tests/run.php   # the vendored suites, no WordPress
 ```
 
 Iterate at the cheapest layer that can catch the change, fast to slow:
@@ -132,7 +131,7 @@ Iterate at the cheapest layer that can catch the change, fast to slow:
 Single-test loops: `npm run test:js -- sync-id` (files matching),
 `npm run test:js -- -t 'name'`, `npm run test:php -- --filter Class`,
 `npm run test:e2e -- collaboration-intent-log`,
-`RTC_E2E_ENGINE=de-rtc npm run test:e2e` (one engine's slice; CI runs
+`RTC_E2E_ENGINE=yjs-server npm run test:e2e` (one engine's slice; CI runs
 one e2e job per engine, selected by `@engine-<slug>` in the describe
 title, and `RTC_E2E_ENGINE=none` runs the untagged specs).
 
@@ -165,8 +164,6 @@ Test traps:
     and `tests/js/providers/sse/sse-exchange.test.js`; iterate there
     first. Playwright cannot hide a tab, so the specs override
     `document.visibilityState` in the page and fire `visibilitychange`.
-  - `@y/websocket-server` stays pinned to 0.1.1 (0.1.5 crashes with a
-    13.x client); the old y-websocket fixture is used by no suite.
 - `npm run rtc:ws` starts the real websocket transport for manual
   two-window testing (the daemon must bind 0.0.0.0 with port 8787
   published; wp-env alone cannot publish extra ports); `npm run
@@ -208,40 +205,6 @@ before a big change. A durable lesson from an issue goes here.
 
 ### Rules that must not be undone
 
-- **De-rtc's notices must never carry the document.** They used to,
-  and long sessions ran the server out of memory as messages grew with
-  the post. A notice now carries a version number and a content hash,
-  and a client that already matches downloads nothing. Never put a
-  `content` entry into de-rtc's list of synced properties: it silently
-  re-sends the whole document with every notice
-  (`tests/js/engines/de-rtc/record.test.ts` pins that the record never
-  stores content). The one place whole content still travels on the
-  transport is a `proposal` row for collections and unsupported post
-  types; posts and pages commit through the autosave endpoint.
-- **A de-rtc record never mints a creation id for a block the room
-  already identifies.** The editor's id stamper writes the saved post's
-  genesis ids one block at a time, so the editor trees captured around
-  a tab's bootstrap carry ids on some blocks and none on the rest. An
-  id-less block adopts the record's id at the same path (the server's
-  own rule for id-less saves, `adoptRecordIdentity` in
-  `src/engines/de-rtc/record.ts`). Minting the editor's clientId
-  instead put a second identity on every block: each joining tab's first
-  commit replaced the genesis ids, later merges saw deletions and
-  insertions instead of edits, and with four or more people one
-  person's first burst was parked as a conflict and lost.
-  `tests/js/engines/de-rtc/engine.test.ts` pins it.
-- **A de-rtc tab waits for the merged version before it sends its next
-  change.** When the server merges other people's work into a tab's
-  change, a newer version exists that the tab does not hold yet
-  (`pendingOwnMergeSeq`, the flag that says the tab is waiting, is set).
-  A change built on the old version makes
-  the server treat the tab's own accepted keystrokes as a conflict and
-  hold them back; the end of what the person typed was lost with no
-  warning on slow hosts. `tests/js/engines/de-rtc/announce.test.ts`
-  pins it.
-- **An editor save under de-rtc waits for the session's in-flight
-  commit** (`prepareForSave`), so a save can never conflict with the
-  session's own commit. The fuzzer found that one.
 - **yjs-server stores each block's saved HTML beside the block, but
   never reads the text inside that copy.** The live shared text always
   wins; a test exists only to prove it. Without that rule a stale copy
@@ -249,27 +212,18 @@ before a big change. A durable lesson from an issue goes here.
 - **intent-log saves a full snapshot every 500 changes, not 100.** The
   smaller number crossed mid-typing and threw away edits still in
   flight.
-- **De-rtc commits every ten seconds by default.** Setting it to 0
-  commits after every pause in typing; that was the first release's
-  default, changed because ten seconds measurably cuts requests.
-- **Four pieces of code are frozen: do not edit them casually.**
+- **Two pieces of code are frozen: do not edit them casually.**
   - The intent-log core (`src/engines/intent-log/`) is kept identical
     to its PHP twin (`includes/engines/intent-log/`) through JSON test
     vectors kept in two copies, `tests/js/engines/intent-log/test-vectors/`
     and `tests/phpunit/test-vectors/`. Regenerate with the
     `tests/tools/` generators and always update both. A JSDoc-only edit
     is fine.
-  - The de-rtc merge core (`includes/engines/de-rtc/merge-core.php`) is
-    a verbatim port; its two local changes are marked `DELTA`.
   - y-php (`includes/lib/y-php/`) carries two deliberate local changes
     to preserve when re-vendoring: the `composer.json` platform pin to
     PHP 7.4, and the rewritten
     `includes/lib/y-php/src/Lib0/StringDecoder.php` (decoding used to
     slow down sharply as documents grew).
-  - automerge-php's runner leaves `PORTING_STATUS.json` alone unless
-    `AUTOMERGE_PHP_UPDATE_STATUS=1` is set. Two of its 680 tests fail
-    under a PCRE2 older than 10.43, which distribution PHP builds link;
-    check `php -r 'echo PCRE_VERSION;'` before blaming the library.
 
 ### Dead ends: do not retry these without new information
 

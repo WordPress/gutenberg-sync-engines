@@ -109,9 +109,6 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Plugin' ) ) {
 		 * @return void
 		 */
 		private function load(): void {
-			// The automerge-php support gate (tiny; the library itself stays lazy).
-			require_once GUTENBERG_SYNC_ENGINES_PATH . 'includes/lib/automerge-php-loader.php';
-
 			// Room storage over the plugin's own tables (the schema class is
 			// loaded by the plugin entry, ahead of activation).
 			require_once GUTENBERG_SYNC_ENGINES_PATH . 'includes/storage/class-wp-sync-table-storage.php';
@@ -141,18 +138,6 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Plugin' ) ) {
 			require_once $engines . 'intent-log/class-wp-intent-log-engine.php';
 			require_once $engines . 'intent-log/class-wp-intent-log-base-seq-preflight.php';
 			require_once $engines . 'yjs-server/class-wp-yjs-server-engine.php';
-			// The DE-RTC merge core is ported verbatim from wordpress-develop;
-			// a Core/Gutenberg build that ships DE-RTC itself wins the guard.
-			if ( ! function_exists( 'wp_de_rtc_get_reason_codes' ) ) {
-				require_once $engines . 'de-rtc/merge-core.php';
-			}
-			require_once $engines . 'de-rtc/class-wp-de-rtc-block-identity.php';
-			require_once $engines . 'de-rtc/class-wp-de-rtc-identity-merge.php';
-			require_once $engines . 'de-rtc/class-wp-de-rtc-engine.php';
-			require_once $engines . 'de-rtc/class-wp-de-rtc-sync-meta-colocation.php';
-			require_once $engines . 'de-rtc/class-wp-de-rtc-base-version-preflight.php';
-			require_once $engines . 'de-rtc/class-wp-de-rtc-autosave-commits.php';
-			require_once $engines . 'de-rtc/class-wp-de-rtc-review-controller.php';
 
 			$transports = GUTENBERG_SYNC_ENGINES_PATH . 'includes/transports/';
 			require_once $transports . 'class-wp-sync-connection.php';
@@ -216,13 +201,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Plugin' ) ) {
 			add_filter( 'wp_sync_awareness_backend', array( $this, 'filter_awareness_backend' ) );
 			add_filter( 'wp_sync_tab_list_backend', array( $this, 'filter_tab_list_backend' ) );
 			add_filter( 'wp_sync_engines', array( $this, 'register_engines' ), 10, 2 );
-			WP_De_RTC_Sync_Meta_Colocation::register();
-			WP_De_RTC_Base_Version_Preflight::register();
-			WP_De_RTC_Autosave_Commits::register();
-			add_action( 'rest_api_init', array( new WP_De_RTC_Review_Controller(), 'register_routes' ) );
 			WP_Intent_Log_Base_Seq_Preflight::register();
-			// A reset room must not resume from de-rtc's out-of-row canonical.
-			add_action( 'gutenberg_sync_engines_room_reset', array( 'WP_De_RTC_Engine', 'forget_room_state' ) );
 			add_filter( 'wp_sync_transports', array( $this, 'register_transports' ), 10, 3 );
 			add_filter( 'wp_sync_transport_client_config', array( $this, 'filter_transport_client_config' ), 10, 2 );
 			add_action( 'enqueue_block_editor_assets', array( $this, 'enqueue_editor_assets' ) );
@@ -304,7 +283,6 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Plugin' ) ) {
 			// registered (misconfiguration degrades to the first engine).
 			$engines[] = new WP_Yjs_Server_Engine( $storage );
 			$engines[] = new WP_Intent_Log_Engine( $storage );
-			$engines[] = new WP_De_RTC_Engine( $storage );
 			return $engines;
 		}
 
@@ -386,17 +364,15 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Plugin' ) ) {
 
 				/*
 				 * Plugin-owned client settings (the framework announcement
-				 * stays untouched): the de-rtc commit cadence dial, the
-				 * short-polling interval, and the slow awareness mode, all
+				 * stays untouched): the short-polling interval and the
+				 * slow awareness mode, both
 				 * stored in seconds and passed in milliseconds for the
 				 * client's timers.
 				 */
-				$commit_interval    = 0;
 				$polling_interval   = 0;
 				$awareness_interval = 0;
 				$awareness_channel  = 'sync';
 				if ( class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
-					$commit_interval    = (int) get_option( Gutenberg_Sync_Engines_Settings::DE_RTC_COMMIT_INTERVAL_OPTION, Gutenberg_Sync_Engines_Settings::DE_RTC_COMMIT_INTERVAL_DEFAULT );
 					$polling_interval   = Gutenberg_Sync_Engines_Settings::polling_interval();
 					$awareness_interval = Gutenberg_Sync_Engines_Settings::awareness_interval();
 					$awareness_channel  = Gutenberg_Sync_Engines_Settings::awareness_channel();
@@ -427,7 +403,6 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Plugin' ) ) {
 				);
 
 				$settings = array(
-					'deRtcCommitIntervalMs' => max( 0, $commit_interval ) * 1000,
 					'httpPollingIntervalMs' => max( 0, min( 25, $polling_interval ) ) * 1000,
 					'awarenessIntervalMs'   => $awareness_interval * 1000,
 					'awarenessChannel'      => $awareness_channel,
@@ -460,8 +435,8 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Plugin' ) ) {
 			$storage = gutenberg_sync_engines_storage();
 			$engines = new WP_Sync_Engine_Registry( $storage );
 			// The editor-side identity stamper serves every engine whose
-			// blocks carry `metadata.syncId` — intent-log and de-rtc.
-			if ( ! in_array( $engines->get_engine_slug_for_room( '' ), array( 'intent-log', 'de-rtc' ), true ) ) {
+			// blocks carry `metadata.syncId` — intent-log.
+			if ( 'intent-log' !== $engines->get_engine_slug_for_room( '' ) ) {
 				return;
 			}
 			$stamper = GUTENBERG_SYNC_ENGINES_PATH . 'includes/shared/sync-id.js';

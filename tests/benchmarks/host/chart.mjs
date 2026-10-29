@@ -246,7 +246,7 @@ svg text { fill: var(--text-secondary); font-size: 12px; }
 <script>
 const DATA = ${ json };
 const $ = ( id ) => document.getElementById( id );
-const ENGINES = [ 'intent-log', 'yjs-server', 'de-rtc' ];
+const ENGINES = [ 'intent-log', 'yjs-server' ];
 const PHASES = [ [ 'editing', 'editing', '' ], [ 'idle', 'idle', '6 5' ] ];
 
 const median = ( values ) => {

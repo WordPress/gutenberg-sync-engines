@@ -10,11 +10,6 @@
  * transport at teardown. The default config ignores `websocket-only/` so
  * these specs run only here.
  *
- * (The old y-websocket PEER-relay fixture lane — the test WS provider
- * plugin plus `rtc-test-ws-sync-server.mjs` — only demonstrated
- * client-merging engines and none remains; both live engines are
- * server-authoritative, which is exactly what the real daemon exercises.)
- *
  * External dependencies
  */
 import { spawnSync } from 'node:child_process';

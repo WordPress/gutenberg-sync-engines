@@ -15,7 +15,7 @@ import type { SyncManager } from './types';
  * follow the announcement.
  */
 export interface SyncEngineAdapter {
-	/** Engine slug, matching the server engine's slug (e.g. 'yjs-relay'). */
+	/** Engine slug, matching the server engine's slug (e.g. 'yjs-server'). */
 	slug: string;
 
 	/**
@@ -73,20 +73,6 @@ export function registerSyncEngine( adapter: SyncEngineAdapter ): void {
 }
 
 /**
- * The built-in engine adapters.
- *
- * @return Default adapters, keyed by slug.
- */
-function getDefaultEngineAdapters(): SyncEngineAdapter[] {
-	// The framework ships NO built-in engines. Both the Yjs relay and the
-	// intent-log engine live in the Gutenberg Sync Engines plugin, which
-	// registers them through `registerSyncEngine`. Without that plugin the
-	// registry is empty and RTC stays disabled (the server announces no engine
-	// and the client resolves none).
-	return [];
-}
-
-/**
  * Type guard for filter return values.
  *
  * @param adapter Candidate adapter.
@@ -114,11 +100,9 @@ export function getEngineAdapters(): Record< string, SyncEngineAdapter > {
 	}
 
 	/**
-	 * Filter the available sync engine adapters. The base list is the
-	 * built-ins plus any registered imperatively via `registerSyncEngine`.
+	 * Filter the adapters registered through `registerSyncEngine`.
 	 */
 	const filtered: unknown = applyFilters( 'sync.engines', [
-		...getDefaultEngineAdapters(),
 		...registeredEngineAdapters,
 	] );
 
@@ -174,8 +158,7 @@ export function getAnnouncedSync(): AnnouncedSync | null {
  *   surface this as "collaboration unavailable" and WordPress's regular
  *   post locking takes over (the same posture as collaboration disabled).
  *
- * The framework registers no engines itself; adapters come from an engine
- * plugin via `registerSyncEngine`. Without one, this always returns null.
+ * Adapters register through `registerSyncEngine` before editor startup.
  *
  * @return The adapter to use, or null on engine mismatch.
  */

@@ -767,19 +767,6 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Advisory_Presence' ) ) {
 			if ( $reset ) {
 				// phpcs:ignore WordPress.NamingConventions.ValidHookName.UseUnderscores, WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- Query Monitor's debug hook.
 				do_action( 'qm/debug', "wp-sync: room {$room} reset to the saved post (empty room, on {$reason})" );
-
-				/**
-				 * Fires after a per-post room was reset because nobody was in
-				 * it. Engines that keep state outside the room's rows (de-rtc's
-				 * canonical options row) forget it here.
-				 *
-				 * @since 0.0.1
-				 *
-				 * @param string $room   The room name.
-				 * @param string $reason 'join' (a new tab found the room empty)
-				 *                       or 'leave' (the last tab left).
-				 */
-				do_action( 'gutenberg_sync_engines_room_reset', $room, $reason );
 			}
 			return $reset;
 		}

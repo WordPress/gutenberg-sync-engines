@@ -13,7 +13,6 @@ import type {
 	EngineUpdate,
 } from '../../sync';
 import { ConnectionError, ConnectionErrorCode } from '../../framework';
-import type { TransportSessionCodec } from '../session-extensions';
 import {
 	installSyncDebug,
 	isSyncDebugEnabled,
@@ -361,7 +360,7 @@ function restartRoom(
 	generation: string,
 	updates: EngineUpdate[]
 ): void {
-	const session = state.session as TransportSessionCodec;
+	const session = state.session;
 	let decision: 'rebootstrap' | 'disconnect' = 'rebootstrap';
 	try {
 		decision = session.onRoomRestart?.( updates ) ?? 'rebootstrap';

@@ -14,15 +14,15 @@
   },
   "vary": [
     {
-      "engine": [ "intent-log", "yjs-server", "de-rtc" ],
+      "engine": [ "intent-log", "yjs-server" ],
       "windows": [ 1, 2, 3 ]
     },
     {
-      "engine": [ "intent-log", "yjs-server", "de-rtc" ],
+      "engine": [ "intent-log", "yjs-server" ],
       "postSize": [ "empty", "medium", "large" ]
     },
     {
-      "engine": [ "intent-log", "yjs-server", "de-rtc" ],
+      "engine": [ "intent-log", "yjs-server" ],
       "pattern": [ "own-paragraph", "new-blocks" ]
     }
   ],

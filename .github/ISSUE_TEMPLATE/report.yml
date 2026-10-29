@@ -59,7 +59,6 @@ body:
         - Not sure
         - intent-log
         - yjs-server
-        - de-rtc
         - It happens on more than one
     validations:
       required: false

@@ -141,13 +141,6 @@ export interface SyncReviewItem {
 	 */
 	targetId?: string;
 	/**
-	 * The target block's TOP-LEVEL index in the document, for engines
-	 * whose review items address blocks positionally rather than by a
-	 * persistent identity (e.g. de-rtc contests). A UI anchor of last
-	 * resort: `targetId` wins when both are present.
-	 */
-	targetIndex?: number;
-	/**
 	 * For a parked NEW-block proposal (insert_block): the block it would
 	 * create, its readable content, and where it would land — so the
 	 * editor can render it inline at that position for approval (the block

@@ -23,7 +23,7 @@ import { test, expect } from '../config/collaboration-fixtures';
  * "keep": the room lives on as a shared working copy, and a reload lands
  * on the unsaved edits.
  */
-const ENGINES = [ 'intent-log', 'yjs-server', 'de-rtc' ] as const;
+const ENGINES = [ 'intent-log', 'yjs-server' ] as const;
 
 const SAVED_PARAGRAPH =
 	'<!-- wp:paragraph -->\n<p>Saved paragraph</p>\n<!-- /wp:paragraph -->';

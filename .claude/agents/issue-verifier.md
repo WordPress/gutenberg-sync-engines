@@ -31,8 +31,7 @@ costs one cycle, a wrong PASS puts something false in the record.
    - anything under `gutenberg/`
    - the frozen code: `src/engines/intent-log/**` other than additive
      work in `client.js`, its PHP twin under
-     `includes/engines/intent-log/`, `includes/engines/de-rtc/merge-core.php`,
-     `includes/lib/y-php/**`, `includes/lib/automerge-php/**`, or the
+     `includes/engines/intent-log/`, `includes/lib/y-php/**`, or the
      meaning of any test vector
    - a change to the shape of anything sent over the wire or stored
    - a test deleted or weakened to get a pass

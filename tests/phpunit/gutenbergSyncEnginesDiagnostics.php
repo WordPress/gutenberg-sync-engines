@@ -109,12 +109,11 @@ class Tests_Collaboration_GutenbergSyncEnginesDiagnostics extends WP_UnitTestCas
 		return array(
 			'rooms' => array(
 				array(
-					'room'           => 'postType/post:' . self::$post_id,
-					'updates'        => $updates,
-					'end_cursor'     => 7,
-					'should_compact' => false,
-					'total_updates'  => 7,
-					'awareness'      => array( '10001' => array( 'name' => 'Test Client' ) ),
+					'room'          => 'postType/post:' . self::$post_id,
+					'updates'       => $updates,
+					'end_cursor'    => 7,
+					'total_updates' => 7,
+					'awareness'     => array( '10001' => array( 'name' => 'Test Client' ) ),
 				),
 			),
 		);
@@ -174,7 +173,6 @@ class Tests_Collaboration_GutenbergSyncEnginesDiagnostics extends WP_UnitTestCas
 		$this->assertSame( 1, $row['awareness_count'] );
 		$this->assertSame( 7, $row['total_updates'] );
 		$this->assertSame( 200, $row['status'] );
-		$this->assertFalse( $row['should_compact'] );
 		$this->assertGreaterThanOrEqual( 0, $row['ms'] );
 		$this->assertGreaterThanOrEqual( 1, $row['concurrent'] );
 		$this->assertGreaterThan( 0, $row['peak_memory'] );
@@ -423,25 +421,6 @@ class Tests_Collaboration_GutenbergSyncEnginesDiagnostics extends WP_UnitTestCas
 		$this->assertGreaterThan( 0, $rows[0]['total_ms'] );
 	}
 
-	public function test_tagged_autosave_route_is_logged() {
-		// De-rtc commits travel through the ordinary autosave endpoint, so
-		// a client that tags one (the host benchmark tags commit-shaped
-		// autosaves) opts it into the log; untagged autosaves stay out.
-		$untagged = new WP_REST_Request( 'POST', '/wp/v2/posts/' . self::$post_id . '/autosaves' );
-		$this->simulate_dispatch( $untagged, array() );
-		$this->assertSame( array(), Gutenberg_Sync_Engines_Request_Log::fetch_rows() );
-
-		$tagged = new WP_REST_Request( 'POST', '/wp/v2/posts/' . self::$post_id . '/autosaves' );
-		$tagged->set_header( 'X-RTC-Test', '1' );
-		$tagged->set_header( 'X-RTC-Scenario', 'host-editing' );
-		$this->simulate_dispatch( $tagged, array( 'id' => self::$post_id ) );
-
-		$rows = Gutenberg_Sync_Engines_Request_Log::fetch_rows();
-		$this->assertCount( 1, $rows );
-		$this->assertSame( 'host-editing', $rows[0]['scenario'] );
-		$this->assertSame( 0, $rows[0]['rooms'] );
-		$this->assertSame( 0, $rows[0]['updates_in'] );
-	}
 
 	public function test_report_text_includes_baseline_ratio() {
 		foreach ( array( 'baseline', 'baseline', 'editing' ) as $scenario ) {

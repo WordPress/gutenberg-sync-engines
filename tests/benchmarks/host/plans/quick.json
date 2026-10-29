@@ -12,9 +12,7 @@
     "idleSeconds": 30,
     "pollingInterval": 0
   },
-  "vary": [
-    { "engine": [ "intent-log", "yjs-server", "de-rtc" ], "windows": [ 1, 2 ] }
-  ],
+  "vary": [ { "engine": [ "intent-log", "yjs-server" ], "windows": [ 1, 2 ] } ],
   "repeat": 2,
   "seed": 1
 }

@@ -36,7 +36,7 @@ import { SECOND_USER } from '../../../gutenberg/test/e2e/specs/editor/collaborat
  * creates a fresh post, so each room's engine lineage matches the flip.
  */
 
-const ENGINES = [ 'intent-log', 'yjs-server', 'de-rtc' ] as const;
+const ENGINES = [ 'intent-log', 'yjs-server' ] as const;
 
 const TEST_IMAGE_PATH = path.join(
 	__dirname,
@@ -376,35 +376,6 @@ for ( const engine of ENGINES ) {
 				page2.keyboard.type( 'Group paragraph rewritten by B' ),
 				page1.keyboard.type( ' plus A' ),
 			] );
-
-			if ( 'de-rtc' === engine ) {
-				/*
-				 * Under de-rtc, a STRUCTURAL edit truly concurrent with a
-				 * text edit in the SAME top-level block (B's insertion into
-				 * column one while A types in column two) is a by-design
-				 * escalation, not a merge — whole-content proposals park
-				 * the conflict for human review (the engine's own
-				 * review-lane spec exercises that path). Let the concurrent
-				 * TEXT edits settle first so this scenario certifies
-				 * nested-structure sync within the engine's merge contract.
-				 */
-				await expect
-					.poll( () => editor.getBlocks(), { timeout: 15_000 } )
-					.toMatchObject( [
-						{
-							innerBlocks: [
-								{
-									attributes: {
-										content:
-											'Group paragraph rewritten by B',
-									},
-								},
-							],
-						},
-						{},
-					] );
-				await collaborationUtils.waitForConvergence();
-			}
 
 			// B also inserts a NEW paragraph inside column one (nested
 			// insertion, not just nested text edits).

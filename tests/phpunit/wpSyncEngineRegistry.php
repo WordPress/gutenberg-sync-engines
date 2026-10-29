@@ -114,6 +114,20 @@ class Tests_Collaboration_WpSyncEngineRegistry extends WP_Test_REST_TestCase {
 		delete_option( 'wp_sync_engine' );
 	}
 
+	public function test_removed_engine_is_unavailable_and_existing_room_is_preserved() {
+		update_option( 'wp_sync_engine', 'de-rtc' );
+		$room    = 'postType/post:' . self::$post_id;
+		$storage = new WP_Sync_Table_Storage();
+		$storage->set_room_engine( $room, 'de-rtc' );
+		$registry = new WP_Sync_Engine_Registry( $storage );
+		$this->assertNull( $registry->get_engine( 'de-rtc' ) );
+		$this->assertNotContains( 'de-rtc', $registry->get_engine_slugs() );
+		$this->assertSame( 'yjs-server', $registry->get_engine_slug_for_room( $room ) );
+		$response = rest_get_server()->dispatch( $this->build_request() );
+		$this->assertErrorResponse( 'rest_sync_engine_mismatch', $response, 409 );
+		$this->assertSame( 'de-rtc', $storage->get_room_engine( $room ) );
+	}
+
 	public function test_registry_accepts_engines_from_filter_and_room_override() {
 		$stub = $this->createStub( 'WP_Sync_Engine' );
 		$stub->method( 'get_slug' )->willReturn( 'stub-engine' );

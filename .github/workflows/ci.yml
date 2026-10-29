@@ -85,8 +85,7 @@ jobs:
         uses: ./.github/actions/setup
 
       # phpcs and the y-php conformance suite run on the runner's PHP
-      # directly (no WordPress). The automerge-php suite does NOT — see
-      # its step below.
+      # directly (no WordPress).
       - name: Set up PHP for phpcs and y-php
         uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2.37.2
         with:
@@ -109,52 +108,6 @@ jobs:
         run: |
           composer --working-dir=includes/lib/y-php install --no-progress
           composer --working-dir=includes/lib/y-php test
-
-      # The vendored automerge-php library's own conformance suite:
-      # ported upstream Automerge JS/Rust tests (680 mapped). Needs no
-      # Composer install (hand-rolled runner). The runner exits non-zero
-      # on any failing test; keep its report visible either way.
-      #
-      # It runs in the official php image, NOT on setup-php's PHP. Its
-      # grapheme-cluster paths need the fixed GB11 rules of PCRE2 >= 10.43,
-      # and that is a property of the PCRE2 library PHP links, not of the
-      # PHP version: PHP 8.4 bundles 10.44, but distro-style builds link
-      # the system libpcre2 — 10.42 on Ubuntu 24.04 — and setup-php's
-      # Ubuntu packages started doing exactly that on 2026-09-03 (same
-      # PHP 8.4.25, two tests newly failing: two adjacent emoji-ZWJ
-      # sequences counted as ONE \X cluster). The official image is built
-      # against the bundled PCRE2. The guard turns any regression of that
-      # assumption into a message naming the cause instead of two cryptic
-      # test failures.
-      - name: automerge-php conformance
-        env:
-          PHP_IMAGE: php:8.4-cli
-        run: |
-          docker run --rm "$PHP_IMAGE" php -r '
-            $pcre = PCRE_VERSION_MAJOR . "." . PCRE_VERSION_MINOR;
-            printf( "PHP %s, PCRE2 %s, mbstring %s\n", PHP_VERSION, PCRE_VERSION, extension_loaded( "mbstring" ) ? "on" : "OFF" );
-            if ( version_compare( $pcre, "10.43", "<" ) || ! extension_loaded( "mbstring" ) ) {
-              echo "automerge-php conformance needs PCRE2 >= 10.43 (GB11 grapheme rules) and mbstring; pick an image whose PHP is built against the bundled PCRE2.\n";
-              exit( 1 );
-            }
-          '
-          status=0
-          docker run --rm -v "$PWD:/app" -w /app "$PHP_IMAGE" \
-            php includes/lib/automerge-php/tests/run.php > automerge-conformance.json || status=$?
-          php -r '
-            $report = json_decode( (string) file_get_contents( "automerge-conformance.json" ), true );
-            if ( ! is_array( $report ) ) {
-              echo "Runner produced no JSON report:\n";
-              echo file_get_contents( "automerge-conformance.json" ), "\n";
-              exit( 1 );
-            }
-            printf( "passing=%d failing=%d (%s%%)\n", $report["passingTests"] ?? -1, $report["failingTests"] ?? -1, $report["passPercent"] ?? "?" );
-          '
-          if [ "$status" -ne 0 ]; then
-            echo "=== failing tests ==="
-            grep -B 8 '"passed": false' automerge-conformance.json || true
-          fi
-          exit "$status"
 
       # Tests target the dedicated tests environment (.wp-env.tests.json)
       # — the default .wp-env.json is the dev environment, whose afterStart
@@ -201,8 +154,6 @@ jobs:
             label: intent-log
           - engine: yjs-server
             label: yjs-server
-          - engine: de-rtc
-            label: de-rtc
           - engine: none
             label: engine-neutral
     steps:

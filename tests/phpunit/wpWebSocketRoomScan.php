@@ -1,12 +1,6 @@
 <?php
 /**
- * Tests for the WebSocket daemon's out-of-band room scan: rows that land
- * through WEB requests (a de-rtc autosave commit, a healing lane) must
- * reach websocket subscribers even though no socket message touches the
- * room. Found by the post-inversion de-rtc/websocket fuzz: every seed
- * failed to converge because the daemon only pushed rows in reaction to
- * socket messages, and the announce inversion moved the entire de-rtc
- * content flow out-of-band.
+ * Rows accepted by an HTTP worker must reach WebSocket subscribers.
  *
  * @package Gutenberg
  *
@@ -65,7 +59,7 @@ class Tests_Collaboration_WpWebSocketRoomScan extends WP_UnitTestCase {
 		);
 		$room    = 'postType/post:' . $post_id;
 
-		update_option( 'wp_sync_engine', WP_De_RTC_Engine::SLUG );
+		update_option( 'wp_sync_engine', WP_Intent_Log_Engine::SLUG );
 		try {
 			$storage = new WP_Sync_Table_Storage();
 			$sync    = new WP_HTTP_Polling_Sync_Server( $storage );
@@ -110,24 +104,26 @@ class Tests_Collaboration_WpWebSocketRoomScan extends WP_UnitTestCase {
 				)
 			);
 
-			// An OUT-OF-BAND write: a de-rtc commit accepted through the
-			// web process (the autosave endpoint drives this same engine
-			// seam) — no socket message touches the daemon.
-			$engine = new WP_De_RTC_Engine( new WP_Sync_Table_Storage() );
-			$edited = str_replace( 'original', 'edited', self::GENESIS_CONTENT );
+			$engine = new WP_Intent_Log_Engine( new WP_Sync_Table_Storage() );
 			$result = $engine->handle_updates(
 				$room,
 				9,
 				$cursor,
 				array(
 					array(
-						'type' => WP_De_RTC_Engine::UPDATE_TYPE_PROPOSAL,
+						'type' => WP_Intent_Log_Engine::UPDATE_TYPE_INTENT,
 						'data' => wp_json_encode(
 							array(
-								'proposalId'      => 'p-oob-1',
-								'baseVersion'     => 'v1',
-								'proposedContent' => $edited,
-								'clientUpdate'    => null,
+								'intentId' => 'i-oob-1',
+								'actorId'  => 'ignored',
+								'txnId'    => null,
+								'baseSeq'  => 0,
+								'type'     => 'set_property',
+								'payload'  => array(
+									'name'            => 'title',
+									'value'           => 'Updated over HTTP',
+									'observedVersion' => 0,
+								),
 							)
 						),
 					),
@@ -148,12 +144,12 @@ class Tests_Collaboration_WpWebSocketRoomScan extends WP_UnitTestCase {
 			$tick->setAccessible( true );
 			$tick->invoke( $server );
 
-			// The subscriber received the accepted commit's announce.
+			// The subscriber received the accepted edit.
 			$this->assertNotEmpty( $conn->sent, 'The room scan must push out-of-band rows.' );
 			$payload = json_decode( $conn->sent[0], true );
 			$this->assertSame( 'sync', $payload['type'] );
 			$types = array_column( $payload['rooms'][0]['updates'], 'type' );
-			$this->assertContains( WP_De_RTC_Engine::UPDATE_TYPE_ANNOUNCE, $types );
+			$this->assertContains( WP_Intent_Log_Engine::UPDATE_TYPE_INTENT, $types );
 
 			// The scan advanced the daemon's cursor: a second tick with
 			// nothing new pushes nothing.

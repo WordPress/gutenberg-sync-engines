@@ -516,10 +516,7 @@ if ( ! class_exists( 'WP_HTTP_Polling_Sync_Server' ) ) {
 			 * delivers them and moves its cursor, so nothing is delivered
 			 * twice or skipped. Reading from past the head still refreshes
 			 * the storage's cursor cache (`end_cursor` is the head this
-			 * write produced, which the client waits for on the stream) and
-			 * still returns what an engine synthesizes for this client and
-			 * never stores (de-rtc's fetch answer). The same far-cursor read
-			 * is what WP_De_RTC_Autosave_Commits uses to mark a cursor.
+			 * write produced, which the client waits for on the stream).
 			 */
 			$read_cursor = ! empty( $room_request['rows_received_separately'] ) ? self::READ_FROM_HEAD : $cursor;
 

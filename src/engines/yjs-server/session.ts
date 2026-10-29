@@ -13,8 +13,6 @@ import type {
 	EngineUpdate,
 } from '../../sync';
 import { applyServerAwarenessStates } from '../../shared/awareness-sync';
-import { SyncUpdateType } from '../../providers/http-polling/types';
-import type { TransportSessionExtensions } from '../../providers/session-extensions';
 import {
 	base64ToUint8Array,
 	createSyncUpdate,
@@ -53,22 +51,6 @@ export const YJS_SERVER_SNAPSHOT_TYPE = 'snapshot';
 const RESYNC_REQUIRED_REASON = 'resync-required';
 
 /**
- * The yjs-server session codec: EngineSessionCodec plus the transport
- * capabilities this engine declares.
- */
-export interface YjsServerSessionCodec
-	extends EngineSessionCodec,
-		Pick< TransportSessionExtensions, 'onRoomRestart' > {
-	/*
-	 * No `sendsWhileAlone`: when the advisory channel says this tab is
-	 * alone, the polling manager holds this engine's queued updates in the
-	 * browser. A collaborator arriving, a save (flushHeldUpdates, through
-	 * the entity sync adapter's beforeSave), or the tab going hidden
-	 * releases them. Only de-rtc declares the capability.
-	 */
-}
-
-/**
  * Options for creating a yjs-server session codec.
  */
 export interface YjsServerSessionOptions {
@@ -91,10 +73,7 @@ export interface YjsServerSessionOptions {
  * @param doc The Yjs document.
  */
 function createFullStateUpdate( doc: Y.Doc ): EngineUpdate {
-	return createSyncUpdate(
-		Y.encodeStateAsUpdateV2( doc ),
-		SyncUpdateType.UPDATE
-	);
+	return createSyncUpdate( Y.encodeStateAsUpdateV2( doc ), 'update' );
 }
 
 /**
@@ -112,7 +91,7 @@ function createFullStateUpdate( doc: Y.Doc ): EngineUpdate {
  */
 export function createYjsServerSessionCodec(
 	options: YjsServerSessionOptions
-): YjsServerSessionCodec {
+): EngineSessionCodec {
 	const { doc } = options;
 	const awareness = options.awareness ?? new Awareness( doc );
 
@@ -139,7 +118,7 @@ export function createYjsServerSessionCodec(
 		}
 
 		localUpdateListener?.(
-			createSyncUpdate( update, SyncUpdateType.UPDATE ),
+			createSyncUpdate( update, 'update' ),
 			update.byteLength
 		);
 	}
@@ -168,7 +147,7 @@ export function createYjsServerSessionCodec(
 				return;
 			}
 
-			case SyncUpdateType.UPDATE: {
+			case 'update': {
 				Y.applyUpdateV2(
 					doc,
 					base64ToUint8Array( update.data ),
@@ -188,10 +167,8 @@ export function createYjsServerSessionCodec(
 		clientId: doc.clientID,
 		engineSlug: YJS_SERVER_ENGINE_SLUG,
 		engineProtocol: YJS_SERVER_ENGINE_PROTOCOL,
-		// The server compacts by itself and never nominates a client, so
-		// the optional compaction members are omitted. Unknown-outcome
-		// recovery re-sends full state; the server stores only what it was
-		// actually missing.
+		// Recovery from an unknown outcome re-sends full state. The server
+		// stores only what it was missing.
 		createRecoveryUpdate: () => createFullStateUpdate( doc ),
 		destroy() {
 			if ( isDocListenerAttached ) {
@@ -236,7 +213,7 @@ export function createYjsServerSessionCodec(
 			}
 			const update = Y.encodeStateAsUpdateV2( doc );
 			localUpdateListener(
-				createSyncUpdate( update, SyncUpdateType.UPDATE ),
+				createSyncUpdate( update, 'update' ),
 				update.byteLength
 			);
 		},

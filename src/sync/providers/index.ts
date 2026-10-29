@@ -20,7 +20,7 @@ let providerCreators: ProviderCreator[] | null = null;
 /**
  * Transports registered imperatively through the private API
  * `registerSyncTransport` (used by the engines plugin), merged with the
- * built-ins and any `sync.transports` filter additions during negotiation.
+ * `sync.transports` filter additions during negotiation.
  */
 const registeredTransports: TransportRegistration[] = [];
 
@@ -44,29 +44,16 @@ export function registerSyncTransport(
 }
 
 /**
- * The framework ships NO built-in transports. Transports live in an engines/
- * transports plugin (the Gutenberg Sync Engines plugin), which registers them
- * via `registerSyncTransport` (or the `sync.transports` filter). Without such a
- * plugin the list is empty and no connection is negotiated.
- *
- * @return {TransportRegistration[]} Built-in transports (none).
- */
-function getDefaultTransports(): TransportRegistration[] {
-	return [];
-}
-
-/**
  * The registered client transports, filterable by plugins.
  *
  * @return {TransportRegistration[]} Registered transports.
  */
 function getRegisteredTransports(): TransportRegistration[] {
 	const registered: unknown = applyFilters( 'sync.transports', [
-		...getDefaultTransports(),
 		...registeredTransports,
 	] );
 	if ( ! Array.isArray( registered ) ) {
-		return getDefaultTransports();
+		return [];
 	}
 	return registered.filter(
 		( t ): t is TransportRegistration =>

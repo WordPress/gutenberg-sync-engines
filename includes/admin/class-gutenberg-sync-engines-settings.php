@@ -62,25 +62,6 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
 		const DELIVERY_WEBSOCKET         = 'websocket';
 
 		/**
-		 * Option storing the de-rtc commit cadence in SECONDS. 0 commits
-		 * whenever edits settle (pseudo-realtime); unset means
-		 * DE_RTC_COMMIT_INTERVAL_DEFAULT, the Distributed Editing vision's
-		 * operating point.
-		 *
-		 * @since 0.3.0
-		 * @var string
-		 */
-		const DE_RTC_COMMIT_INTERVAL_OPTION = 'gutenberg_sync_engines_de_rtc_commit_interval';
-
-		/**
-		 * The de-rtc commit cadence in seconds when none is set.
-		 *
-		 * @since 0.0.1
-		 * @var int
-		 */
-		const DE_RTC_COMMIT_INTERVAL_DEFAULT = 10;
-
-		/**
 		 * Option storing the HTTP short-polling interval in SECONDS: how
 		 * often a tab asks the server for changes while collaborating
 		 * without an advisory channel covering every peer. Unset (or 0,
@@ -254,7 +235,6 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
 			$choices = array(
 				'intent-log' => __( 'Intent log', 'gutenberg-sync-engines' ),
 				'yjs-server' => __( 'Yjs server', 'gutenberg-sync-engines' ),
-				'de-rtc'     => __( 'DE-RTC', 'gutenberg-sync-engines' ),
 			);
 
 			/**
@@ -280,7 +260,6 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
 			$descriptions = array(
 				'intent-log' => __( 'The server combines everyone\'s changes. When two people change the same thing, it sets the change aside for someone to review. The cheapest engine to run, and the default.', 'gutenberg-sync-engines' ),
 				'yjs-server' => __( 'The server combines changes automatically, even when two people change the same thing: the later change wins and nobody is told. Two people can type in the same sentence. It costs the most per edit.', 'gutenberg-sync-engines' ),
-				'de-rtc'     => __( 'Each editor sends the whole post and names the version it started from. The server merges it into the current version, block by block. When two people change the same block, it sets that block aside for someone to review. Scripts and plugins that save a post join the merge too.', 'gutenberg-sync-engines' ),
 			);
 
 			/**
@@ -530,17 +509,6 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
 			);
 			register_setting(
 				self::PAGE,
-				self::DE_RTC_COMMIT_INTERVAL_OPTION,
-				array(
-					'type'              => 'integer',
-					'description'       => __( 'DE-RTC send interval in seconds, 0 to 300 (0 = after every pause in typing)', 'gutenberg-sync-engines' ),
-					'sanitize_callback' => array( $this, 'sanitize_commit_interval' ),
-					'show_in_rest'      => true,
-					'default'           => self::DE_RTC_COMMIT_INTERVAL_DEFAULT,
-				)
-			);
-			register_setting(
-				self::PAGE,
 				self::AWARENESS_INTERVAL_OPTION,
 				array(
 					'type'              => 'integer',
@@ -586,18 +554,6 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
 		public static function polling_interval(): int {
 			$value = (int) get_option( self::POLLING_INTERVAL_OPTION, self::POLLING_INTERVAL_DEFAULT );
 			return $value > 0 ? min( 25, $value ) : self::POLLING_INTERVAL_DEFAULT;
-		}
-
-		/**
-		 * Sanitizes the de-rtc commit cadence: whole seconds, 0-300.
-		 *
-		 * @since 0.3.0
-		 *
-		 * @param mixed $value Submitted value.
-		 * @return int Cadence in seconds.
-		 */
-		public function sanitize_commit_interval( $value ): int {
-			return max( 0, min( 300, (int) $value ) );
 		}
 
 		/**
@@ -663,7 +619,6 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
 			add_settings_section( 'gutenberg_sync_engines_main', '', '__return_null', self::PAGE );
 			$fields = array(
 				array( 'wp_sync_engine', __( 'Sync engine', 'gutenberg-sync-engines' ), 'render_engine_field' ),
-				array( self::DE_RTC_COMMIT_INTERVAL_OPTION, __( 'DE-RTC commit cadence', 'gutenberg-sync-engines' ), 'render_commit_interval_field' ),
 				array( self::DELIVERY_FIELD, __( 'Transport', 'gutenberg-sync-engines' ), 'render_delivery_field' ),
 				array( self::ADVISORY_WEBSOCKET_URL_OPTION, __( 'WebSocket advisory server', 'gutenberg-sync-engines' ), 'render_advisory_websocket_url_field' ),
 				array( self::WEBSOCKET_URL_OPTION, __( 'WebSocket transport server', 'gutenberg-sync-engines' ), 'render_websocket_url_field' ),
@@ -711,26 +666,6 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
 					)
 				);
 			}
-
-			// Shown only while DE-RTC is the engine: its commits travel
-			// through the autosave endpoint, so the transport's job shrinks.
-			printf(
-				'<p class="description" id="%1$s-de-rtc-note">%2$s</p><script>( function () {
-					var note   = document.getElementById( %3$s );
-					var select = document.getElementById( "wp_sync_engine" );
-					if ( ! note || ! select ) {
-						return;
-					}
-					var toggle = function () {
-						note.style.display = "de-rtc" === select.value ? "" : "none";
-					};
-					select.addEventListener( "change", toggle );
-					toggle();
-				} )();</script>',
-				esc_attr( self::DELIVERY_FIELD ),
-				esc_html__( 'When using the DE-RTC sync engine, the transport only carries peer presence information.', 'gutenberg-sync-engines' ),
-				wp_json_encode( self::DELIVERY_FIELD . '-de-rtc-note' )
-			);
 		}
 
 		/**
@@ -752,52 +687,6 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
 				)
 			);
 			$this->show_row_for( self::POLLING_INTERVAL_OPTION, array( self::DELIVERY_POLLING, self::DELIVERY_POLLING_WEBRTC, self::DELIVERY_POLLING_WEBSOCKET ) );
-		}
-
-		/**
-		 * Renders the de-rtc commit cadence field.
-		 *
-		 * @since 0.3.0
-		 *
-		 * @return void
-		 */
-		public function render_commit_interval_field(): void {
-			$value = (int) get_option( self::DE_RTC_COMMIT_INTERVAL_OPTION, self::DE_RTC_COMMIT_INTERVAL_DEFAULT );
-			printf(
-				'<input type="number" min="0" max="300" step="1" name="%1$s" id="%1$s" value="%2$d" class="small-text" /> %3$s<p class="description">%4$s</p>',
-				esc_attr( self::DE_RTC_COMMIT_INTERVAL_OPTION ),
-				(int) $value,
-				esc_html__( 'seconds', 'gutenberg-sync-engines' ),
-				wp_kses(
-					__( 'How often an editor sends its changes to the server under DE-RTC, 0 to 300 seconds. Other people do not see an edit until it is sent, so this setting, not the polling interval, decides how soon they see it. <code>0</code> sends after every pause in typing.', 'gutenberg-sync-engines' ),
-					array( 'code' => array() )
-				)
-			);
-
-			/*
-			 * The dial only applies to de-rtc: HIDE its row (live, following
-			 * the engine select) rather than disable the input — a disabled
-			 * input drops out of the POST and saving under another engine
-			 * would silently reset the stored cadence. A hidden row still
-			 * submits, so the value survives engine round-trips. Without JS
-			 * the row simply stays visible.
-			 */
-			printf(
-				'<script>( function () {
-					var input  = document.getElementById( %1$s );
-					var select = document.getElementById( "wp_sync_engine" );
-					if ( ! input || ! select ) {
-						return;
-					}
-					var row    = input.closest( "tr" );
-					var toggle = function () {
-						row.style.display = "de-rtc" === select.value ? "" : "none";
-					};
-					select.addEventListener( "change", toggle );
-					toggle();
-				} )();</script>',
-				wp_json_encode( self::DE_RTC_COMMIT_INTERVAL_OPTION )
-			);
 		}
 
 		/**
