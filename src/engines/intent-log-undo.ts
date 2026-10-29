@@ -12,7 +12,7 @@ import type {
 } from './intent-log/engine-types';
 import type { IntentLogSession } from './intent-log-session';
 // eslint-disable-next-line import/no-unresolved -- Provided at runtime as wp.sync.
-import type { SyncUndoManager, SyncUndoStackState } from '@wordpress/sync';
+import type { SyncUndoManager, SyncUndoStackState } from '../sync';
 
 /*
  * Collaborative undo for the intent log: INVERSE INTENTS.

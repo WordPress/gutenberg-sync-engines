@@ -361,10 +361,9 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Plugin' ) ) {
 		 * collaboration is enabled, plus the intent-log block-identity stamper
 		 * when intent-log is the active engine.
 		 *
-		 * The bundle registers this plugin's engine adapters and transport
-		 * providers with the framework (`wp.sync`) at load time, so the client
-		 * can supply whichever engine the server announces. Without it the
-		 * framework has no engines or transports and RTC stays disabled.
+		 * The bundle owns its engine adapters and transports and registers one
+		 * entity provider with core-data. The server selects the engine. If
+		 * this bundle is missing, the editor returns to standard post locking.
 		 *
 		 * The stamper fills `metadata.syncId` for blocks that lack one and
 		 * re-mints duplicates directly in the editor store, making block
@@ -405,10 +404,19 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Plugin' ) ) {
 
 				// Slow awareness over Heartbeat rides the advisory channel's
 				// discovery probe and needs wp.heartbeat on the page.
-				$dependencies = isset( $meta['dependencies'] ) ? $meta['dependencies'] : array();
+				$dependencies   = isset( $meta['dependencies'] ) ? $meta['dependencies'] : array();
+				$dependencies[] = 'wp-sync'; // Supplies the shared Yjs instance.
 				if ( $awareness_interval > 0 && 'heartbeat' === $awareness_channel ) {
 					$dependencies[] = 'heartbeat';
 				}
+
+				// Select the entity provider before core-data evaluates. A failed
+				// plugin load must not start Gutenberg's different sync protocol.
+				wp_add_inline_script(
+					'wp-core-data',
+					'window._wpEntitySyncProvider = "gutenberg-sync-engines";',
+					'before'
+				);
 
 				wp_enqueue_script(
 					'gutenberg-sync-engines',

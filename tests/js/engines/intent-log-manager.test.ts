@@ -87,7 +87,7 @@ import type {
 	EngineUpdate,
 	ProviderCreator,
 	RecordHandlers,
-} from '@wordpress/sync';
+} from '../../../src/sync';
 
 /**
  * A capturing fake transport provider: records the codec it received and

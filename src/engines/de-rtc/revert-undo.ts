@@ -4,7 +4,7 @@
 // eslint-disable-next-line @wordpress/no-unsafe-wp-apis -- The exact serializer the doc bridge and core-data use; sharing it keeps revert content byte-consistent.
 import { __unstableSerializeAndClean } from '@wordpress/blocks';
 // eslint-disable-next-line import/no-unresolved -- Provided at runtime as wp.sync.
-import type { SyncUndoManager } from '@wordpress/sync';
+import type { SyncUndoManager } from '../../sync';
 
 /**
  * Internal dependencies

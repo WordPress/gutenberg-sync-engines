@@ -13,7 +13,7 @@ import type {
 	EngineEntity,
 	ObjectData,
 	SyncEngine,
-} from '@wordpress/sync';
+} from '../../sync';
 
 /**
  * Internal dependencies
@@ -32,6 +32,7 @@ import { createYjsDoc, markEntityAsSaved, serializeCrdtDoc } from './doc';
 import { docContainsSnapshot, encodeDocSnapshot } from './snapshot';
 import { createUndoManager } from './undo';
 import { registerAwareness } from '../../awareness/registry';
+import { applySemanticPrototype } from '../../debug/semantic-prototype';
 import {
 	createYjsServerSessionCodec,
 	YJS_SERVER_ENGINE_PROTOCOL,
@@ -129,7 +130,18 @@ export function createYjsServerEngine(): SyncEngine {
 				isSave: boolean
 			) => {
 				ydoc.transact( () => {
-					syncConfig.applyChangesToCRDTDoc( ydoc, changes );
+					if (
+						applySemanticPrototype(
+							ydoc,
+							changes,
+							`${ objectType }:${ objectId }`
+						)
+					) {
+						const { blocks: _blocks, ...otherChanges } = changes;
+						syncConfig.applyChangesToCRDTDoc( ydoc, otherChanges );
+					} else {
+						syncConfig.applyChangesToCRDTDoc( ydoc, changes );
+					}
 					if ( isSave ) {
 						markEntityAsSaved( ydoc );
 					}

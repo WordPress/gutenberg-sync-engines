@@ -7,7 +7,7 @@ import apiFetch from '@wordpress/api-fetch';
  * Internal dependencies
  */
 // eslint-disable-next-line import/no-unresolved -- Provided at runtime as wp.sync.
-import type { EngineDisposition, EngineUpdate } from '@wordpress/sync';
+import type { EngineDisposition, EngineUpdate } from '../../sync';
 
 /*
  * The Save/Sync inversion's commit carrier, client half: de-rtc sessions

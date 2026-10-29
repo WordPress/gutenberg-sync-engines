@@ -16,7 +16,7 @@ import {
 	DE_RTC_SNAPSHOT_TYPE,
 } from '../../../../src/engines/de-rtc/session';
 // eslint-disable-next-line import/no-unresolved -- Provided at runtime as wp.sync.
-import type { SyncConfig } from '@wordpress/sync';
+import type { SyncConfig } from '../../../../src/sync';
 import {
 	createDeRtcRecord,
 	type DeRtcRecord,

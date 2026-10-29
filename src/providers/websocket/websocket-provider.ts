@@ -11,7 +11,7 @@ import type {
 	EngineSessionCodec,
 	ProviderCreator,
 	ProviderCreatorResult,
-} from '@wordpress/sync';
+} from '../../sync';
 import { websocketManager } from './websocket-manager';
 
 interface ProviderOptions {

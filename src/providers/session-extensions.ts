@@ -2,7 +2,7 @@
  * Internal dependencies
  */
 // eslint-disable-next-line import/no-unresolved -- Provided at runtime as wp.sync.
-import type { EngineSessionCodec, EngineUpdate } from '@wordpress/sync';
+import type { EngineSessionCodec, EngineUpdate } from '../sync';
 
 /**
  * What a session wants the transport to do after the server restarted the

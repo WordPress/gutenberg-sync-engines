@@ -12,7 +12,7 @@ import {
 	type IntentLogSession,
 } from '../../../src/engines/intent-log-session';
 import { createIntentLogUndoManager } from '../../../src/engines/intent-log-undo';
-import type { EngineUpdate } from '@wordpress/sync';
+import type { EngineUpdate } from '../../../src/sync';
 import {
 	createServer,
 	serverDocAt,

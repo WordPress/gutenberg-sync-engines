@@ -8,7 +8,7 @@ import * as buffer from 'lib0/buffer';
  * WordPress dependencies
  */
 // eslint-disable-next-line import/no-unresolved -- Provided at runtime as wp.sync.
-import type { CRDTDoc } from '@wordpress/sync';
+import type { CRDTDoc } from '../../sync';
 
 /**
  * Internal dependencies

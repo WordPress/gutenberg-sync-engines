@@ -52,7 +52,7 @@ import type {
 	RecordHandlers,
 	SyncConfig,
 	SyncManager,
-} from '@wordpress/sync';
+} from '../sync';
 
 /*
  * The intent-log SyncManager: the engine adapter surface core-data drives,

@@ -20,7 +20,7 @@ import {
 	setDeRtcBurstQuietMsForTesting,
 } from '../../../../src/engines/de-rtc/session';
 // eslint-disable-next-line import/no-unresolved -- Provided at runtime as wp.sync.
-import type { SyncConfig } from '@wordpress/sync';
+import type { SyncConfig } from '../../../../src/sync';
 
 // The doc bridge serializes/parses through the editor's block library
 // (wp.blocks at runtime). The codec treats content as an opaque string, so

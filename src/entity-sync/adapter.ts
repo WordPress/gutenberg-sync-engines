@@ -1,13 +1,12 @@
 /**
  * Internal dependencies
  */
-import type { EntitySyncManager } from '../../gutenberg/packages/core-data/src/entity-sync';
+import type { EntitySyncManager } from '@wordpress/core-data';
 
 /**
- * Add plugin transport flushing to Gutenberg's engine bridge. Keeping that
- * bridge preserves each engine's snapshots, undo metadata, and editor UI.
+ * Flush plugin transport updates before completing a save.
  *
- * @param base  The bridge supplied by the vendored core-data package.
+ * @param base  The plugin-owned entity manager.
  * @param flush Send held transport updates before a regular save.
  * @return The plugin's entity sync manager.
  */
@@ -17,6 +16,16 @@ export function createEntitySyncAdapter(
 ): EntitySyncManager {
 	let stopped = false;
 	return {
+		onEditorAction: base.onEditorAction
+			? ( change ) => {
+					if ( ! stopped ) {
+						base.onEditorAction?.( change );
+					}
+			  }
+			: undefined,
+		get services() {
+			return stopped ? undefined : base.services;
+		},
 		shouldSync: ( ...args ) => base.shouldSync?.( ...args ) !== false,
 		load( ...args ) {
 			stopped = false;

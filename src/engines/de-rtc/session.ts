@@ -12,7 +12,7 @@ import type {
 	EngineLocalUpdateListener,
 	EngineSessionCodec,
 	EngineUpdate,
-} from '@wordpress/sync';
+} from '../../sync';
 import {
 	applyServerAwarenessStates,
 	createAwarenessDoc,

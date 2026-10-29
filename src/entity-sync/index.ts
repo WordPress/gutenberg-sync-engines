@@ -2,7 +2,7 @@
  * WordPress dependencies
  */
 // eslint-disable-next-line import/no-unresolved -- Supplied by the bundled wp-core-data script.
-import { privateApis } from '@wordpress/core-data';
+import { privateApis, type EntitySyncContext } from '@wordpress/core-data';
 import { __ } from '@wordpress/i18n';
 
 /**
@@ -10,6 +10,7 @@ import { __ } from '@wordpress/i18n';
  */
 import { unlock } from '../lock-unlock';
 import { createEntitySyncAdapter } from './adapter';
+import { createPluginEntitySyncManager } from './manager';
 import { flushHeldUpdates } from '../providers/http-polling/polling-manager';
 
 /** Send held updates without leaving a save waiting forever. */
@@ -43,15 +44,20 @@ export function registerPluginEntitySync(): () => void {
 	if ( ! globalThis.window?.__experimentalEnableRealTimeCollaboration ) {
 		return () => {};
 	}
-	const { registerEntitySyncManager, createDefaultEntitySyncManager } =
-		unlock( privateApis );
-	const manager = createEntitySyncAdapter(
-		createDefaultEntitySyncManager(),
-		flushBeforeSave
+	const { registerEntitySyncProvider } = unlock( privateApis );
+	let manager: ReturnType< typeof createEntitySyncAdapter > | undefined;
+	const unregister = registerEntitySyncProvider(
+		'gutenberg-sync-engines',
+		( context: EntitySyncContext ) => {
+			manager = createEntitySyncAdapter(
+				createPluginEntitySyncManager( context ),
+				flushBeforeSave
+			);
+			return manager;
+		}
 	);
-	const unregister = registerEntitySyncManager( manager );
 	return () => {
 		unregister();
-		manager.unloadAll();
+		manager?.unloadAll();
 	};
 }

@@ -8,7 +8,7 @@ import type {
 	EngineEntity,
 	SyncEngine,
 	SyncReviewSource,
-} from '@wordpress/sync';
+} from '../../sync';
 
 /**
  * Internal dependencies

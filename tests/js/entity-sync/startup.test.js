@@ -6,27 +6,31 @@ import {
 	getEntitySyncManager,
 	registerEntitySyncManager,
 } from '../../../gutenberg/packages/core-data/src/entity-sync';
-import { privateApis } from '@wordpress/core-data';
-import { privateApis as syncApis } from '@wordpress/sync';
+import * as syncApis from '../../../src/framework';
+import { createPluginEntitySyncManager } from '../../../src/entity-sync/manager';
 import { flushHeldUpdates } from '../../../src/providers/http-polling/polling-manager';
 
 jest.mock(
 	'@wordpress/core-data',
 	() => ( {
 		privateApis: {
-			registerEntitySyncManager: jest.requireActual(
-				'../../../gutenberg/packages/core-data/src/entity-sync'
-			).registerEntitySyncManager,
-			createDefaultEntitySyncManager: jest.fn(),
+			registerEntitySyncProvider: jest.fn( ( _name, create ) =>
+				jest
+					.requireActual(
+						'../../../gutenberg/packages/core-data/src/entity-sync'
+					)
+					.registerEntitySyncManager( create( {} ) )
+			),
 		},
 	} ),
 	{ virtual: true }
 );
-jest.mock( '@wordpress/sync', () => ( {
-	privateApis: {
-		registerSyncEngine: jest.fn(),
-		registerSyncTransport: jest.fn(),
-	},
+jest.mock( '../../../src/framework', () => ( {
+	registerSyncEngine: jest.fn(),
+	registerSyncTransport: jest.fn(),
+} ) );
+jest.mock( '../../../src/entity-sync/manager', () => ( {
+	createPluginEntitySyncManager: jest.fn(),
 } ) );
 jest.mock( '../../../src/lock-unlock', () => ( {
 	unlock: ( value ) => value,
@@ -70,7 +74,7 @@ beforeEach( () => {
 		unloadAll: jest.fn(),
 		beforeSave: jest.fn(),
 	};
-	privateApis.createDefaultEntitySyncManager.mockReturnValue( base );
+	createPluginEntitySyncManager.mockReturnValue( base );
 } );
 afterEach( () => {
 	const manager = getEntitySyncManager();
@@ -99,7 +103,7 @@ it( 'registers the adapter from normal startup after all engines and transports'
 	expect(
 		Math.max( ...syncApis.registerSyncTransport.mock.invocationCallOrder )
 	).toBeLessThan(
-		privateApis.createDefaultEntitySyncManager.mock.invocationCallOrder[ 0 ]
+		createPluginEntitySyncManager.mock.invocationCallOrder[ 0 ]
 	);
 	await manager.beforeSave(
 		'postType',
@@ -116,7 +120,7 @@ it( 'does not register when collaboration is disabled', () => {
 	window.__experimentalEnableRealTimeCollaboration = false;
 	const cleanup = registerPluginEntitySync();
 	expect( getEntitySyncManager() ).toBeUndefined();
-	expect( privateApis.createDefaultEntitySyncManager ).not.toHaveBeenCalled();
+	expect( createPluginEntitySyncManager ).not.toHaveBeenCalled();
 	cleanup();
 } );
 

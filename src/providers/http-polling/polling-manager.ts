@@ -57,7 +57,7 @@ import type {
 	ConnectionStatus,
 	EngineDisposition,
 	EngineSessionCodec,
-} from '@wordpress/sync';
+} from '../../sync';
 import type { TransportSessionCodec } from '../session-extensions';
 import {
 	installSyncDebug,

@@ -134,7 +134,7 @@ browser's review panel applies those rules; the route does not.
 
 ## Adding an engine or a transport
 
-An engine is two pieces, registered through one filter on each side:
+An engine has server and browser implementations:
 
 - A PHP class implementing `WP_Sync_Engine`
   (`gutenberg/lib/experimental/collaboration/interface-wp-sync-engine.php`):
@@ -142,9 +142,9 @@ An engine is two pieces, registered through one filter on each side:
   `handle_updates`, `get_updates_since`. Register it on the
   `wp_sync_engines` filter.
 - A JavaScript `SyncEngine`
-  (`gutenberg/packages/sync/src/engines/engine.ts`): `createEntity`,
+  (`src/sync/engines/engine.ts`): `createEntity`,
   `createCollection`, and the optional `createUndoManager` and `review`.
-  Register it with `registerSyncEngine`, as `src/index.ts` does.
+  Register it with the plugin's `registerSyncEngine`, as `src/index.ts` does.
 - Give a new room its starting field values from
   `WP_Sync_Post_Genesis_Props`, and register a benchmark profile on
   `wp_sync_bench_authoring_profiles` (`tests/benchmarks/README.md`).
@@ -152,7 +152,13 @@ An engine is two pieces, registered through one filter on each side:
 A transport is a `WP_Sync_Transport` (`get_slug`,
 `get_protocol_version`, `register_routes`) on the `wp_sync_transports`
 filter, plus a provider factory registered with
-`registerSyncTransport`. The two stream transports, which reuse the
+the plugin's `registerSyncTransport`. The two stream transports, which reuse the
 polling manager and change only how rows are received, are the model.
 Every filter and action the plugin offers:
 `grep -rn "apply_filters\|do_action" includes`.
+
+## Editor integration
+
+The plugin selects `gutenberg-sync-engines` in `window._wpEntitySyncProvider` before core-data loads. Its single `registerEntitySyncProvider` registration supplies the entity manager in `src/entity-sync/manager.ts`. The factory receives Gutenberg's record configuration and callbacks for remote edits, selection restoration, and connection state. Record loads, edits, saves, undo, snapshot reads, and completed block-editor actions all use that selected provider. Another provider is never started as a fallback when the selected one is missing.
+
+The optional `onEditorAction` callback observes accepted reducer actions with the owning registry and the before/after states. It must only capture evidence; it must not write back into the editor synchronously. The development history fixture receives these callbacks through the plugin. It does not register a second Gutenberg observer. Engine translation still checks the entity, block identity, and old text, and uses the existing comparison when a change is unsupported.

@@ -24,6 +24,8 @@ a usage block in its header.
   against the real plugin instead of the test stand-in.
 - `dump-yjs-room-blocks.php`, `trace-yjs-room-rows.php` — yjs-server
   session inspection helpers for WP-CLI.
+- [Editing-action capture prototype](../js/semantic-capture/README.md) —
+  isolated Gutenberg action capture and targeted Yjs text application.
 
 ## Typing by yourself in a second window
 

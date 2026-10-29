@@ -3,7 +3,7 @@
  */
 import { createHttpPollingProvider } from '../http-polling/http-polling-provider';
 import { setSseMode } from '../http-polling/polling-manager';
-import type { ProviderCreator } from '@wordpress/sync';
+import type { ProviderCreator } from '../../sync';
 
 /** Use the same send queue, recovery, presence, and cursor handling as polling. */
 export function createSseProvider(): ProviderCreator {

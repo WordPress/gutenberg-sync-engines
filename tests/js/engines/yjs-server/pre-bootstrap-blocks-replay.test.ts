@@ -17,7 +17,7 @@ import {
 	CRDT_STATE_MAP_VERSION_KEY as VERSION_KEY,
 } from '../../../../src/engines/yjs-server/constants';
 // eslint-disable-next-line import/no-unresolved -- Provided at runtime as wp.sync.
-import type { SyncConfig } from '@wordpress/sync';
+import type { SyncConfig } from '../../../../src/sync';
 
 // The framework's real post merge, loaded from the subtree source so the
 // test runs the merge the editor runs. Loaded loosely typed: a typed import

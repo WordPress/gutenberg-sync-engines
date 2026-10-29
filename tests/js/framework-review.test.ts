@@ -38,7 +38,7 @@ import type {
 	SyncEngine,
 	SyncReviewItem,
 	SyncReviewSource,
-} from '@wordpress/sync';
+} from '../../src/sync';
 
 const flushMicrotasks = () => Promise.resolve().then( () => {} );
 

@@ -6,7 +6,7 @@ import type {
 	EngineDisposition,
 	EngineUpdate,
 	LocalAwarenessState,
-} from '@wordpress/sync';
+} from '../../sync';
 
 export type { AwarenessState, LocalAwarenessState };
 

@@ -34,7 +34,8 @@ shared editing session.
 - `src/` — client TypeScript; `src/index.ts` builds `build/sync-engines.js`
   with `@wordpress/sync` and `yjs` external: `engines/`, `shared/`,
   `providers/{http-polling,sse,sse-daemon,websocket,advisory}/`,
-  `awareness/`, `entity-sync/`, `framework.ts`, `debug/inspector.ts`.
+  `awareness/`, `entity-sync/`, `sync/` (plugin-owned manager and registries),
+  `framework.ts`, `debug/inspector.ts`.
 - `gutenberg/` — a squashed Git subtree of Gutenberg, source only,
   pinned by `gutenberg-pin.json` (`commit`, `trunk`, and `tree`, which
   must equal `git rev-parse HEAD:gutenberg`). The plugin loads it when

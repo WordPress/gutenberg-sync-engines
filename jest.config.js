@@ -32,6 +32,9 @@ module.exports = {
 	// `gutenberg/` carries thousands of the monorepo's own test files; without
 	// this restriction Jest would recurse into it and run (and fail) them.
 	roots: [ '<rootDir>/src', '<rootDir>/tests' ],
+	// The action-capture prototype uses the real block-editor store. Its
+	// wp.blocks dependency loads the ESM-only Markdown parser.
+	transformIgnorePatterns: [ 'node_modules/(?!marked/)' ],
 	// The frozen cross-language vector replay locates its fixture through
 	// `import.meta.url`; Jest runs CommonJS, so transform it away with the same
 	// plugin the framework's build uses. Overriding `transform` (rather than
@@ -73,7 +76,7 @@ module.exports = {
 			FRAMEWORK_MODULES,
 			'@wordpress/private-apis'
 		),
-		// The framework reads provider creators through the `sync.providers`
+		// The plugin reads provider creators through the `sync.providers`
 		// hook filter that the tests write to; both sides must share one hooks
 		// registry (the single wp.hooks at runtime).
 		'^@wordpress/hooks$': path.join(

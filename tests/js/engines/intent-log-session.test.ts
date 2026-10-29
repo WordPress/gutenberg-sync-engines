@@ -11,7 +11,7 @@ import {
 	INTENT_LOG_UPDATE_TYPES,
 	type IntentLogSession,
 } from '../../../src/engines/intent-log-session';
-import type { EngineUpdate } from '@wordpress/sync';
+import type { EngineUpdate } from '../../../src/sync';
 // The engine core is the same code the deterministic simulator validates;
 // its in-memory server is the vector-pinned twin of WP_Intent_Log_Engine.
 import {

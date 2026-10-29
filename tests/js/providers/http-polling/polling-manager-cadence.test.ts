@@ -9,7 +9,7 @@ import {
 	it,
 	jest,
 } from '@jest/globals';
-import type { EngineSessionCodec } from '@wordpress/sync';
+import type { EngineSessionCodec } from '../../../../src/sync';
 
 /**
  * The cadence rules of docs/transports.md, with the signaling

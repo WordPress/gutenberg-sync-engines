@@ -1,33 +1,11 @@
 /**
- * Client entry: registers this plugin's sync ENGINES and TRANSPORTS into the
- * collaborative-editing framework shipped by Gutenberg (`@wordpress/sync`).
- *
- * The framework exposes its registration surface through UNLOCKABLE PRIVATE
- * APIs. This plugin unlocks them with the shared consent string and adds:
- *   - engine adapters (intent-log, yjs-server) via
- *     `registerSyncEngine`
- *   - transport providers (http-polling, sse, websocket) via
- *     `registerSyncTransport`
- *
- * With this plugin inactive the framework registers nothing, so a session
- * finds no engine/transport to negotiate and the editor falls back to the
- * classic post lock — real-time collaboration effectively disabled.
- *
- * Core-data receives record loads, edits, saves and cleanup through the
- * entity adapter registered below. The bundled bridge preserves each engine's
- * snapshots, undo metadata, connection status and conflict-review handlers.
+ * Register plugin engines and transports, then connect the selected engine
+ * to Gutenberg through its entity provider interface.
  */
-
-/**
- * WordPress dependencies
- */
-// eslint-disable-next-line import/no-unresolved -- Provided at runtime as wp.sync.
-import { privateApis } from '@wordpress/sync';
-
 /**
  * Internal dependencies
  */
-import { unlock } from './lock-unlock';
+import { registerSyncEngine, registerSyncTransport } from './framework';
 import { createIntentLogEngineAdapter } from './engines/intent-log-adapter';
 import { createYjsServerEngineAdapter } from './engines/yjs-server-adapter';
 import { createDeRtcEngineAdapter } from './engines/de-rtc-adapter';
@@ -37,8 +15,6 @@ import { createSseProvider } from './providers/sse/sse-provider';
 import { createSseDaemonProvider } from './providers/sse-daemon/sse-daemon-provider';
 import { bootstrapSlowAwareness } from './awareness';
 import { registerPluginEntitySync } from './entity-sync';
-
-const { registerSyncEngine, registerSyncTransport } = unlock( privateApis );
 
 // Engines: how concurrent edits merge.
 registerSyncEngine( createIntentLogEngineAdapter() );

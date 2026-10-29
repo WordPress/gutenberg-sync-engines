@@ -6,7 +6,7 @@ import apiFetch from '@wordpress/api-fetch';
 /**
  * Internal dependencies
  */
-import type { ProviderCreator } from '@wordpress/sync';
+import type { ProviderCreator } from '../../sync';
 import { createSseProvider } from '../sse/sse-provider';
 import {
 	setSseAuthProvider,

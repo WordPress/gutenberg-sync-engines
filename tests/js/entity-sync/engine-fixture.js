@@ -1,60 +1,39 @@
-// @ts-nocheck
 /**
  * Internal dependencies
  */
 import { createEntitySyncAdapter } from '../../../src/entity-sync/adapter';
+import { createPluginEntitySyncManager } from '../../../src/entity-sync/manager';
 
-// Use the real vendored bridge with a supplied engine and a small store.
+/**
+ * Supply editor callbacks while running the real plugin entity manager.
+ * @param {Object}                                                                             root0                 Dependencies.
+ * @param {import("../../../src/sync").SyncManager}                                            root0.manager         Engine manager.
+ * @param {(kind: string, name: string) => import("../../../src/sync").SyncConfig | undefined} root0.getSyncConfig   Config getter.
+ * @param {() => Promise<void>}                                                                root0.flushBeforeSave Save flush.
+ */
 export function createEngineAdapter( {
 	manager,
 	getSyncConfig,
 	flushBeforeSave,
 } ) {
-	const root = '../../../gutenberg/packages/core-data/src/';
-	let createDefaultEntitySyncManager;
-	jest.isolateModules( () => {
-		jest.doMock( '@wordpress/sync', () => ( {
-			privateApis: {
-				resolveEngineAdapter: () => ( {
-					createManager: () => manager,
-				} ),
-				LOCAL_EDITOR_ORIGIN: 'gutenberg',
-				LOCAL_UNDO_IGNORED_ORIGIN: 'gutenberg-undo-ignored',
-			},
-		} ) );
-		jest.doMock( root + 'lock-unlock', () => ( {
-			unlock: ( value ) => value,
-		} ) );
-		jest.doMock( root + 'entities', () => ( {
-			DEFAULT_ENTITY_KEY: 'id',
-		} ) );
-		jest.doMock( root + 'utils/crdt', () => ( {
-			POST_META_KEY_FOR_CRDT_DOC_PERSISTENCE: '_crdt_document',
-			getRawValue: ( value ) =>
-				typeof value === 'string' ? value : value?.raw,
-		} ) );
-		jest.doMock( root + 'utils/crdt-selection', () => ( {} ) );
-		jest.doMock( root + 'utils/save-crdt-doc', () => ( {
-			saveCRDTDoc: jest.fn(),
-		} ) );
-		jest.doMock( root + 'sync-review', () => ( {
-			createSyncReviewHandlers: () => ( {} ),
-		} ) );
-		( { createDefaultEntitySyncManager } = jest.requireActual(
-			root + 'sync'
-		) );
-	} );
-	const data = {
-		select: () => ( {
-			getEntityConfig: ( kind, name ) => ( {
-				syncConfig: getSyncConfig( kind, name ),
-			} ),
-		} ),
-		dispatch: () => ( { setSyncConnectionStatus: () => {} } ),
-		resolveSelect: () => ( {} ),
-	};
 	return createEntitySyncAdapter(
-		createDefaultEntitySyncManager( data ),
+		createPluginEntitySyncManager(
+			{
+				getSyncConfig,
+				recordHandlers: ( _kind, _name, _id, handlers ) => ( {
+					...handlers,
+					onStatusChange: () => {},
+					persistCRDTDoc: () => {},
+					addUndoMeta: () => {},
+					restoreUndoMeta: () => {},
+				} ),
+				collectionHandlers: ( _kind, _name, handlers ) => ( {
+					...handlers,
+					onStatusChange: () => {},
+				} ),
+			},
+			() => manager
+		),
 		flushBeforeSave
 	);
 }

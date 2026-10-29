@@ -16,7 +16,7 @@ import {
 	CRDT_STATE_MAP_VERSION_KEY as VERSION_KEY,
 } from '../../../../src/engines/yjs-server/constants';
 // eslint-disable-next-line import/no-unresolved -- Provided at runtime as wp.sync.
-import type { SyncConfig } from '@wordpress/sync';
+import type { SyncConfig } from '../../../../src/sync';
 
 // The engine reads the block library only to carry a pre-bootstrap block
 // tree over (block registration is editor state, and the subtree's copy
@@ -135,6 +135,36 @@ describe( 'createYjsServerEngine › createEntity', () => {
 			'Live edit'
 		);
 	} );
+
+	it.each( [ true, false ] )(
+		'uses the prototype result (%s) without submitting blocks twice',
+		( accepted ) => {
+			const entity = makeEntity();
+			entity.hydrate( {} as any, jest.fn() );
+			entity.createSession().receiveUpdate( genesisRow() );
+			const apply = jest.fn( () => accepted );
+			window._gseSemanticPrototype = { apply };
+			const changes = { blocks: [], subtitle: 'Kept' };
+			try {
+				entity.applyLocalChanges( changes as any, 'editor', {
+					isSave: false,
+				} as any );
+				expect( apply ).toHaveBeenCalledWith(
+					expect.anything(),
+					changes,
+					'postType/post:1'
+				);
+				expect(
+					syncConfig.applyChangesToCRDTDoc
+				).toHaveBeenCalledTimes( 1 );
+				expect(
+					syncConfig.applyChangesToCRDTDoc.mock.calls[ 0 ][ 1 ]
+				).toEqual( accepted ? { subtitle: 'Kept' } : changes );
+			} finally {
+				delete window._gseSemanticPrototype;
+			}
+		}
+	);
 
 	it( 'surfaces remote changes through observers after bootstrap', () => {
 		const entity = makeEntity();

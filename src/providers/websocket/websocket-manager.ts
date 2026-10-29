@@ -11,7 +11,7 @@ import type {
 	ConnectionStatus,
 	EngineSessionCodec,
 	EngineUpdate,
-} from '@wordpress/sync';
+} from '../../sync';
 import { ConnectionError, ConnectionErrorCode } from '../../framework';
 import type { TransportSessionCodec } from '../session-extensions';
 import {

@@ -19,7 +19,7 @@ import type {
 	SyncUndoManager,
 	SyncUndoStackState,
 	// eslint-disable-next-line import/no-unresolved -- Provided at runtime as wp.sync.
-} from '@wordpress/sync';
+} from '../../sync';
 
 type UndoMetaHandlers = Pick<
 	RecordHandlers,
