@@ -1,138 +1,62 @@
-# Gutenberg sync engines
+# Gutenberg
 
-Pluggable real-time collaboration **engines** and **transports** for Gutenberg.
+[![End-to-End Tests](https://github.com/WordPress/gutenberg/workflows/End-to-End%20Tests/badge.svg)](https://github.com/WordPress/gutenberg/actions?query=workflow%3A%22End-to-End+Tests%22+branch%3Atrunk)
+[![Static Analysis (Linting, License, Type checks...)](<https://github.com/WordPress/gutenberg/workflows/Static%20Analysis%20(Linting,%20License,%20Type%20checks...)/badge.svg>)](https://github.com/WordPress/gutenberg/actions?query=workflow%3A%22Static+Analysis+%28Linting%2C+License%2C+Type+checks...%29%22+branch%3Atrunk)
+[![Unit Tests](https://github.com/WordPress/gutenberg/workflows/Unit%20Tests/badge.svg)](https://github.com/WordPress/gutenberg/actions?query=workflow%3A%22Unit+Tests%22+branch%3Atrunk)
+[![Create Block](https://github.com/WordPress/gutenberg/workflows/Create%20Block/badge.svg)](https://github.com/WordPress/gutenberg/actions?query=workflow%3A%22Create+Block%22+branch%3Atrunk)
 
-## What it provides
+<a href="https://wordpress.github.io/gutenberg/" target="_blank"><img src="https://raw.githubusercontent.com/storybooks/brand/master/badge/badge-storybook.svg" alt="Storybook Badge" /></a>
 
-Engines (how concurrent edits merge):
+[![lerna](https://img.shields.io/badge/maintained%20with-lerna-cc00ff.svg)](https://lerna.js.org)
 
-- **intent-log**: a server-authoritative log of typed intents; concurrent
-  edits merge by transform, genuine conflicts are set aside for review, and
-  no work is silently lost.
-- **yjs-server**: a server-authoritative CRDT: the vendored y-php library
-  merges every update into a canonical room document server-side, compacts
-  by itself, and materializes post content.
-- **de-rtc**: Distributed Editing's save-centric model: clients propose
-  whole content against a named base version, the server three-way-merges
-  every proposal. Genuine conflicts escalate instead of silently merging.
+![Screenshot of the Gutenberg Editor, editing a post in WordPress](https://user-images.githubusercontent.com/1204802/100067796-fc3e8700-2e36-11eb-993b-6b80b4310b87.png)
 
-Transports (how updates move):
+Welcome to the development hub for the WordPress Gutenberg project!
 
-- **http-polling**: short-poll `POST /wp-sync/v1/updates` (default).
-- **http-long-polling**: the same, held open until data is ready.
-- **websocket**: push over a persistent socket served by a bundled PHP
-  daemon (`wp collaboration sync-server`). For local dev, `npm run rtc:ws`
-  starts everything in one command (and `npm run rtc:http` switches back).
+"Gutenberg" is a codename for a whole new paradigm in WordPress site building and publishing that aims to revolutionize the entire publishing experience as much as Gutenberg did the printed word. Right now, the project is in the second phase of a four-phase process that will touch every piece of WordPress -- Editing, Customization, **Collaboration** (which includes [Real-time collaboration](https://make.wordpress.org/core/2023/07/03/real-time-collaboration/), [Asynchronous collaboration](https://make.wordpress.org/core/2023/07/04/workflows/), [Publishing flows](https://make.wordpress.org/core/2023/07/04/workflows/), [Post revisions interface](https://make.wordpress.org/core/2023/07/05/revisions/), [Admin design](https://make.wordpress.org/core/2023/07/12/admin-design/), [Library](https://make.wordpress.org/core/2023/07/10/block-library/)), and Multilingual -- and is focused on a new editing experience, the block editor.
 
-Storage (where a room's updates live):
+The block editor introduces a modular approach to pages and posts: each piece of content in the editor, from a paragraph to an image gallery to a headline, is its own block. And just like physical blocks, WordPress blocks can be added, arranged, and rearranged, allowing WordPress users to create media-rich pages in a visually intuitive way -- and without workarounds like shortcodes or custom HTML.
 
-- Two plugin-owned tables, `{prefix}sync_updates` (the update log) and
-  `{prefix}sync_room_meta` (lineage, awareness, engine bookkeeping),
-  substituted for Gutenberg's default post-meta storage. No collaboration
-  write touches post caches. On a site with a persistent object cache
-  (Redis, Memcached), who is present in a room is kept in the cache
-  rather than the database, the storage strategy the WordPress hosting
-  performance tests recommended; a poll that changes nothing writes
-  nothing. Activating the plugin creates the tables;
-  deactivating it leaves them and every room in place; deleting the
-  plugin (`uninstall.php`) or running `wp collaboration storage drop`
-  removes them. `wp collaboration storage status` shows what a site has.
+The block editor first became available in December 2018, and we're still hard at work refining the experience, creating more and better blocks, and laying the groundwork for the next three phases of work. The Gutenberg plugin gives you the latest version of the block editor, so you can join us in testing bleeding-edge features, start playing with blocks, and maybe get inspired to build your own.
 
-The active engine, and how editors get each other's changes (polling,
-polling with an advisory channel over WebRTC or a WebSocket, long
-polling, or WebSocket), are chosen on the plugin's **Settings →
-Collaboration** screen (or via `wp_sync_engine` / the
-`WP_COLLABORATION_TRANSPORT` config value).
+Check out the [Keeping up with Gutenberg Index](https://make.wordpress.org/core/handbook/references/keeping-up-with-gutenberg-index/).
 
-**Comparing the engines?** Start with [`docs/`](docs/README.md). The short
-answer and the full trade-off — scorecard, feature parity, resource shapes,
-and each engine's known gaps — live in
-[`docs/engine-comparison.md`](docs/engine-comparison.md); the transports are
-compared separately in [`docs/transports.md`](docs/transports.md). Both are
-deliberately number-free. Run `npm run bench` for a report of what the
-plugin adds to a server on your own hardware, and
-`npm run bench -- --suite=engines` for the full engine-decision numbers.
+## Getting Started
 
-## Architecture
+Get hands-on: check out the [block editor live demo](https://wordpress.org/gutenberg/) to play with a test instance of the editor.
 
-Both axes are independent registries with a client/server handshake: the
-server announces the active engine + transport, the client negotiates
-against what it has registered, and any mismatch degrades to a post lock
-rather than corruption. See Gutenberg's
-`prototypes/sync/ARCHITECTURE.md` for the full picture.
+### Using Gutenberg
 
-The plugin registers via:
+-   **Download:** To use the latest release of the Gutenberg plugin on your WordPress site: install from the plugins page in wp-admin, or [download from the WordPress.org plugins repository](https://wordpress.org/plugins/gutenberg/).
 
-- PHP: the `wp_sync_engines` and `wp_sync_transports` filters.
-- JS: `registerSyncEngine` / `registerSyncTransport`, unlocked from
-  `@wordpress/sync`'s private APIs.
+-   **User Documentation:** See the [WordPress Editor documentation](https://wordpress.org/documentation/article/wordpress-block-editor/) for detailed docs on using the editor as an author creating posts and pages.
 
-## Development
+-   **User Support:** If you have run into an issue, you should check the [Support Forums first](https://wordpress.org/support/forums/). The forums are a great place to get help. If you have a bug to report, please [submit it to the Gutenberg repository](https://github.com/wordpress/gutenberg/issues). Please search prior to creating a new bug to confirm it's not a duplicate.
 
-A modified copy of Gutenberg at runtime is vendored as a **git subtree** in
-`gutenberg/` and mounted by `.wp-env.json` so the local WordPress environment
-runs the exact Gutenberg the engines were built against. No separate checkout
-needed.
+### Developing for Gutenberg
 
-### Setup
+Extending and customizing is at the heart of the WordPress platform, this is no different for the Gutenberg project. The editor and future products can be extended by third-party developers using plugins.
 
-```bash
-composer install          # PHP tooling (PHPCS/WPCS, PHPUnit + polyfills)
-npm install               # JS tooling (@wordpress/scripts, wp-env, Playwright)
-npm run build             # Build this plugin's client bundle
+Review the [Quick Start Guide](https://developer.wordpress.org/block-editor/getting-started/quick-start-guide/) for the fastest way to get started extending the block editor. See the [Block Editor Handbook](https://developer.wordpress.org/block-editor/) for extensive tutorials, documentation, and API references. Also, check the [WordPress Developer Blog](https://developer.wordpress.org/blog/) for great articles about block development, among other topics.
 
-# Build the vendored Gutenberg.
-cd gutenberg && npm install --ignore-scripts && npm run build && cd ..
-```
+### Contribute to Gutenberg
 
-### Environment
+Gutenberg is an open-source project and welcomes all contributors from code to design, and from documentation to triage. The project is built by many contributors and volunteers, and we'd love your help building it.
 
-```bash
-npm run env start         # Start WordPress (Gutenberg subtree + this plugin)
-npm run env stop          # Stop it
-```
+See the [Contributors Handbook](https://developer.wordpress.org/block-editor/contributors/) for all the details on how you can contribute.
 
-Alternatively, try it using WordPress Playground. Note: On the official
-WordPress playground, every browser tab is its own WordPress site, so a second
-tab cannot join the first tab's editing session. Instead, use a local
-Playground instance:
+To get up and running quickly with **code contribution**, see [Getting Started With Code Contribution](/docs/contributors/code/getting-started-with-code-contribution.md). Also check out the other resources available on the [Code Contributions](/docs/contributors/code/README.md) page.
 
-```bash
-npm run playground
-```
+In whichever way you wish to contribute, please be sure to read the [Contributing Guidelines](https://github.com/WordPress/gutenberg/blob/HEAD/CONTRIBUTING.md) first.
 
-### Tests
+As with all WordPress projects, we want to ensure a welcoming environment for everyone. With that in mind, all contributors are expected to follow our [Code of Conduct](https://make.wordpress.org/handbook/community-code-of-conduct/).
 
-```bash
-npm run test:js           # Jest — engines/providers + frozen-core vectors
-npm run test:php          # PHPUnit in the wp-env tests container (loads the
-                          # Gutenberg subtree as the framework, then the plugin)
-npm run test:e2e          # Playwright — two-browser collaboration against the
-                          # running env (needs `npx playwright install chromium`)
-```
+## Get Involved
 
-### Benchmarks and tools
+You can join us in the `#core-editor` channel in Slack, see the [WordPress Slack page](https://make.wordpress.org/chat/) for signup information; it is free to join.
 
-- `tests/benchmarks/` — a server-side engine benchmark harness: it drives any
-  registered engine through the production ingest/read seam and reports
-  service-time percentiles, payload and storage growth, and (for intent-log)
-  merge-quality metrics; `compare.js` renders multiple runs side by side.
-  See `tests/benchmarks/README.md` for how to run it and how to read the
-  numbers.
-- `tests/benchmarks/transport/` — a transport experience benchmark: two real
-  browser clients measure edit-to-visible propagation latency and wire
-  traffic (editing + idle) per transport. See its README.
-- `tests/tools/` — Node CLI utilities: a long-running intent-log simulator
-  sweep (`node tests/tools/sweep.js`), a manual two-tab sync observer against
-  a live environment (`node tests/tools/observe-two-tab-sync.mjs`), and the
-  frozen-core test-vector generators.
+## License
 
-### Testing by yourself
+WordPress is free software, and is released under the terms of the GNU General Public License version 2 or (at your option) any later version. See [LICENSE.md](LICENSE.md) for complete license.
 
-If you need to test behavior by yourself, you can open a separate browser and use this script in the console.
-
-```
-(async () => { const { subscribe, select } = wp.data; const clientId = await new Promise((resolve) => { const initial = select('core/block-editor').getSelectedBlockClientId(); if (initial) { resolve(initial); return; } const unsubscribe = subscribe(() => { const id = select('core/block-editor').getSelectedBlockClientId(); if (id) { unsubscribe(); resolve(id); } }); }); const doc = document.querySelector('iframe[name="editor-canvas"]')?.contentDocument ?? document; const blockEl = doc.querySelector(`[data-block="${clientId}"]`); const editable = blockEl?.querySelector('[contenteditable="true"]') ?? blockEl; if (!editable) { console.warn('No editable element found for block', clientId); return; } editable.focus(); const sel = doc.defaultView.getSelection(); if (!sel.rangeCount || !editable.contains(sel.anchorNode)) { const r = doc.createRange(); r.selectNodeContents(editable); r.collapse(false); sel.removeAllRanges(); sel.addRange(r); } let i = 0; const intervalId = setInterval(() => { const char = String(i % 10); const keyInit = { key: char, code: `Digit${char}`, keyCode: 48 + Number(char), which: 48 + Number(char), bubbles: true, cancelable: true }; editable.dispatchEvent(new KeyboardEvent('keydown', keyInit)); const notCancelled = editable.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: char, bubbles: true, cancelable: true })); if (notCancelled) { const s = doc.defaultView.getSelection(); if (s.rangeCount) { const r = s.getRangeAt(0); r.deleteContents(); const t = doc.createTextNode(char); r.insertNode(t); r.setStartAfter(t); r.setEndAfter(t); s.removeAllRanges(); s.addRange(r); } editable.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data: char, bubbles: true })); } editable.dispatchEvent(new KeyboardEvent('keyup', keyInit)); i++; }, 60); window.__stopTyping = () => { clearInterval(intervalId); console.log('Stopped.'); }; console.log('Typing started on block', clientId, '— run window.__stopTyping() to stop.'); })();
-```
-
-It will keep typing and let you test different scenarios. You can stop it by entering `window.__stopTyping()` in the same console you ran the original command.
+<br/><br/><p align="center"><img src="https://s.w.org/style/images/codeispoetry.png?1" alt="Code is Poetry." /></p>

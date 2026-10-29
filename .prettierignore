@@ -1,25 +1,8 @@
-# This file replaces @wordpress/scripts' stock ignore file entirely, so it
-# must repeat the defaults (build, vendor) in addition to project entries.
+.cache
 build
+build-module
+build-types
+packages/block-serialization-spec-parser/parser.js
+packages/edit-site/lib
+packages/url/src/test/fixtures
 vendor
-package-lock.json
-composer.lock
-
-# Pinned Gutenberg subtree — formatted by its own tooling at the pin.
-gutenberg
-
-# Frozen cross-language intent-log core (byte-matched against its PHP twin
-# and JSON vectors); reformatting would break the contract.
-src/engines/intent-log
-
-# Vendored third-party code from the Yjs ecosystem.
-src/engines/yjs/y-utilities
-
-# Vendored y-php and automerge-php libraries (imported verbatim; they
-# carry their own style and configs, and must stay byte-identical to
-# their upstream pins).
-includes/lib/y-php
-includes/lib/automerge-php
-
-# Playwright e2e output.
-artifacts
