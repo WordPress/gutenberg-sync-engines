@@ -1320,7 +1320,7 @@ describe( 'crdt-blocks', () => {
 					createElement(
 						'div',
 						{ className: attributes.className },
-						attributes.content
+						attributes.content as string
 					),
 			} );
 		} );

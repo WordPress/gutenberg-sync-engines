@@ -18,8 +18,7 @@ import {
  * Adopt/Reject verbs in the panel, since they have no card to resolve at.
  */
 export default function CollaborationReviewPanel() {
-	const { postType, postId, items, clientIdByTarget, clientIdByIndex } =
-		useReviewData();
+	const { postType, postId, items, clientIdByTarget } = useReviewData();
 	const onResolve = useResolveReviewItems( postType, postId );
 	const { selectBlock, flashBlock } = useDispatch( blockEditorStore );
 
@@ -49,7 +48,6 @@ export default function CollaborationReviewPanel() {
 			{ groups.map( ( groupItems ) => {
 				const clientId = itemAnchorClientId( groupItems[ 0 ], {
 					clientIdByTarget,
-					clientIdByIndex,
 				} );
 				return (
 					<ReviewGroup

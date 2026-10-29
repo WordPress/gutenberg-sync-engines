@@ -30,7 +30,7 @@ if ( ! interface_exists( 'WP_Sync_Engine' ) ) {
 	 */
 	interface WP_Sync_Engine {
 		/**
-		 * Returns the unique engine slug, e.g. 'yjs-relay' or 'intent-log'.
+		 * Returns the unique engine slug, e.g. 'yjs-server' or 'intent-log'.
 		 *
 		 * The slug is part of the client handshake: clients refuse to join
 		 * rooms whose engine they cannot provide, and rooms are stamped with
@@ -101,7 +101,6 @@ if ( ! interface_exists( 'WP_Sync_Engine' ) ) {
 		 * @return array{
 		 *   end_cursor: int,
 		 *   room: string,
-		 *   should_compact: bool,
 		 *   total_updates: int,
 		 *   updates: array<int, array{data: string, type: string}>,
 		 * } Room response data (transport appends awareness).

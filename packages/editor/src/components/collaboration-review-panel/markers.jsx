@@ -206,8 +206,7 @@ function InsertionCard( { clientId, placement, item, onResolve, contentRef } ) {
  *                                  popover scroll coupling.
  */
 export default function CollaborationConflictMarkers( { contentRef } ) {
-	const { postType, postId, items, clientIdByTarget, clientIdByIndex } =
-		useReviewData();
+	const { postType, postId, items, clientIdByTarget } = useReviewData();
 	const onResolve = useResolveReviewItems( postType, postId );
 	const firstRootClientId = useSelect(
 		( select ) => select( blockEditorStore ).getBlockOrder()[ 0 ] ?? null,
@@ -250,7 +249,6 @@ export default function CollaborationConflictMarkers( { contentRef } ) {
 		}
 		const clientId = itemAnchorClientId( first, {
 			clientIdByTarget,
-			clientIdByIndex,
 		} );
 		if ( ! clientId ) {
 			continue;
