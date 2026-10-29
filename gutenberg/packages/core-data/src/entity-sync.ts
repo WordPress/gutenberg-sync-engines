@@ -1,3 +1,10 @@
+import type { StoreActionObserver } from '@wordpress/data';
+import type {
+	SyncManager,
+	SyncConfig,
+	RecordHandlers,
+	CollectionHandlers,
+} from '@wordpress/sync';
 import type { UndoManager } from '@wordpress/undo-manager';
 import warning from '@wordpress/warning';
 
@@ -108,7 +115,103 @@ export interface EntitySyncUndoManager extends UndoManager< EntitySyncRecord > {
 	stopCapturing?: () => void;
 }
 
+/** Read access and connection controls supplied by the selected provider. */
+export interface EntitySyncServices extends Pick<
+	SyncManager,
+	| 'getAwareness'
+	| 'getEntitySnapshot'
+	| 'entityContainsSnapshot'
+	| 'createPersistedCRDTDoc'
+> {
+	isAvailable?: () => boolean;
+	retry?: () => void;
+	resolveProposal?: (
+		objectType: string,
+		objectId: string | null,
+		proposalId: string,
+		resolution: 'restored' | 'dismissed'
+	) => void;
+	restoreProposal?: (
+		objectType: string,
+		objectId: string | null,
+		proposalId: string
+	) => void;
+}
+
+export interface SyncReviewItem {
+	/** The parked proposal's id (the escalated intent's intentId). */
+	id: string;
+	/** Groups rule-4 unit members (txnId, or the id for singletons). */
+	unitId: string;
+	/** Whether the current client authored the escalated edit. */
+	isLocal: boolean;
+	actorId: string;
+	reason: string;
+	intentType: string;
+	/** The lost content, when the intent type carries any. */
+	summary?: string;
+	/** Target-field excerpt captured at escalation time. */
+	excerpt?: string;
+	/**
+	 * The target block's engine identity (syncId), when the intent
+	 * addresses one — lets UI anchor the conflict to a block in the
+	 * editor. Absent for document-level intents (e.g. entity properties).
+	 */
+	targetId?: string;
+	/**
+	 * The target block's TOP-LEVEL index in the document, for engines
+	 * whose review items address blocks positionally rather than by a
+	 * persistent identity (e.g. de-rtc contests). A UI anchor of last
+	 * resort: `targetId` wins when both are present.
+	 */
+	targetIndex?: number;
+	/**
+	 * For a parked NEW-block proposal (insert_block): the block it would
+	 * create, its readable content, and where it would land — so the
+	 * editor can render it inline at that position for approval (the block
+	 * is not in the reviewer's canvas, so `targetId` cannot anchor it).
+	 */
+	proposedInsertion?: {
+		blockType?: string;
+		html: string;
+		afterSiblingId?: string;
+		parentId?: string;
+	};
+}
+
+export interface EntitySyncReviewHandlers {
+	onProposalsChange?: ( items: SyncReviewItem[] ) => void;
+	onEscalation?: ( event: {
+		isLocal: boolean;
+		proposalId: string;
+		summary?: string;
+	} ) => void;
+}
+
+/** Editor operations provided to a sync provider at registration. */
+export interface EntitySyncContext {
+	getSyncConfig: ( kind: string, name: string ) => SyncConfig | undefined;
+	recordHandlers: (
+		kind: string,
+		name: string,
+		id: EntitySyncRecordId,
+		handlers: EntitySyncRecordHandlers
+	) => RecordHandlers & EntitySyncReviewHandlers;
+	collectionHandlers: (
+		kind: string,
+		name: string,
+		handlers: EntitySyncCollectionHandlers
+	) => CollectionHandlers;
+}
+
 export interface EntitySyncManager {
+	readonly services?: EntitySyncServices;
+	/**
+	 * Completed block-editor actions, including their owning registry. Capture
+	 * only; callbacks must not dispatch synchronous editor changes.
+	 */
+	onEditorAction?: StoreActionObserver;
+
 	/**
 	 * Optional check that runs before a record is loaded. When this returns
 	 * false for a record, core-data does not call `load` for it and skips

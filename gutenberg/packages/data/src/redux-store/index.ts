@@ -9,6 +9,7 @@ import { lock } from '../lock-unlock';
 import promise from '../promise-middleware';
 import createResolversCacheMiddleware from '../resolvers-cache-middleware';
 import createThunkMiddleware from './thunk-middleware';
+import { createActionObserverMiddleware } from '../action-observers';
 import metadataReducer from './metadata/reducer';
 import * as metadataSelectors from './metadata/selectors';
 import * as metadataActions from './metadata/actions';
@@ -595,6 +596,7 @@ function instantiateReduxStore(
 		promise,
 		createReduxRoutineMiddleware( normalizedControls ),
 		createThunkMiddleware( thunkArgs ),
+		createActionObserverMiddleware( key, registry ),
 	];
 
 	const enhancers: StoreEnhancer[] = [ applyMiddleware( ...middlewares ) ];

@@ -1,4 +1,3 @@
-import { registerEntitySyncManager } from './entity-sync';
 import { useEntityRecordsWithPermissions } from './hooks/use-entity-records';
 import { RECEIVE_INTERMEDIATE_RESULTS } from './utils';
 import {
@@ -17,7 +16,7 @@ import {
 import { useIsDirty as useEntitiesSavedStatesIsDirty } from './components/entities-saved-states/hooks/use-is-dirty';
 import { lock } from './lock-unlock';
 import {
-	createDefaultEntitySyncManager,
+	registerEntitySyncProvider,
 	CRDT_AUTOSAVE_SNAPSHOT_KEY,
 	entityContainsSnapshot,
 	getEntitySnapshot,
@@ -29,7 +28,6 @@ import {
 } from './utils/crdt-user-selections';
 
 const lockedApis = {
-	registerEntitySyncManager,
 	EntitiesSavedStates,
 	EntitiesSavedStatesExtensible,
 	getTemplateInfo,
@@ -37,7 +35,7 @@ const lockedApis = {
 	useEntitiesSavedStatesIsDirty,
 	useEntityRecordsWithPermissions,
 	RECEIVE_INTERMEDIATE_RESULTS,
-	createDefaultEntitySyncManager,
+	registerEntitySyncProvider,
 	CRDT_AUTOSAVE_SNAPSHOT_KEY,
 	entityContainsSnapshot,
 	getEntitySnapshot,
@@ -55,3 +53,12 @@ export type CoreDataPrivateApis = typeof lockedApis;
 
 export const privateApis = {};
 lock( privateApis, lockedApis );
+
+export type {
+	EntitySyncContext,
+	EntitySyncManager,
+	EntitySyncRecord,
+	EntitySyncRecordId,
+	EntitySyncEditOptions,
+	EntitySyncBeforeSaveContext,
+} from './entity-sync';

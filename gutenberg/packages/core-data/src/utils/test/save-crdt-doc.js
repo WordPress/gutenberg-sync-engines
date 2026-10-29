@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import apiFetch from '@wordpress/api-fetch';
-import { getSyncManager } from '../../sync';
+import { getSyncServices } from '../../sync';
 import { saveCRDTDoc } from '../save-crdt-doc';
 
 vi.mock( '@wordpress/api-fetch' );
 vi.mock( '../../sync', () => ( {
-	getSyncManager: vi.fn(),
+	getSyncServices: vi.fn(),
 } ) );
 
 function createDeferred() {
@@ -31,7 +31,7 @@ describe( 'saveCRDTDoc', () => {
 		syncManager = {
 			createPersistedCRDTDoc: vi.fn(),
 		};
-		getSyncManager.mockReturnValue( syncManager );
+		getSyncServices.mockReturnValue( syncManager );
 	} );
 
 	it( 'saves the serialized CRDT document through the sync endpoint', async () => {

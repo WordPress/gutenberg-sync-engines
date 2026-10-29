@@ -212,3 +212,6 @@ export const use: any = defaultRegistry.use;
 export const register = (
 	store: StoreDescriptor< ReduxStoreConfig< any, any, any > >
 ): void => defaultRegistry.register( store );
+export { privateApis } from './private-apis';
+
+export type { StoreActionObserver } from './action-observers';

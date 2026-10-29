@@ -1,5 +1,10 @@
 import fastDeepEqual from 'fast-deep-equal/es6/index.js';
-import { dispatch, resolveSelect, select } from '@wordpress/data';
+import {
+	dispatch,
+	resolveSelect,
+	select,
+	privateApis as dataPrivateApis,
+} from '@wordpress/data';
 import {
 	privateApis as syncPrivateApis,
 	type ConnectionStatus,
@@ -9,6 +14,10 @@ import {
 	type Y,
 } from '@wordpress/sync';
 import {
+	registerEntitySyncManager,
+	getEntitySyncManager,
+	type EntitySyncServices,
+	type EntitySyncContext,
 	type EntitySyncBeforeSaveContext,
 	type EntitySyncCollectionHandlers,
 	type EntitySyncEditOptions,
@@ -31,12 +40,13 @@ import { saveCRDTDoc } from './utils/save-crdt-doc';
 
 const {
 	ConnectionErrorCode,
+	createSyncManager,
 	Delta,
 	CRDT_DOC_META_PERSISTENCE_KEY,
 	CRDT_RECORD_MAP_KEY,
 	LOCAL_EDITOR_ORIGIN,
 	LOCAL_UNDO_IGNORED_ORIGIN,
-	resolveEngineAdapter,
+	retrySyncConnection: retryDefaultSyncConnection,
 } = unlock( syncPrivateApis );
 
 export {
@@ -59,8 +69,6 @@ export {
 export const CRDT_AUTOSAVE_SNAPSHOT_KEY = 'crdt_snapshot';
 
 let syncManager: SyncManager;
-let engineMismatchWarned = false;
-let engineUnavailable = false;
 
 export function getSyncManager(): SyncManager | undefined {
 	if ( syncManager ) {
@@ -71,41 +79,9 @@ export function getSyncManager(): SyncManager | undefined {
 		return undefined;
 	}
 
-	/*
-	 * Engine handshake: the server announces the sync engine it speaks
-	 * (window._wpCollaborationSync) and enforces it per-request with a 409.
-	 * When this client cannot provide the announced engine at the announced
-	 * protocol version, do not create a sync manager at all — entity syncing
-	 * stays off. Callers observe this via isSyncEngineUnavailable() and must
-	 * flip collaborationSupported so WordPress's regular post locking
-	 * re-engages (without that flip the degraded state would be no sync AND
-	 * no lock: concurrent editors silently overwrite each other on save).
-	 */
-	const adapter = resolveEngineAdapter();
-	if ( ! adapter ) {
-		engineUnavailable = true;
-		if ( ! engineMismatchWarned ) {
-			engineMismatchWarned = true;
-			// eslint-disable-next-line no-console
-			console.warn(
-				'Real-time collaboration is unavailable: this client does not support the sync engine announced by the server. Falling back to exclusive post locking.'
-			);
-		}
-		return undefined;
-	}
-
-	syncManager = adapter.createManager();
+	syncManager = createSyncManager();
 
 	return syncManager;
-}
-
-/**
- * Whether sync is unavailable because the server announced an engine this
- * client cannot provide (as opposed to collaboration simply being disabled).
- * Only meaningful after a getSyncManager() call attempted resolution.
- */
-export function isSyncEngineUnavailable(): boolean {
-	return engineUnavailable;
 }
 
 /**
@@ -115,20 +91,6 @@ export function isSyncEngineUnavailable(): boolean {
  */
 export function hasSyncManager(): boolean {
 	return Boolean( syncManager );
-}
-
-/**
- * Retry the active sync connection after a connection error (wired to the
- * editor's connection-error modal). Transport-agnostic: it delegates to the
- * active manager, which asks its live providers to retry — no reaching into a
- * specific transport. A no-op when no manager exists (collaboration disabled or
- * the announced engine is unavailable).
- */
-export function retrySyncConnection(): void {
-	if ( ! hasSyncManager() ) {
-		return;
-	}
-	getSyncManager()?.retry?.();
 }
 
 /**
@@ -145,11 +107,11 @@ export function getEntitySnapshot(
 	name: string,
 	recordId: string | number
 ): string | undefined {
-	if ( ! hasSyncManager() ) {
+	if ( ! getSyncServices() ) {
 		return undefined;
 	}
 
-	return getSyncManager()?.getEntitySnapshot(
+	return getSyncServices()?.getEntitySnapshot(
 		`${ kind }/${ name }`,
 		`${ recordId }`
 	);
@@ -172,12 +134,12 @@ export function entityContainsSnapshot(
 	recordId: string | number,
 	encodedSnapshot: string
 ): boolean {
-	if ( ! hasSyncManager() ) {
+	if ( ! getSyncServices() ) {
 		return false;
 	}
 
 	return (
-		getSyncManager()?.entityContainsSnapshot(
+		getSyncServices()?.entityContainsSnapshot(
 			`${ kind }/${ name }`,
 			`${ recordId }`,
 			encodedSnapshot
@@ -293,6 +255,18 @@ export function createDefaultEntitySyncManager(
 		data.select( STORE_NAME ).getEntityConfig( kind, name )?.syncConfig;
 
 	return {
+		services: {
+			getAwareness: ( ...args ) =>
+				getSyncManager()?.getAwareness( ...args ),
+			getEntitySnapshot: ( ...args ) =>
+				syncManager?.getEntitySnapshot( ...args ),
+			entityContainsSnapshot: ( ...args ) =>
+				syncManager?.entityContainsSnapshot( ...args ) ?? false,
+			createPersistedCRDTDoc: async ( ...args ) =>
+				( await syncManager?.createPersistedCRDTDoc( ...args ) ) ??
+				null,
+			retry: retryDefaultSyncConnection,
+		},
 		shouldSync( kind, name ) {
 			return Boolean( getSyncManager() && getSyncConfig( kind, name ) );
 		},
@@ -490,7 +464,6 @@ function createRecordHandlers(
 	handlers: EntitySyncRecordHandlers
 ) {
 	return {
-		...createSyncReviewHandlers( data, kind, name, recordId ),
 		editRecord: handlers.editRecord,
 		getEditedRecord: handlers.getEditedRecord,
 		refetchRecord: handlers.refetchRecord,
@@ -586,5 +559,81 @@ function createCollectionHandlers(
 	};
 }
 
-// This vendored framework has no built-in engines. The plugin registers its
-// entity adapter after registering engines and transports, before editor startup.
+/** Services of the selected provider; never starts the default behind a plugin. */
+export function getSyncServices(): EntitySyncServices | undefined {
+	return getEntitySyncManager()?.services;
+}
+
+export function retrySyncConnection(): void {
+	getSyncServices()?.retry?.();
+}
+
+export function isSyncEngineUnavailable(): boolean {
+	return getSyncServices()?.isAvailable?.() === false;
+}
+
+declare global {
+	interface Window {
+		/** Provider selected by the host before core-data loads. */
+		_wpEntitySyncProvider?: string;
+	}
+}
+
+/**
+ * Registers the host-selected provider before records load. Other providers
+ * are not constructed. With no selection, Gutenberg retains its own provider.
+ *
+ * @param name   Provider identifier.
+ * @param create Creates the provider using the editor's record operations.
+ * @return Unregisters the selected provider.
+ */
+export function registerEntitySyncProvider(
+	name: string,
+	create: ( context: EntitySyncContext ) => EntitySyncManager
+): () => void {
+	if (
+		! globalThis.window?.__experimentalEnableRealTimeCollaboration ||
+		( globalThis.window?._wpEntitySyncProvider ?? 'gutenberg' ) !== name ||
+		getEntitySyncManager() !== undefined
+	) {
+		return () => {};
+	}
+	const data = defaultDataAccess;
+	const getSyncConfig = (
+		kind: string,
+		entityName: string
+	): SyncConfig | undefined =>
+		data.select( STORE_NAME ).getEntityConfig( kind, entityName )
+			?.syncConfig;
+	const manager = create( {
+		getSyncConfig,
+		recordHandlers: ( kind, entityName, id, handlers ) => ( {
+			...createRecordHandlers(
+				data,
+				kind,
+				entityName,
+				id,
+				getSyncConfig( kind, entityName )!,
+				handlers
+			),
+			...createSyncReviewHandlers( data, kind, entityName, id ),
+		} ),
+		collectionHandlers: ( kind, entityName, handlers ) =>
+			createCollectionHandlers( data, kind, entityName, handlers ),
+	} );
+	const unregister = registerEntitySyncManager( manager );
+	const stopObserving = manager.onEditorAction
+		? unlock( dataPrivateApis ).observeStoreActions(
+				'core/block-editor',
+				manager.onEditorAction
+			)
+		: undefined;
+	return () => {
+		stopObserving?.();
+		unregister();
+	};
+}
+
+registerEntitySyncProvider( 'gutenberg', () =>
+	createDefaultEntitySyncManager()
+);

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Internal
+
+-   Add private observation of completed store actions, including actions dispatched inside thunks.
+
 ### Bug Fixes
 
 -   Declare `react-dom` and `@types/react-dom` as peer dependencies, forwarding the peers of `@wordpress/element`, so strict package managers such as Yarn PnP can resolve them ([#83765](https://github.com/WordPress/gutenberg/pull/83765)).

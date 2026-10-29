@@ -341,6 +341,15 @@ if ( ! function_exists( 'gutenberg_get_active_edit_lock_user' ) ) {
  * Injects the post types for which real-time collaboration is disabled.
  */
 function gutenberg_inject_collaboration_disabled_post_types() {
+	// This server still requires an external engine. Until the server
+	// integration moves to the plugin, do not start the upstream relay when
+	// that plugin is missing. The plugin selects its own named provider.
+	wp_add_inline_script(
+		'wp-core-data',
+		'window._wpEntitySyncProvider = window._wpEntitySyncProvider || "external";',
+		'before'
+	);
+
 	if ( ! wp_is_collaboration_enabled() ) {
 		return;
 	}
@@ -368,7 +377,7 @@ function gutenberg_inject_collaboration_disabled_post_types() {
 	// With no engine plugin active, announce no engine and no transports;
 	// the client then has nothing to negotiate and falls back to the post
 	// lock (RTC disabled).
-	$sync               = array(
+	$sync = array(
 		'engine'            => $engine ? $engine->get_slug() : '',
 		'engineProtocol'    => $engine ? $engine->get_protocol_version() : 0,
 		// Announced active FIRST; the client picks the first slug it can

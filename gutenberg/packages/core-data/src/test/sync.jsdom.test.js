@@ -1,34 +1,42 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-const {
-	mockSyncManager,
-	mockCreateSyncManager,
-	mockSaveCRDTDoc,
-	mockResolveEngineAdapter,
-} = vi.hoisted( () => {
-	const manager = {
-		load: vi.fn(),
-		loadCollection: vi.fn(),
-		update: vi.fn(),
-		unload: vi.fn(),
-		unloadAll: vi.fn(),
-		getEntitySnapshot: vi.fn(),
-		createPersistedCRDTDoc: vi.fn(),
-		undoManager: undefined,
-	};
-	return {
-		mockSyncManager: manager,
-		mockCreateSyncManager: vi.fn( () => manager ),
-		mockSaveCRDTDoc: vi.fn(),
-		mockResolveEngineAdapter: vi.fn(),
-	};
+const { mockSyncManager, mockCreateSyncManager, mockSaveCRDTDoc } = vi.hoisted(
+	() => {
+		const manager = {
+			load: vi.fn(),
+			loadCollection: vi.fn(),
+			update: vi.fn(),
+			unload: vi.fn(),
+			unloadAll: vi.fn(),
+			getEntitySnapshot: vi.fn(),
+			createPersistedCRDTDoc: vi.fn(),
+			undoManager: undefined,
+		};
+		return {
+			mockSyncManager: manager,
+			mockCreateSyncManager: vi.fn( () => manager ),
+			mockSaveCRDTDoc: vi.fn(),
+		};
+	}
+);
+
+const { observeActions, stopObserving } = vi.hoisted( () => {
+	const stop = vi.fn();
+	return { observeActions: vi.fn( () => stop ), stopObserving: stop };
 } );
+vi.mock( '@wordpress/data', () => ( {
+	select: vi.fn(),
+	dispatch: vi.fn(),
+	resolveSelect: vi.fn(),
+	privateApis: { observeStoreActions: observeActions },
+} ) );
+
+vi.mock( '../sync-review', () => ( {
+	createSyncReviewHandlers: () => ( {} ),
+} ) );
 
 vi.mock( '@wordpress/sync', () => ( {
 	privateApis: {
-		resolveEngineAdapter: ( ...args ) =>
-			mockResolveEngineAdapter( ...args ) ?? {
-				createManager: mockCreateSyncManager,
-			},
+		createSyncManager: mockCreateSyncManager,
 		ConnectionErrorCode: {},
 		Delta: class {},
 		CRDT_DOC_META_PERSISTENCE_KEY: 'crdt-doc-meta',
@@ -110,7 +118,6 @@ function mockStore( entityConfig ) {
 describe( 'getSyncManager', () => {
 	afterEach( () => {
 		delete window.__experimentalEnableRealTimeCollaboration;
-		mockResolveEngineAdapter.mockClear();
 		mockCreateSyncManager.mockClear();
 	} );
 
@@ -122,7 +129,7 @@ describe( 'getSyncManager', () => {
 			const { getSyncManager } = await loadSync();
 
 			expect( getSyncManager() ).toBeUndefined();
-			expect( mockResolveEngineAdapter ).not.toHaveBeenCalled();
+			expect( mockCreateSyncManager ).not.toHaveBeenCalled();
 		}
 	);
 
@@ -145,17 +152,6 @@ describe( 'getSyncManager', () => {
 		expect( getSyncManager() ).toBe( existingSyncManager );
 		expect( mockCreateSyncManager ).toHaveBeenCalledTimes( 1 );
 	} );
-
-	it( 'creates no sync manager and reports the engine as unavailable when no engine adapter resolves', async () => {
-		window.__experimentalEnableRealTimeCollaboration = true;
-		mockResolveEngineAdapter.mockReturnValueOnce( false );
-		const { getSyncManager, isSyncEngineUnavailable } = await loadSync();
-
-		expect( getSyncManager() ).toBeUndefined();
-		expect( isSyncEngineUnavailable() ).toBe( true );
-		expect( mockCreateSyncManager ).not.toHaveBeenCalled();
-		expect( console ).toHaveWarned();
-	} );
 } );
 
 describe( 'the default entity sync manager', () => {
@@ -172,7 +168,7 @@ describe( 'the default entity sync manager', () => {
 		mockSyncManager.undoManager = undefined;
 	} );
 
-	it( 'leaves registration to the plugin even when the experiment is on', async () => {
+	it( 'registers itself through the interface only when the flag is on', async () => {
 		await loadSync();
 		let { getEntitySyncManager } = await import( '../entity-sync' );
 		expect( getEntitySyncManager() ).toBeUndefined();
@@ -180,7 +176,13 @@ describe( 'the default entity sync manager', () => {
 		window.__experimentalEnableRealTimeCollaboration = true;
 		await loadSync();
 		( { getEntitySyncManager } = await import( '../entity-sync' ) );
-		expect( getEntitySyncManager() ).toBeUndefined();
+		expect( getEntitySyncManager() ).toEqual(
+			expect.objectContaining( {
+				load: expect.any( Function ),
+				update: expect.any( Function ),
+				unloadAll: expect.any( Function ),
+			} )
+		);
 	} );
 
 	describe( 'with the flag on', () => {
@@ -236,8 +238,6 @@ describe( 'the default entity sync manager', () => {
 					editRecord: handlers.editRecord,
 					getEditedRecord: handlers.getEditedRecord,
 					onStatusChange: expect.any( Function ),
-					onProposalsChange: expect.any( Function ),
-					onEscalation: expect.any( Function ),
 					onUndoStackChange: handlers.onUndoStackChange,
 					persistCRDTDoc: expect.any( Function ),
 					refetchRecord: handlers.refetchRecord,
@@ -791,4 +791,109 @@ describe( 'the default entity sync manager', () => {
 			expect( manager.undoManager ).toBe( mockSyncManager.undoManager );
 		} );
 	} );
+} );
+
+describe( 'selected entity sync provider', () => {
+	afterEach( () => {
+		delete window._wpEntitySyncProvider;
+		delete window.__experimentalEnableRealTimeCollaboration;
+		mockCreateSyncManager.mockClear();
+	} );
+
+	it( 'does not start the default when the selected plugin is missing', async () => {
+		window.__experimentalEnableRealTimeCollaboration = true;
+		window._wpEntitySyncProvider = 'example';
+		const sync = await loadSync();
+		expect( sync.getSyncServices() ).toBeUndefined();
+		expect(
+			sync.getEntitySnapshot( 'postType', 'post', 1 )
+		).toBeUndefined();
+		expect(
+			sync.entityContainsSnapshot( 'postType', 'post', 1, 'snapshot' )
+		).toBe( false );
+		sync.retrySyncConnection();
+		expect( mockCreateSyncManager ).not.toHaveBeenCalled();
+	} );
+
+	it( 'constructs only the selected provider and routes editor reads to it', async () => {
+		window.__experimentalEnableRealTimeCollaboration = true;
+		window._wpEntitySyncProvider = 'example';
+		const sync = await loadSync();
+		const ignored = vi.fn();
+		sync.registerEntitySyncProvider( 'other', ignored )();
+		expect( ignored ).not.toHaveBeenCalled();
+		const services = {
+			isAvailable: () => false,
+			getEntitySnapshot: vi.fn( () => 'plugin snapshot' ),
+			entityContainsSnapshot: vi.fn( () => true ),
+			retry: vi.fn(),
+		};
+		const create = vi.fn( () => ( { services } ) );
+		const cleanup = sync.registerEntitySyncProvider( 'example', create );
+		expect( create ).toHaveBeenCalledWith(
+			expect.objectContaining( {
+				getSyncConfig: expect.any( Function ),
+				recordHandlers: expect.any( Function ),
+				collectionHandlers: expect.any( Function ),
+			} )
+		);
+		expect( sync.getSyncServices() ).toBe( services );
+		expect( sync.isSyncEngineUnavailable() ).toBe( true );
+		expect( sync.getEntitySnapshot( 'postType', 'post', 1 ) ).toBe(
+			'plugin snapshot'
+		);
+		expect( services.getEntitySnapshot ).toHaveBeenCalledWith(
+			'postType/post',
+			'1'
+		);
+		expect(
+			sync.entityContainsSnapshot( 'postType', 'post', 1, 'snapshot' )
+		).toBe( true );
+		sync.retrySyncConnection();
+		expect( services.retry ).toHaveBeenCalledOnce();
+		sync.registerEntitySyncProvider( 'example', ignored )();
+		expect( ignored ).not.toHaveBeenCalled();
+		expect( mockCreateSyncManager ).not.toHaveBeenCalled();
+		cleanup();
+		expect( sync.getSyncServices() ).toBeUndefined();
+	} );
+
+	it( 'does not construct a plugin while collaboration is disabled', async () => {
+		window.__experimentalEnableRealTimeCollaboration = false;
+		window._wpEntitySyncProvider = 'example';
+		const sync = await loadSync();
+		const create = vi.fn();
+		sync.registerEntitySyncProvider( 'example', create )();
+		expect( create ).not.toHaveBeenCalled();
+	} );
+} );
+
+it( 'subscribes to accepted editor actions through the selected provider and releases them', async () => {
+	window.__experimentalEnableRealTimeCollaboration = true;
+	window._wpEntitySyncProvider = 'capture-test';
+	const sync = await loadSync();
+	const onEditorAction = vi.fn();
+	const cleanup = sync.registerEntitySyncProvider( 'capture-test', () => ( {
+		onEditorAction,
+	} ) );
+	try {
+		expect( observeActions ).toHaveBeenCalledWith(
+			'core/block-editor',
+			onEditorAction
+		);
+		const observation = {
+			action: { type: 'UPDATE_BLOCK_ATTRIBUTES' },
+			before: {},
+			after: {},
+			registry: {},
+		};
+		observeActions.mock.calls.at( -1 )[ 1 ]( observation );
+		expect( onEditorAction ).toHaveBeenCalledWith( observation );
+	} finally {
+		cleanup();
+		delete window._wpEntitySyncProvider;
+		delete window.__experimentalEnableRealTimeCollaboration;
+	}
+	expect( stopObserving ).toHaveBeenCalledOnce();
+	expect( sync.getSyncServices() ).toBeUndefined();
 } );

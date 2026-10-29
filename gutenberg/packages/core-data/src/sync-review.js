@@ -10,7 +10,7 @@ import { unlock } from './lock-unlock';
  * @param {string}                          kind     Entity kind.
  * @param {string}                          name     Entity name.
  * @param {string|number}                   key      Record ID.
- * @return {Pick<import('@wordpress/sync').RecordHandlers, 'onEscalation' | 'onProposalsChange'>} Review callbacks.
+ * @return {import('./entity-sync').EntitySyncReviewHandlers} Review callbacks.
  */
 export function createSyncReviewHandlers( registry, kind, name, key ) {
 	const dispatch = unlock( registry.dispatch( STORE_NAME ) );

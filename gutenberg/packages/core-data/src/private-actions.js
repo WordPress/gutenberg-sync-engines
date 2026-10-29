@@ -5,7 +5,7 @@ import { decodeEntities } from '@wordpress/html-entities';
 import { __ } from '@wordpress/i18n';
 import { STORE_NAME } from './name';
 import { getEntitySyncManager } from './entity-sync';
-import { getSyncManager } from './sync';
+import { getSyncServices } from './sync';
 
 /**
  * Returns an action object used in signalling that the registered post meta
@@ -199,7 +199,7 @@ export function setSyncReviewItems( kind, name, recordId, items ) {
  */
 export const resolveSyncProposal =
 	( kind, name, recordId, proposalId, resolution ) => () => {
-		getSyncManager()?.resolveProposal?.(
+		getSyncServices()?.resolveProposal?.(
 			`${ kind }/${ name }`,
 			recordId,
 			proposalId,
@@ -218,7 +218,7 @@ export const resolveSyncProposal =
  */
 export const restoreSyncProposal =
 	( kind, name, recordId, proposalId ) => () => {
-		getSyncManager()?.restoreProposal?.(
+		getSyncServices()?.restoreProposal?.(
 			`${ kind }/${ name }`,
 			recordId,
 			proposalId

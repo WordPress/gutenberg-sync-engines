@@ -1190,10 +1190,20 @@ export const __unstableSplitSelection =
 
 		if ( ! blocks.length ) {
 			registry.batch( () => {
-				dispatch.replaceBlocks( select.getSelectedBlockClientIds(), [
-					head,
-					tail,
-				] );
+				dispatch.replaceBlocks(
+					select.getSelectedBlockClientIds(),
+					[ head, tail ],
+					undefined,
+					0,
+					{
+						editingOperation: {
+							id: globalThis.crypto.randomUUID(),
+							kind: 'split',
+							selectionStart,
+							selectionEnd,
+						},
+					}
+				);
 				// Select the start of the tail field in the same batch, like
 				// the branches below, so the field places the caret as it
 				// mounts rather than being focused later. Only for blocks
@@ -1289,7 +1299,15 @@ export const __unstableSplitSelection =
 				select.getSelectedBlockClientIds(),
 				output,
 				output.length - 1,
-				0
+				0,
+				{
+					editingOperation: {
+						id: globalThis.crypto.randomUUID(),
+						kind: blocks.length ? 'replace-selection' : 'split',
+						selectionStart,
+						selectionEnd,
+					},
+				}
 			);
 			if ( selection ) {
 				dispatch.selectionChange(
