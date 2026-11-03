@@ -24,6 +24,12 @@ import {
 	sameBlocks,
 } from './record';
 import { createDeRtcAuthorship, type DeRtcBlockAuthorship } from './authorship';
+import type { SyncConflict, SyncConflictSource } from '../../review/types';
+import { propertyText } from '../../review/property-text';
+import {
+	createEntityConflictSource,
+	type EntityConflicts,
+} from '../../review/entity-source';
 import {
 	createDeRtcRevertUndoManager,
 	createDeRtcUndoFeed,
@@ -36,11 +42,14 @@ import {
 	createAwarenessDoc,
 } from '../../shared/awareness-sync';
 import { registerAwareness } from '../../awareness/registry';
+import { createDeRtcCanonicalContents } from './canonical-contents';
 import {
 	createDeRtcDocBridge,
 	DE_RTC_REMOTE_ORIGIN,
 	DE_RTC_RESTORE_ORIGIN,
 	parseCanonicalBlocks,
+	findBlockBySyncId,
+	serializeBlock,
 	replaceBlockBySyncId,
 	stabilizeClientIds,
 	syncIdOf,
@@ -170,6 +179,8 @@ function createInertDeRtcCollectionCodec(
  */
 export function createDeRtcEngine(): SyncEngine & {
 	review: SyncReviewSource;
+	/** The plugin's conflict review lane (src/review/), over `review`. */
+	conflicts: SyncConflictSource;
 	authorship: {
 		getBlockAuthorship: (
 			objectType: string,
@@ -185,6 +196,16 @@ export function createDeRtcEngine(): SyncEngine & {
 	interface EntityReviewHandle {
 		review: DeRtcReviewState;
 		getItems: () => ReturnType< SyncReviewSource[ 'getOpenItems' ] >;
+		/**
+		 * The version a record's `current` side is read from, which is
+		 * the version a reviewer of that record sees.
+		 */
+		seenVersion: ( proposalId: string ) => string | null;
+		/**
+		 * Replaces a contested block with the reviewer's content, as an
+		 * ordinary local edit.
+		 */
+		writeContested: ( key: DeRtcContestKey, content: string ) => void;
 		restore: ( proposalId: string ) => void;
 		/** Adopt a contested block's latest canonical form. */
 		adoptContested: ( key: DeRtcContestKey ) => boolean;
@@ -218,31 +239,14 @@ export function createDeRtcEngine(): SyncEngine & {
 	const reviewKey = ( objectType: string, objectId: unknown ) =>
 		`${ objectType }:${ String( objectId ) }`;
 
-	/*
-	 * Review-source subscriptions are keyed at the ENGINE level, not the
-	 * entity: the framework manager subscribes while the entity is still
-	 * being created (createSyncManager wires the review source BEFORE it
-	 * asks the engine for the entity), so a subscription must be valid
-	 * before — and survive across — the entity's lifetime. Each entity's
-	 * ledger notifies its key's listeners.
-	 */
-	const keyListeners = new Map< string, Set< () => void > >();
-	const notifyKey = ( key: string ) =>
-		keyListeners.get( key )?.forEach( ( listener ) => listener() );
+	const conflicts = createEntityConflictSource();
 
 	const reviewSource: SyncReviewSource = {
 		getOpenItems: ( objectType, objectId ) =>
 			entityReviews
 				.get( reviewKey( objectType, objectId ) )
 				?.getItems() ?? [],
-		subscribe: ( objectType, objectId, listener ) => {
-			const key = reviewKey( objectType, objectId );
-			if ( ! keyListeners.has( key ) ) {
-				keyListeners.set( key, new Set() );
-			}
-			keyListeners.get( key )!.add( listener );
-			return () => keyListeners.get( key )?.delete( listener );
-		},
+		subscribe: conflicts.source.subscribe,
 		resolveProposal: ( objectType, objectId, proposalId, resolution ) => {
 			const handle = entityReviews.get(
 				reviewKey( objectType, objectId )
@@ -254,7 +258,7 @@ export function createDeRtcEngine(): SyncEngine & {
 				handle?.rejectContested( contestKey );
 				return;
 			}
-			handle?.review.resolve( proposalId, resolution );
+			void handle?.review.resolve( proposalId, resolution );
 		},
 		restoreProposal: ( objectType, objectId, proposalId ) => {
 			const handle = entityReviews.get(
@@ -278,6 +282,7 @@ export function createDeRtcEngine(): SyncEngine & {
 		// rows, proposed like any other change.
 		createUndoManager: createDeRtcRevertUndoManager,
 		review: reviewSource,
+		conflicts: conflicts.source,
 		authorship: {
 			getBlockAuthorship: ( objectType, objectId ) =>
 				entityAuthorship
@@ -304,21 +309,31 @@ export function createDeRtcEngine(): SyncEngine & {
 			// type; the transport's resolution-row lane is gone and the
 			// server rejects client-sent resolved rows. The room string
 			// mirrors the providers' convention.
-			review.setRestResolver( ( proposalId, resolution ) =>
-				apiFetch( {
-					data: {
-						client_id: record.clientId,
-						proposalId,
-						resolution,
-						room: objectId
-							? `${ objectType }:${ objectId }`
-							: objectType,
-					},
-					method: 'POST',
-					path: '/wp-sync/v1/de-rtc/resolve',
-				} )
+			// An accepted result also names the version the reviewer saw
+			// (see seenVersion on the review handle). The server refuses
+			// the result when the record's blocks have changed since that
+			// version.
+			review.setRestResolver(
+				( proposalId, resolution, content, seenVersion ) =>
+					apiFetch( {
+						data: {
+							client_id: record.clientId,
+							proposalId,
+							resolution,
+							...( undefined !== content ? { content } : {} ),
+							...( 'accepted' === resolution && seenVersion
+								? { seenVersion }
+								: {} ),
+							room: objectId
+								? `${ objectType }:${ objectId }`
+								: objectType,
+						},
+						method: 'POST',
+						path: '/wp-sync/v1/de-rtc/resolve',
+					} )
 			);
 			const undoFeed = createDeRtcUndoFeed();
+			const canonicalContents = createDeRtcCanonicalContents();
 			const authorship = createDeRtcAuthorship( undoFeed );
 			// Save-through-the-room: this post's REST saves carry
 			// base_version while the session lives. `prepareForSave` is
@@ -404,6 +419,45 @@ export function createDeRtcEngine(): SyncEngine & {
 
 			const localBlocks = (): any[] => record.blocks();
 
+			/*
+			 * The blocks a parked record's `current` side is read from:
+			 * the newest canonical content the session holds, because
+			 * that is what an accepted result replaces on the server.
+			 * This client's document is not that content while it holds
+			 * text the server did not take. In the window of the author
+			 * of a parked change the document still holds the parked
+			 * text, so reading it would show `current` equal to
+			 * `proposed`. The document is the fallback before any
+			 * canonical content has arrived.
+			 *
+			 * Parsed once per version: the records are read again on
+			 * every document change while one is open.
+			 */
+			let parsedCanonical: { version: string; blocks: any[] } | null =
+				null;
+			const currentSide = (): {
+				version: string | null;
+				blocks: any[];
+			} => {
+				const canonical = canonicalContents.latest();
+				if ( ! canonical ) {
+					parsedCanonical = null;
+					return {
+						version: bridge.lastVersion(),
+						blocks: localBlocks(),
+					};
+				}
+
+				if ( parsedCanonical?.version !== canonical.version ) {
+					parsedCanonical = {
+						version: canonical.version,
+						blocks: parseCanonicalBlocks( canonical.content ),
+					};
+				}
+
+				return parsedCanonical;
+			};
+
 			/**
 			 * Overlays a parked proposal's changed blocks into the doc as an
 			 * ordinary local edit under the restorer's capability: a changed
@@ -463,7 +517,8 @@ export function createDeRtcEngine(): SyncEngine & {
 			};
 
 			const key = reviewKey( objectType, objectId );
-			review.onChange( () => notifyKey( key ) );
+			const notify = () => conflicts.notify( objectType, objectId );
+			review.onChange( notify );
 
 			/*
 			 * Contested-block pending items: one item per block,
@@ -484,11 +539,11 @@ export function createDeRtcEngine(): SyncEngine & {
 					edits: ( existing?.edits ?? 0 ) + 1,
 					index: event.index,
 				} );
-				notifyKey( key );
+				notify();
 			} );
 			bridge.onContestResolved( ( contestKey ) => {
 				if ( contested.delete( contestKey ) ) {
-					notifyKey( key );
+					notify();
 				}
 			} );
 			const contestedExcerpt = ( item: {
@@ -505,7 +560,123 @@ export function createDeRtcEngine(): SyncEngine & {
 					: text;
 			};
 
-			entityReviews.set( key, {
+			const readConflicts = (): SyncConflict[] => [
+				...review.getOpen().map( ( parked ): SyncConflict => {
+					const blocks = parked.changedBlocks ?? [];
+					const ids = blocks
+						.map( ( block ) => block.syncId )
+						.filter(
+							( id ): id is string => 'string' === typeof id
+						);
+					const byIdentity =
+						ids.length > 0 && ids.length === blocks.length;
+					const indexes = blocks.map( ( block ) => block.index );
+					const first = indexes.length ? Math.min( ...indexes ) : 0;
+					const last = indexes.length ? Math.max( ...indexes ) : -1;
+					/*
+					 * The three sides, as the contract wants them:
+					 * `base` from the row's baseHtml (null on rows
+					 * that predate the field), `proposed` from the
+					 * parked blocks, `current` from the canonical
+					 * content (see currentSide): the same blocks by
+					 * identity, else the covering top-level span.
+					 */
+					const canonical = currentSide().blocks;
+					let current = '';
+					if ( byIdentity ) {
+						current = ids
+							.map( ( id ) => findBlockBySyncId( canonical, id ) )
+							.filter( Boolean )
+							.map( serializeBlock )
+							.join( '\n\n' );
+					} else if ( indexes.length ) {
+						current = canonical
+							.slice( first, last + 1 )
+							.map( serializeBlock )
+							.join( '\n\n' );
+					}
+					const base = blocks.every(
+						( block ) => 'string' === typeof block.baseHtml
+					)
+						? blocks
+								.map( ( block ) => block.baseHtml )
+								.join( '\n\n' )
+						: null;
+					if ( parked.property ) {
+						const name = parked.property.name;
+						const value: unknown = record.get( name );
+						return {
+							id: parked.proposalId,
+							kind: 'merge',
+							authorId: parked.author ?? 0,
+							target: { type: 'property', name },
+							base: null,
+							proposed: propertyText( parked.property.value ),
+							current: propertyText( value ),
+						};
+					}
+					return {
+						id: parked.proposalId,
+						kind:
+							'requires-approval' ===
+							( REVIEW_REASON_MAP[ parked.reason ] ??
+								parked.reason )
+								? 'sequestration'
+								: 'merge',
+						authorId: parked.author ?? 0,
+						target: {
+							type: 'blocks',
+							// Identity wins when every changed block
+							// carries one. The span is the covering
+							// top-level run.
+							...( byIdentity ? { ids } : {} ),
+							index: first,
+							count: last - first + 1,
+						},
+						base,
+						proposed: blocks
+							.map( ( block ) => block.html )
+							.join( '\n\n' ),
+						current,
+						// The server sets an author's later typing
+						// aside into the same record.
+						followsTyping: true,
+					};
+				} ),
+				/*
+				 * A contested block: this client edited a block a
+				 * newer canonical version also changed. `proposed` is
+				 * the canonical form, `current` this client's own
+				 * block. The version both started from is not kept.
+				 */
+				...Array.from( contested.entries() ).map(
+					( [ contestKey, item ] ): SyncConflict => {
+						const local = localBlocks();
+						const own =
+							'string' === typeof contestKey
+								? findBlockBySyncId( local, contestKey )
+								: local[ contestKey ];
+						return {
+							id: `contested-${ contestKey }`,
+							kind: 'merge',
+							authorId: 0,
+							target: {
+								type: 'blocks',
+								...( 'string' === typeof contestKey
+									? { ids: [ contestKey ] }
+									: {} ),
+								index: item.index,
+								count: 1,
+							},
+							base: null,
+							proposed: item.html,
+							current: own ? serializeBlock( own ) : '',
+						};
+					}
+				),
+			];
+
+			const reviewHandle: EntityReviewHandle = {
 				review,
 				adoptContested: ( contestKey ) =>
 					bridge.adoptContestedBlock( contestKey ),
@@ -552,6 +723,37 @@ export function createDeRtcEngine(): SyncEngine & {
 						} )
 					),
 				],
+				seenVersion: ( proposalId ) => {
+					const parked = review
+						.getOpen()
+						.find(
+							( candidate ) => candidate.proposalId === proposalId
+						);
+					// A post field's `current` is still read from this
+					// client's document.
+					if ( parked?.property ) {
+						return bridge.lastVersion();
+					}
+
+					return currentSide().version;
+				},
+				writeContested: ( contestKey, content ) => {
+					const index = contested.get( contestKey )?.index ?? 0;
+					overlayParkedBlocks( {
+						proposalId: `contested-${ contestKey }`,
+						reason: 'contested',
+						authorClientId: record.clientId,
+						changedBlocks: [
+							{
+								index,
+								html: content,
+								...( 'string' === typeof contestKey
+									? { syncId: contestKey }
+									: {} ),
+							},
+						],
+					} );
+				},
 				restore: ( proposalId ) => {
 					const parked = review
 						.getOpen()
@@ -564,9 +766,85 @@ export function createDeRtcEngine(): SyncEngine & {
 					if ( bridge.isBootstrapped() ) {
 						overlayParkedBlocks( parked );
 					}
-					review.resolve( proposalId, 'restored' );
+					void review.resolve( proposalId, 'restored' );
 				},
-			} );
+			};
+			entityReviews.set( key, reviewHandle );
+
+			/*
+			 * The conflict review lane: the same open tasks as SyncConflict
+			 * records with their three sides, and the reviewer's decision
+			 * mapped onto the review verbs: `accept` sends the `accepted`
+			 * resolution with the content, `dismiss` the `dismissed` one.
+			 * A contested block adopts or rejects.
+			 */
+			const entity: EntityConflicts = {
+				list: readConflicts,
+				resolve: ( conflictId, decision ) => {
+					const contestKey = contestedKeyOf( conflictId );
+					if ( null !== contestKey ) {
+						/*
+						 * A contested block. Accepting the canonical form as
+						 * it is adopts it. Accepting anything else (this
+						 * client's own block, or a hand-merged result) keeps
+						 * the block local and writes the content as an
+						 * ordinary local edit, which the next proposal
+						 * carries. Dismiss keeps the local block as it is.
+						 */
+						if ( 'accept' !== decision.action ) {
+							reviewHandle.rejectContested( contestKey );
+							return 'resolved';
+						}
+						const canonical = readConflicts().find(
+							( conflict ) => conflict.id === conflictId
+						)?.proposed;
+						if (
+							decision.content.trim() ===
+							( canonical ?? '' ).trim()
+						) {
+							reviewHandle.adoptContested( contestKey );
+							return 'resolved';
+						}
+						reviewHandle.writeContested(
+							contestKey,
+							decision.content
+						);
+						reviewHandle.rejectContested( contestKey );
+						return 'resolved';
+					}
+					if ( 'accept' === decision.action ) {
+						// The server lands the replacement as an ordinary
+						// proposal under the reviewer (kses and the merge
+						// run as for any edit) and closes the record in
+						// the same request.
+						return review.resolve(
+							conflictId,
+							'accepted',
+							decision.content,
+							reviewHandle.seenVersion( conflictId ) ?? undefined
+						);
+					}
+					return review.resolve( conflictId, 'dismissed' );
+				},
+			};
+			conflicts.set( objectType, objectId, entity );
+
+			// A record's `current` is read again on every read, so a
+			// version landing in a block under review changes the record
+			// without any row opening or closing. The listeners hear about
+			// that too, or a review dialog would go on showing the block
+			// as it was.
+			const onDocumentChange = () => {
+				if ( 0 === review.getOpen().length && 0 === contested.size ) {
+					return;
+				}
+				conflicts.notifyIfChanged( objectType, objectId );
+			};
+			const unsubscribeDocument = record.subscribe( onDocumentChange );
+			// A version can be held before the document takes it (it waits
+			// while this client types), and the records change then too.
+			const unsubscribeCanonical =
+				canonicalContents.onChange( onDocumentChange );
 
 			let unsubscribeObservers: ( () => void ) | null = null;
 
@@ -579,6 +857,7 @@ export function createDeRtcEngine(): SyncEngine & {
 						bridge,
 						review,
 						undoFeed,
+						canonicalContents,
 						// The Save/Sync inversion, stage 2:
 						// commits ride the autosave endpoint; the
 						// transport stays advisory. Null for types
@@ -660,9 +939,12 @@ export function createDeRtcEngine(): SyncEngine & {
 				destroy() {
 					unsubscribeObservers?.();
 					unsubscribeObservers = null;
+					unsubscribeDocument();
+					unsubscribeCanonical();
 					if ( entityReviews.get( key )?.review === review ) {
 						entityReviews.delete( key );
 					}
+					conflicts.delete( objectType, objectId, entity );
 					review.setRestResolver( null );
 					unregisterSaveBaseVersion();
 				},

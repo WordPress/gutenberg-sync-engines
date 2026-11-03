@@ -50,7 +50,7 @@ check are built on.
 | --- | --- | --- | --- |
 | P1 server authority | Meets: every edit authorized, attributed and adjusted on the server. | Meets: server merges and can check content. | Meets: server merges every proposal. |
 | P2 no silent loss | Meets, one window: edits not yet sent are lost with a tab reload. | Meets: a race is repaired by re-sending the whole document. | Meets: edits set aside for review are stored; refused proposals are re-sent. |
-| P3 conflicts surfaced | Meets; over-asks on same-paragraph typing (a rate problem). | Violates, by stated policy: field clashes resolve by last writer wins, nobody told. | Meets: only the blocks that clash are held. |
+| P3 conflicts surfaced | Meets; over-asks on same-paragraph typing (a rate problem). | Violates, by stated policy: field clashes resolve by last writer wins, nobody told; only markup held by the security filter is reviewed. | Meets: only the blocks that clash are held. |
 | P4 machine writers | A script that declares the version it read gets a real merge; one that declares nothing bypasses the room unnoticed. | Accepted limitation: outside writes never reach the room. | Met: cooperating scripts merge, and the server repairs an unaware one's write afterwards. |
 | P5 cheap hosting | Meets: cheapest per edit; handles one edit at a time per post, the way Core takes locks. | Partly: no waiting, but the heaviest per edit, and it grows with the document. | Partly: cheap processing, no waiting; upload bytes grow with the document. |
 | P6 measured | Meets. | Meets. | Meets. |
@@ -60,9 +60,9 @@ check are built on.
 
 | | intent-log | yjs-server | de-rtc |
 | --- | --- | --- | --- |
-| Conflicts | Set aside for a person to review in the editor's panel. | Merged silently. | Only the clashing blocks are set aside; the rest is applied. |
+| Conflicts | Set aside for a person to review on a card in the editor, or in the sidebar list when there is no block to show it on. | Merged silently. | Only the clashing blocks are set aside; the rest is applied. |
 | Collaborative undo | Yes: an undo is a new opposite edit; a pending one is cancelled. | Yes: a per-user Yjs undo manager. | Yes: an undo re-proposes the earlier form of the block. |
-| Markup the author may not publish | Set aside for review; a reviewer with `unfiltered_html` restores it. | Replaced with the cleaned form and the correction sent to everyone; nothing reviewed. | The risky blocks are set aside; the safe rest is applied. |
+| Markup the author may not publish | Set aside for review; a reviewer with `unfiltered_html` approves it. | Replaced with the cleaned form and the correction sent to everyone; the stripped markup is held for a reviewer, who approves or discards it. | The risky blocks are set aside; the safe rest is applied. |
 | Reload and reconnection | Re-sends exactly; starts again from the last full copy. | Re-sends its whole state; the server keeps what it was missing. | Re-proposes its content; a lost send merges as a no-op. |
 | History | A full copy every 500 rows; older rows deleted. | A full copy every 100 rows. | A full copy every 100 rows. Content is stored once per room; the rows are 200-byte notices. |
 | Synced fields | Title, status, dates, taxonomies, meta, each as its own value. | The same, through the Yjs document. | The same, merged per field with every proposal. |
@@ -77,7 +77,7 @@ check are built on.
 | Two editors, different blocks | Both apply; nothing needs adjusting. | Both apply, same result in either order. | Both apply; each editor downloads one copy of the merged result. |
 | Two editors, the same paragraph | Merges when each has seen the other's change. Otherwise the later keystrokes are set aside for review: never lost, but asked about too eagerly. | Letters interleave. A field clash resolves by last writer wins, silently. | The server merges from the version the block was really edited against. Overlapping edits are set aside per block, and the editor sees one pending item to adopt or reject. |
 | One types into a block another removes | Whichever side arrives second is set aside. | The edit disappears with the block, silently. | The whole change is set aside for review. The merge will not guess when one person deletes a block another is editing. |
-| Unsafe markup from an author without `unfiltered_html` | Set aside for approval. | Cleaned and corrected for everyone. | The risky blocks set aside; the rest applied. |
+| Unsafe markup from an author without `unfiltered_html` | Set aside for approval. | Cleaned and corrected for everyone; the stripped markup is held for a reviewer. | The risky blocks set aside; the rest applied. |
 | A script writes the post mid-session | With a declared base version: merged. Without: the write goes unnoticed and the session's next save overwrites it. | Never noticed; the write is lost. | With a declared base: merged; a conflict is refused with a 409. Without: a content fingerprint reveals it, and the server merges it as an ordinary update. |
 | A lagging client comes back | Re-sends; old edits are adjusted for what arrived meanwhile. Unsent edits are lost with a reload. | Re-sends its whole state; under heavy load the server may ask for it once more. | Re-commits. A base version older than the ones the room keeps is found in post revisions; only one no revision holds is refused and retried. |
 

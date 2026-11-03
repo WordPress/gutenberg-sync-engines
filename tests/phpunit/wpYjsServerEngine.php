@@ -32,10 +32,18 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 	 */
 	protected static $author_id;
 
+	/**
+	 * Contributor user ID (can edit_posts, but only their own posts).
+	 *
+	 * @var int
+	 */
+	protected static $contributor_id;
+
 	public static function wpSetUpBeforeClass( WP_UnitTest_Factory $factory ) {
-		self::$editor_id = $factory->user->create( array( 'role' => 'editor' ) );
-		self::$author_id = $factory->user->create( array( 'role' => 'author' ) );
-		self::$post_id   = $factory->post->create(
+		self::$editor_id      = $factory->user->create( array( 'role' => 'editor' ) );
+		self::$author_id      = $factory->user->create( array( 'role' => 'author' ) );
+		self::$contributor_id = $factory->user->create( array( 'role' => 'contributor' ) );
+		self::$post_id        = $factory->post->create(
 			array(
 				'post_author'  => self::$editor_id,
 				'post_title'   => 'Yjs server test post',
@@ -47,6 +55,7 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 	public static function wpTearDownAfterClass() {
 		self::delete_user( self::$editor_id );
 		self::delete_user( self::$author_id );
+		self::delete_user( self::$contributor_id );
 		wp_delete_post( self::$post_id, true );
 	}
 
@@ -94,9 +103,10 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 			if ( WP_Yjs_Server_Engine::UPDATE_TYPE_SNAPSHOT === $update['type'] ) {
 				$decoded = json_decode( $update['data'], true );
 				\Yjs\applyUpdateV2( $doc, \Yjs\Lib0\Buffer::fromBase64( $decoded['doc'] ) );
-			} else {
+			} elseif ( WP_Yjs_Server_Engine::UPDATE_TYPE_UPDATE === $update['type'] ) {
 				\Yjs\applyUpdateV2( $doc, \Yjs\Lib0\Buffer::fromBase64( $update['data'] ) );
 			}
+			// Review rows (held, held-resolved) carry no document content.
 		}
 	}
 
@@ -128,7 +138,7 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 		$engine = $this->engine();
 		$this->assertSame( 'yjs-server', $engine->get_slug() );
 		$this->assertSame( 1, $engine->get_protocol_version() );
-		$this->assertSame( array( 'update', 'snapshot' ), $engine->get_update_types() );
+		$this->assertSame( array( 'update', 'snapshot', 'held', 'held-resolved' ), $engine->get_update_types() );
 	}
 
 	public function test_room_size_ceiling_rejects_writes_but_not_reads() {
@@ -1314,6 +1324,1025 @@ class Tests_Collaboration_WpYjsServerEngine extends WP_UnitTestCase {
 		);
 		$this->assertSame( array( array( 'status' => 'applied' ) ), $result['dispositions'] );
 		$this->assertStringContainsString( 'Onward: ', (string) $this->engine()->materialize( $this->room() ) );
+	}
+
+	/**
+	 * Decoded rows of a type from a room response.
+	 *
+	 * @param array  $response Room response.
+	 * @param string $type     Update type.
+	 * @return array Decoded row payloads.
+	 */
+	private function rows_of_type( array $response, string $type ): array {
+		$rows = array();
+		foreach ( $response['updates'] as $update ) {
+			if ( $type === $update['type'] ) {
+				$rows[] = json_decode( $update['data'], true );
+			}
+		}
+		return $rows;
+	}
+
+	/**
+	 * One client sends one edit: reads the room as a client, applies the
+	 * edit to the document it got, and hands the update in.
+	 *
+	 * @param int                       $user_id   The user sending it.
+	 * @param int                       $client_id The client sending it.
+	 * @param callable                  $edit      The edit, given the client's document.
+	 * @param int|null                  $read_as   Read the room as this client
+	 *                                             instead: one that sent nothing,
+	 *                                             so the document holds every
+	 *                                             row (a client's own rows are
+	 *                                             left out of its reads).
+	 * @param WP_Yjs_Server_Engine|null $engine    The engine that takes the edit.
+	 * @return array The handle_updates() result.
+	 */
+	private function send_edit( int $user_id, int $client_id, callable $edit, ?int $read_as = null, ?WP_Yjs_Server_Engine $engine = null ): array {
+		wp_set_current_user( $user_id );
+		$response = $this->engine()->get_updates_since( $this->room(), $read_as ?? $client_id, 0, array() );
+		$doc      = $this->client_doc_from_response( $response );
+		$update   = $this->encode_edit( $doc, $edit );
+
+		return ( $engine ?? $this->engine() )->handle_updates(
+			$this->room(),
+			$client_id,
+			(int) $response['end_cursor'],
+			array(
+				array(
+					'type' => 'update',
+					'data' => $update,
+				),
+			),
+			array()
+		);
+	}
+
+	/**
+	 * A filtered author writes a script into the first block: the kses
+	 * lane sanitizes it and holds what it stripped.
+	 *
+	 * @param string $markup The markup the author types.
+	 * @return array The open hold.
+	 */
+	private function raise_hold( string $markup = ' <script>alert(1)</script>' ): array {
+		$this->send_edit(
+			self::$author_id,
+			101,
+			function ( $doc ) use ( $markup ) {
+				$this->first_block_content( $doc )->insert( 11, $markup );
+			}
+		);
+
+		$holds = $this->engine()->get_open_holds( $this->room() );
+		$this->assertCount( 1, $holds, 'the sanitized block must be held' );
+		return array_values( $holds )[0];
+	}
+
+	public function test_kses_lane_holds_the_markup_it_strips() {
+		$hold = $this->raise_hold();
+
+		$this->assertStringContainsString( '<script>alert(1)</script>', $hold['held'] );
+		$this->assertStringNotContainsString( '<script>', $hold['sanitized'] );
+		$this->assertStringContainsString( 'Hello world', $hold['base'] );
+		$this->assertStringNotContainsString( 'alert', $hold['base'], 'the base is the block before the batch' );
+		$this->assertSame( 0, $hold['index'] );
+		$this->assertSame( self::$author_id, $hold['author'] );
+		$this->assertSame( 101, $hold['authorClientId'] );
+		$this->assertIsString( $hold['blockId'] );
+
+		// The hold is announced to every client, the author included, and
+		// names the sanitized block in the canonical document.
+		$read = $this->engine()->get_updates_since( $this->room(), 202, 0, array() );
+		$held = $this->rows_of_type( $read, WP_Yjs_Server_Engine::UPDATE_TYPE_HELD );
+		$this->assertCount( 1, $held );
+		$this->assertSame( $hold['holdId'], $held[0]['holdId'] );
+		$doc = $this->client_doc_from_response( $read );
+		$this->assertSame(
+			$hold['blockId'],
+			$doc->getMap( 'document' )->get( 'blocks' )->get( 0 )->get( 'clientId' )
+		);
+		$this->assertNotEmpty(
+			$this->rows_of_type(
+				$this->engine()->get_updates_since( $this->room(), 101, 0, array() ),
+				WP_Yjs_Server_Engine::UPDATE_TYPE_HELD
+			)
+		);
+	}
+
+	public function test_accepting_a_hold_lands_the_held_markup_for_every_client() {
+		$hold = $this->raise_hold();
+
+		wp_set_current_user( self::$editor_id );
+		$disposition = $this->engine()->resolve_hold( $this->room(), $hold['holdId'], 'accepted' );
+		$this->assertSame( 'resolved', $disposition['status'] );
+		$this->assertTrue( $disposition['applied'] );
+
+		$this->assertStringContainsString( '<script>alert(1)</script>', (string) $this->engine()->materialize( $this->room() ) );
+		$this->assertSame( array(), $this->engine()->get_open_holds( $this->room() ) );
+
+		// A fresh peer converges on the approved markup and sees the hold closed.
+		$read     = $this->engine()->get_updates_since( $this->room(), 303, 0, array() );
+		$doc      = $this->client_doc_from_response( $read );
+		$resolved = $this->rows_of_type( $read, WP_Yjs_Server_Engine::UPDATE_TYPE_HELD_RESOLVED );
+		$this->assertStringContainsString( '<script>', $this->first_block_content( $doc )->toString() );
+		$this->assertCount( 1, $resolved );
+		$this->assertSame( $hold['holdId'], $resolved[0]['holdId'] );
+		$this->assertSame( 'accepted', $resolved[0]['resolution'] );
+		$this->assertSame( self::$editor_id, $resolved[0]['resolvedBy'] );
+	}
+
+	public function test_accepting_a_hold_with_edited_content_lands_that_content() {
+		$hold = $this->raise_hold();
+
+		wp_set_current_user( self::$editor_id );
+		$edited = "<!-- wp:paragraph -->\n<p>Hello world, <em>reviewed</em></p>\n<!-- /wp:paragraph -->";
+		$this->engine()->resolve_hold( $this->room(), $hold['holdId'], 'accepted', $edited );
+
+		$materialized = (string) $this->engine()->materialize( $this->room() );
+		$this->assertStringContainsString( '<em>reviewed</em>', $materialized );
+		$this->assertStringNotContainsString( 'alert', $materialized, 'the content replaces the sanitized block' );
+	}
+
+	/**
+	 * A peer who may publish unfiltered HTML edits the first block, which
+	 * is the sanitized block of the open hold.
+	 *
+	 * @param string $text The text the peer puts at the start of the block.
+	 * @return void
+	 */
+	private function peer_edits_the_held_block( string $text ): void {
+		$this->send_edit(
+			self::$editor_id,
+			202,
+			function ( $doc ) use ( $text ) {
+				$this->first_block_content( $doc )->insert( 0, $text );
+			}
+		);
+	}
+
+	public function test_accepting_a_hold_is_refused_when_the_block_changed_after_the_reviewer_saw_it() {
+		$hold = $this->raise_hold();
+
+		// The reviewer has the dialog open. A peer edits the sanitized block.
+		$this->peer_edits_the_held_block( 'PEER EDIT ' );
+		$before = (string) $this->engine()->materialize( $this->room() );
+		$this->assertStringContainsString( 'PEER EDIT', $before );
+
+		// The reviewer approves what they saw: the block before the peer's edit.
+		$refused = $this->engine()->resolve_hold( $this->room(), $hold['holdId'], 'accepted', null, $hold['sanitized'] );
+		$this->assertWPError( $refused );
+		$this->assertSame( 'review_stale', $refused->get_error_code() );
+		$this->assertSame( 409, $refused->get_error_data()['status'] );
+
+		// Nothing was written: the peer's edit is still there, the held
+		// markup is not, and the hold is still open.
+		$this->assertSame( $before, (string) $this->engine()->materialize( $this->room() ) );
+		$holds = $this->engine()->get_open_holds( $this->room() );
+		$this->assertCount( 1, $holds );
+
+		// The hold now records the block as it reads, the refusal carries
+		// it, and every client hears about it.
+		$fresh = $holds[ $hold['holdId'] ];
+		$this->assertStringContainsString( 'PEER EDIT', $fresh['sanitized'] );
+		$this->assertSame( $fresh['sanitized'], $refused->get_error_data()['hold']['sanitized'] );
+		$read = $this->engine()->get_updates_since( $this->room(), 303, 0, array() );
+		$held = $this->rows_of_type( $read, WP_Yjs_Server_Engine::UPDATE_TYPE_HELD );
+		$this->assertCount( 2, $held, 'the hold is announced again' );
+		$this->assertSame( $hold['holdId'], $held[1]['holdId'] );
+		$this->assertSame( $fresh['sanitized'], $held[1]['sanitized'] );
+		$this->assertCount( 0, $this->rows_of_type( $read, WP_Yjs_Server_Engine::UPDATE_TYPE_HELD_RESOLVED ) );
+
+		// The reviewer looks again and approves against the block as it reads now.
+		$edited      = "<!-- wp:paragraph -->\n<p>PEER EDIT Hello world, <em>reviewed</em></p>\n<!-- /wp:paragraph -->";
+		$disposition = $this->engine()->resolve_hold( $this->room(), $hold['holdId'], 'accepted', $edited, $fresh['sanitized'] );
+		$this->assertIsArray( $disposition );
+		$this->assertTrue( $disposition['applied'] );
+		$this->assertStringContainsString( '<em>reviewed</em>', (string) $this->engine()->materialize( $this->room() ) );
+		$this->assertSame( array(), $this->engine()->get_open_holds( $this->room() ) );
+	}
+
+	public function test_accepting_a_hold_without_naming_the_block_checks_it_against_the_hold() {
+		$hold = $this->raise_hold();
+		$this->peer_edits_the_held_block( 'PEER EDIT ' );
+		$before = (string) $this->engine()->materialize( $this->room() );
+
+		// A caller that does not say what it saw is held to the hold as recorded.
+		$refused = $this->engine()->resolve_hold( $this->room(), $hold['holdId'], 'accepted' );
+		$this->assertWPError( $refused );
+		$this->assertSame( 'review_stale', $refused->get_error_code() );
+		$this->assertSame( $before, (string) $this->engine()->materialize( $this->room() ) );
+	}
+
+	public function test_a_hold_records_the_block_the_way_an_approval_reads_it_back() {
+		$hold = $this->raise_hold();
+
+		// Nobody touched the block: approving against the hold goes through.
+		wp_set_current_user( self::$editor_id );
+		$disposition = $this->engine()->resolve_hold( $this->room(), $hold['holdId'], 'accepted', null, $hold['sanitized'] );
+		$this->assertIsArray( $disposition );
+		$this->assertTrue( $disposition['applied'] );
+	}
+
+	public function test_dismissing_a_hold_is_never_stale() {
+		$hold = $this->raise_hold();
+		$this->peer_edits_the_held_block( 'PEER EDIT ' );
+		$before = (string) $this->engine()->materialize( $this->room() );
+
+		// Dismissing keeps the document as it is, whatever it is now.
+		$disposition = $this->engine()->resolve_hold( $this->room(), $hold['holdId'], 'dismissed', null, $hold['sanitized'] );
+		$this->assertIsArray( $disposition );
+		$this->assertSame( array(), $this->engine()->get_open_holds( $this->room() ) );
+		$this->assertSame( $before, (string) $this->engine()->materialize( $this->room() ) );
+	}
+
+	/**
+	 * An engine whose storage cannot store a `held-resolved` row, and
+	 * stores everything else.
+	 *
+	 * @return WP_Yjs_Server_Engine Engine.
+	 */
+	private function engine_that_cannot_store_a_closing_row(): WP_Yjs_Server_Engine {
+		$storage = new class() extends WP_Sync_Table_Storage {
+			public function add_update( string $room, $update ): bool {
+				if ( WP_Yjs_Server_Engine::UPDATE_TYPE_HELD_RESOLVED === ( $update['type'] ?? null ) ) {
+					return false;
+				}
+				return parent::add_update( $room, $update );
+			}
+		};
+
+		return new WP_Yjs_Server_Engine( $storage );
+	}
+
+	public function test_a_decision_whose_closing_row_was_not_stored_leaves_the_hold_open() {
+		$hold = $this->raise_hold();
+
+		wp_set_current_user( self::$editor_id );
+		$result = $this->engine_that_cannot_store_a_closing_row()->resolve_hold( $this->room(), $hold['holdId'], 'dismissed' );
+		$this->assertWPError( $result );
+		$this->assertSame( 'rest_sync_storage_error', $result->get_error_code() );
+
+		// The caller shows the hold again, so the server must still know
+		// it: the next decision has to count.
+		$this->assertArrayHasKey( $hold['holdId'], $this->engine()->get_open_holds( $this->room() ) );
+		$this->assertSame( array(), $this->closed_holds() );
+
+		$disposition = $this->engine()->resolve_hold( $this->room(), $hold['holdId'], 'dismissed' );
+		$this->assertSame( 'resolved', $disposition['status'] );
+		$this->assertSame( array(), $this->engine()->get_open_holds( $this->room() ) );
+		$this->assertSame( array( $hold['holdId'] => 'dismissed' ), $this->closed_holds() );
+	}
+
+	public function test_accepting_a_hold_needs_unfiltered_html() {
+		$hold = $this->raise_hold();
+
+		// Still the filtered author.
+		$rejected = $this->engine()->resolve_hold( $this->room(), $hold['holdId'], 'accepted' );
+		$this->assertWPError( $rejected );
+		$this->assertSame( 'rest_sync_forbidden', $rejected->get_error_code() );
+		$this->assertCount( 1, $this->engine()->get_open_holds( $this->room() ), 'the hold stays open' );
+		$this->assertStringNotContainsString( '<script>', (string) $this->engine()->materialize( $this->room() ) );
+	}
+
+	public function test_dismissing_a_hold_keeps_the_sanitized_block() {
+		$hold   = $this->raise_hold();
+		$before = (string) $this->engine()->materialize( $this->room() );
+
+		// Anyone who can edit may discard, the author included.
+		$disposition = $this->engine()->resolve_hold( $this->room(), $hold['holdId'], 'dismissed' );
+		$this->assertSame( 'resolved', $disposition['status'] );
+		$this->assertArrayNotHasKey( 'applied', $disposition );
+		$this->assertSame( $before, (string) $this->engine()->materialize( $this->room() ) );
+		$this->assertSame( array(), $this->engine()->get_open_holds( $this->room() ) );
+
+		// Deciding it again acks without changing anything.
+		wp_set_current_user( self::$editor_id );
+		$again = $this->engine()->resolve_hold( $this->room(), $hold['holdId'], 'accepted' );
+		$this->assertSame( 'resolved', $again['status'] );
+		$this->assertSame( $before, (string) $this->engine()->materialize( $this->room() ) );
+	}
+
+	public function test_a_newer_hold_by_the_same_author_over_the_same_block_supersedes_the_open_one() {
+		$first = $this->raise_hold();
+
+		// The author catches up on the sanitized block and tries again.
+		$this->author_tries_the_held_block_again( $this->engine(), '<script>alert(2)</script>' );
+
+		$holds = array_values( $this->engine()->get_open_holds( $this->room() ) );
+		$this->assertCount( 1, $holds, 'one review task per author and block' );
+		$this->assertNotSame( $first['holdId'], $holds[0]['holdId'] );
+		$this->assertStringContainsString( 'alert(2)', $holds[0]['held'] );
+		// The reviewer still compares against the block before the author's first attempt.
+		$this->assertSame( $first['base'], $holds[0]['base'] );
+
+		$resolved = $this->rows_of_type(
+			$this->engine()->get_updates_since( $this->room(), 202, 0, array() ),
+			WP_Yjs_Server_Engine::UPDATE_TYPE_HELD_RESOLVED
+		);
+		$this->assertCount( 1, $resolved );
+		$this->assertSame( $first['holdId'], $resolved[0]['holdId'] );
+		$this->assertSame( 'superseded', $resolved[0]['resolution'] );
+	}
+
+	/**
+	 * The filtered author tries the held block again through the given
+	 * engine: the next hold by the same author over the same block.
+	 *
+	 * @param WP_Yjs_Server_Engine $engine The engine that takes the edit.
+	 * @param string               $markup The markup the author types.
+	 * @return void
+	 */
+	private function author_tries_the_held_block_again( WP_Yjs_Server_Engine $engine, string $markup ): void {
+		$this->send_edit(
+			self::$author_id,
+			101,
+			function ( $doc ) use ( $markup ) {
+				$this->first_block_content( $doc )->insert( 0, $markup );
+			},
+			null,
+			$engine
+		);
+	}
+
+	public function test_a_superseded_hold_whose_closing_row_was_not_stored_stays_open() {
+		$first = $this->raise_hold();
+
+		$this->author_tries_the_held_block_again( $this->engine_that_cannot_store_a_closing_row(), '<script>alert(2)</script>' );
+
+		// Every tab still shows the first hold's card, so the server must
+		// still know it. The new hold is raised beside it.
+		$holds = $this->engine()->get_open_holds( $this->room() );
+		$this->assertCount( 2, $holds, 'the first hold stays open beside the second' );
+		$this->assertArrayHasKey( $first['holdId'], $holds );
+		$this->assertSame( array(), $this->closed_holds() );
+		$second = array_values( array_diff_key( $holds, array( $first['holdId'] => true ) ) )[0];
+		$this->assertStringContainsString( 'alert(2)', $second['held'] );
+		$this->assertSame( $first['base'], $second['base'], 'the base carries over either way' );
+
+		// The author's next batch supersedes both through a working engine.
+		$this->author_tries_the_held_block_again( $this->engine(), '<script>alert(3)</script>' );
+
+		$holds = array_values( $this->engine()->get_open_holds( $this->room() ) );
+		$this->assertCount( 1, $holds );
+		$this->assertStringContainsString( 'alert(3)', $holds[0]['held'] );
+		$this->assertSame( $first['base'], $holds[0]['base'] );
+		$this->assertSame(
+			array(
+				$first['holdId']  => 'superseded',
+				$second['holdId'] => 'superseded',
+			),
+			$this->closed_holds()
+		);
+	}
+
+	/**
+	 * A paragraph block as an editor adds it to the document.
+	 *
+	 * @param string $client_id The block's id.
+	 * @param string $content   The paragraph's content.
+	 * @return \Yjs\Types\YMap The block.
+	 */
+	private function paragraph_block( string $client_id, string $content ): \Yjs\Types\YMap {
+		$attributes = new \Yjs\Types\YMap();
+		$attributes->set( 'content', new \Yjs\Types\YText( $content ) );
+
+		$block = new \Yjs\Types\YMap();
+		$block->set( 'name', 'core/paragraph' );
+		$block->set( 'clientId', $client_id );
+		$block->set( 'isValid', true );
+		$block->set( 'attributes', $attributes );
+		$block->set( 'innerBlocks', new \Yjs\Types\YArray() );
+
+		return $block;
+	}
+
+	/**
+	 * The filtered author catches up on the room and makes one more edit.
+	 *
+	 * @param callable $edit The edit, given the author's document.
+	 * @return void
+	 */
+	private function author_edits( callable $edit ): void {
+		$result = $this->send_edit( self::$author_id, 101, $edit, 909 );
+		$this->assertSame( array( array( 'status' => 'applied' ) ), $result['dispositions'] );
+	}
+
+	/**
+	 * The `held-resolved` rows a fresh client reads, by hold id.
+	 *
+	 * @return array<string, string> Hold id => resolution.
+	 */
+	private function closed_holds(): array {
+		$closed = array();
+		$rows   = $this->rows_of_type(
+			$this->engine()->get_updates_since( $this->room(), 202, 0, array() ),
+			WP_Yjs_Server_Engine::UPDATE_TYPE_HELD_RESOLVED
+		);
+		foreach ( $rows as $row ) {
+			$closed[ $row['holdId'] ] = $row['resolution'];
+		}
+		return $closed;
+	}
+
+	public function test_a_hold_on_another_block_at_the_same_position_leaves_the_open_hold_alone() {
+		$first = $this->raise_hold();
+		$this->assertSame( 0, $first['index'] );
+
+		// The author puts a new block with a script ABOVE the held block.
+		// The held block moves to the second position, and the new hold
+		// is on the first position, where the open hold was raised.
+		$this->author_edits(
+			function ( $doc ) {
+				$doc->getMap( 'document' )->get( 'blocks' )->insert(
+					0,
+					array( $this->paragraph_block( 'inserted-above', 'Above <script>alert(2)</script>' ) )
+				);
+			}
+		);
+
+		$holds = $this->engine()->get_open_holds( $this->room() );
+		$this->assertCount( 2, $holds, 'a hold on another block must not close the open one' );
+		$this->assertArrayHasKey( $first['holdId'], $holds );
+		$this->assertSame( array(), $this->closed_holds() );
+		unset( $holds[ $first['holdId'] ] );
+		$second = array_values( $holds )[0];
+		$this->assertSame( 0, $second['index'] );
+		$this->assertStringContainsString( 'alert(2)', $second['held'] );
+		$this->assertSame( '', $second['base'], 'a new block has no earlier form' );
+
+		// The author writes into the block of the first hold again. It is
+		// on the second position now.
+		$this->author_edits(
+			function ( $doc ) use ( $first ) {
+				$block = $doc->getMap( 'document' )->get( 'blocks' )->get( 1 );
+				$this->assertSame( $first['blockId'], $block->get( 'clientId' ) );
+				$block->get( 'attributes' )->get( 'content' )->insert( 0, '<script>alert(3)</script>' );
+			}
+		);
+
+		$holds = $this->engine()->get_open_holds( $this->room() );
+		$this->assertCount( 2, $holds, 'one review task per author and block' );
+		$this->assertArrayNotHasKey( $first['holdId'], $holds, 'the newer hold over the same block replaces the open one' );
+		$this->assertArrayHasKey( $second['holdId'], $holds, 'the hold on the other block stays open' );
+		unset( $holds[ $second['holdId'] ] );
+		$third = array_values( $holds )[0];
+		$this->assertSame( 1, $third['index'] );
+		$this->assertStringContainsString( 'alert(3)', $third['held'] );
+		$this->assertSame( $first['base'], $third['base'] );
+		$this->assertSame( array( $first['holdId'] => 'superseded' ), $this->closed_holds() );
+	}
+
+	/**
+	 * The id of a top-level block, as a fresh client reads it.
+	 *
+	 * @param int $index The block's position.
+	 * @return string|null The id, or null when no block is there.
+	 */
+	private function block_id_at( int $index ): ?string {
+		$doc    = $this->client_doc_from_response( $this->engine()->get_updates_since( $this->room(), 808, 0, array() ) );
+		$blocks = $doc->getMap( 'document' )->get( 'blocks' );
+		if ( $index >= $blocks->length ) {
+			return null;
+		}
+
+		return $blocks->get( $index )->get( 'clientId' );
+	}
+
+	/**
+	 * A second filtered user writes a script into the first block.
+	 *
+	 * @param string $markup The markup they put at the start of the block.
+	 * @return void
+	 */
+	private function second_filtered_author_edits_the_first_block( string $markup ): void {
+		$result = $this->send_edit(
+			self::$contributor_id,
+			303,
+			function ( $doc ) use ( $markup ) {
+				$this->first_block_content( $doc )->insert( 0, $markup );
+			}
+		);
+		$this->assertSame( array( array( 'status' => 'applied' ) ), $result['dispositions'] );
+	}
+
+	/**
+	 * An editor approves a hold with the given content, the way the
+	 * review dialog does after a peer changed the block: the first try
+	 * is refused and answers with the block as it reads now, and the
+	 * second try names that block.
+	 *
+	 * @param string $hold_id The hold.
+	 * @param string $content The approved content.
+	 * @return array The disposition of the second try.
+	 */
+	private function approve_after_a_refusal( string $hold_id, string $content ): array {
+		wp_set_current_user( self::$editor_id );
+		$holds   = $this->engine()->get_open_holds( $this->room() );
+		$refused = $this->engine()->resolve_hold( $this->room(), $hold_id, 'accepted', $content, $holds[ $hold_id ]['sanitized'] );
+		$this->assertWPError( $refused );
+		$this->assertSame( 'review_stale', $refused->get_error_code() );
+
+		$seen        = $refused->get_error_data()['hold']['sanitized'];
+		$disposition = $this->engine()->resolve_hold( $this->room(), $hold_id, 'accepted', $content, $seen );
+		$this->assertIsArray( $disposition );
+
+		return $disposition;
+	}
+
+	public function test_a_sanitized_block_keeps_its_id() {
+		$id_before = $this->block_id_at( 0 );
+		$hold      = $this->raise_hold();
+
+		$this->assertSame( $id_before, $hold['blockId'], 'the hold names the block by the id it had' );
+		$this->assertSame( $id_before, $this->block_id_at( 0 ), 'the sanitized form is the same block to every editor' );
+	}
+
+	public function test_a_second_authors_hold_on_a_block_leaves_the_first_authors_hold_on_it() {
+		$first = $this->raise_hold();
+
+		// The text in front of the script stays after the filter, so the
+		// block visibly changes under every kses: the newer kses drops a
+		// script's text with the tag, and a script alone would leave the
+		// sanitized block as it was.
+		$this->second_filtered_author_edits_the_first_block( 'Two: <script>alert(2)</script>' );
+
+		$holds = $this->engine()->get_open_holds( $this->room() );
+		$this->assertCount( 2, $holds, 'one hold per author' );
+		$this->assertArrayHasKey( $first['holdId'], $holds );
+		unset( $holds[ $first['holdId'] ] );
+		$second = array_values( $holds )[0];
+		$this->assertSame( self::$contributor_id, $second['author'] );
+		$this->assertSame( $first['blockId'], $second['blockId'], 'both holds name one block' );
+		$this->assertSame( $first['blockId'], $this->block_id_at( 0 ), 'sanitizing the block again keeps its id' );
+
+		// Approving the first author's hold still changes the block.
+		$approved    = "<!-- wp:paragraph -->\n<p>Approved for the first author</p>\n<!-- /wp:paragraph -->";
+		$disposition = $this->approve_after_a_refusal( $first['holdId'], $approved );
+		$this->assertTrue( $disposition['applied'], 'the approval must find the block' );
+		$this->assertStringContainsString( 'Approved for the first author', (string) $this->engine()->materialize( $this->room() ) );
+
+		// The approved block keeps the id too, so the second author's
+		// hold is still open, still names the block, and can be approved.
+		$this->assertSame( $first['blockId'], $this->block_id_at( 0 ) );
+		$this->assertSame( array( $second['holdId'] ), array_keys( $this->engine()->get_open_holds( $this->room() ) ) );
+
+		$approved    = "<!-- wp:paragraph -->\n<p>Approved for the second author</p>\n<!-- /wp:paragraph -->";
+		$disposition = $this->approve_after_a_refusal( $second['holdId'], $approved );
+		$this->assertTrue( $disposition['applied'] );
+		$this->assertStringContainsString( 'Approved for the second author', (string) $this->engine()->materialize( $this->room() ) );
+		$this->assertSame( array(), $this->engine()->get_open_holds( $this->room() ) );
+	}
+
+	public function test_the_first_author_writing_again_replaces_their_own_hold_after_a_second_authors_hold() {
+		$first = $this->raise_hold();
+		$this->second_filtered_author_edits_the_first_block( '<script>alert(2)</script>' );
+
+		// The first author writes into the block once more.
+		$this->author_edits(
+			function ( $doc ) {
+				$this->first_block_content( $doc )->insert( 0, '<script>alert(3)</script>' );
+			}
+		);
+
+		$holds = $this->engine()->get_open_holds( $this->room() );
+		$this->assertCount( 2, $holds, 'still one hold per author' );
+		$this->assertArrayNotHasKey( $first['holdId'], $holds, "the first author's newer hold replaces their open one" );
+		$this->assertSame( array( $first['holdId'] => 'superseded' ), $this->closed_holds() );
+		foreach ( $holds as $hold ) {
+			$this->assertSame( $first['blockId'], $hold['blockId'] );
+		}
+	}
+
+	/**
+	 * The author adds a block that holds nothing but a script, so the
+	 * filter leaves nothing of it and the hold has no block to name.
+	 *
+	 * Only classic content, which has no block comment, can be removed
+	 * entirely. The engine reads its text only while the classic block
+	 * is not registered on the server, so it is unregistered for the edit.
+	 *
+	 * @param int $index Where the author puts the block.
+	 * @return array The open hold.
+	 */
+	private function raise_hold_for_a_removed_block( int $index ): array {
+		$registry = WP_Block_Type_Registry::get_instance();
+		$classic  = $registry->get_registered( 'core/freeform' );
+		if ( null !== $classic ) {
+			$registry->unregister( 'core/freeform' );
+		}
+
+		try {
+			$this->author_edits(
+				function ( $doc ) use ( $index ) {
+					$block = $this->paragraph_block( 'removed', '<script></script>' );
+					$block->set( 'name', 'core/freeform' );
+					$doc->getMap( 'document' )->get( 'blocks' )->insert( $index, array( $block ) );
+				}
+			);
+		} finally {
+			if ( null !== $classic ) {
+				$registry->register( $classic );
+			}
+		}
+
+		$holds = array_values( $this->engine()->get_open_holds( $this->room() ) );
+		$this->assertCount( 1, $holds, 'the removed block must be held' );
+		$this->assertNull( $holds[0]['blockId'] );
+		$this->assertSame( $index, $holds[0]['index'] );
+
+		return $holds[0];
+	}
+
+	public function test_a_second_try_at_a_block_the_filter_removed_replaces_its_hold() {
+		$first = $this->raise_hold_for_a_removed_block( 1 );
+
+		// The author tries again in the same place.
+		$this->author_edits(
+			function ( $doc ) {
+				$doc->getMap( 'document' )->get( 'blocks' )->insert(
+					1,
+					array( $this->paragraph_block( 'second-try', 'Again <script>alert(2)</script>' ) )
+				);
+			}
+		);
+
+		$holds = array_values( $this->engine()->get_open_holds( $this->room() ) );
+		$this->assertCount( 1, $holds, 'one review task for the two tries' );
+		$this->assertStringContainsString( 'alert(2)', $holds[0]['held'] );
+		$this->assertSame( array( $first['holdId'] => 'superseded' ), $this->closed_holds() );
+	}
+
+	public function test_a_hold_for_a_removed_block_is_not_replaced_by_a_hold_on_a_block_that_was_already_there() {
+		// The filter removes the author's new first block entirely.
+		$first = $this->raise_hold_for_a_removed_block( 0 );
+
+		// The author then writes a script into the paragraph that was in
+		// the post all along. It sits on the same position.
+		$this->author_edits(
+			function ( $doc ) {
+				$this->first_block_content( $doc )->insert( 11, ' <script>alert(2)</script>' );
+			}
+		);
+
+		$holds = $this->engine()->get_open_holds( $this->room() );
+		$this->assertCount( 2, $holds, 'the two holds are about different blocks' );
+		$this->assertArrayHasKey( $first['holdId'], $holds );
+		$this->assertSame( array(), $this->closed_holds() );
+		unset( $holds[ $first['holdId'] ] );
+		$second = array_values( $holds )[0];
+		$this->assertSame( 0, $second['index'] );
+		$this->assertStringContainsString( 'Hello world', $second['base'], 'the newer hold keeps its own base' );
+	}
+
+	/**
+	 * A peer who may publish unfiltered HTML catches up on the room and
+	 * makes one edit.
+	 *
+	 * @param callable $edit The edit, given the peer's document.
+	 * @return void
+	 */
+	private function editor_edits( callable $edit ): void {
+		$result = $this->send_edit( self::$editor_id, 202, $edit, 707 );
+		$this->assertSame( array( array( 'status' => 'applied' ) ), $result['dispositions'] );
+	}
+
+	/**
+	 * An editor approves a hold with the given content, against the
+	 * block as it reads at that moment.
+	 *
+	 * @param string $hold_id The hold.
+	 * @param string $content The approved content.
+	 * @return array The disposition.
+	 */
+	private function approve( string $hold_id, string $content ): array {
+		wp_set_current_user( self::$editor_id );
+		$disposition = $this->engine()->resolve_hold( $this->room(), $hold_id, 'accepted', $content );
+		if ( is_wp_error( $disposition ) && 'review_stale' === $disposition->get_error_code() ) {
+			$seen        = $disposition->get_error_data()['hold']['sanitized'];
+			$disposition = $this->engine()->resolve_hold( $this->room(), $hold_id, 'accepted', $content, $seen );
+		}
+		$this->assertIsArray( $disposition );
+
+		return $disposition;
+	}
+
+	/**
+	 * The text of each top-level block, as a fresh client reads the
+	 * document.
+	 *
+	 * @return string[] One text per block, in order.
+	 */
+	private function block_texts(): array {
+		$doc   = $this->client_doc_from_response( $this->engine()->get_updates_since( $this->room(), 808, 0, array() ) );
+		$texts = array();
+		foreach ( $doc->getMap( 'document' )->get( 'blocks' )->toArray() as $block ) {
+			$content = $block->get( 'attributes' )->get( 'content' );
+			$texts[] = null === $content ? '' : $content->toString();
+		}
+
+		return $texts;
+	}
+
+	public function test_removing_a_held_block_closes_its_hold() {
+		$hold = $this->raise_hold();
+
+		// A peer adds a block. Nothing was removed, so the hold stays.
+		$this->editor_edits(
+			function ( $doc ) {
+				$doc->getMap( 'document' )->get( 'blocks' )->insert( 1, array( $this->paragraph_block( 'other', 'Another block' ) ) );
+			}
+		);
+		$this->editor_edits(
+			function ( $doc ) {
+				$doc->getMap( 'document' )->get( 'blocks' )->delete( 1, 1 );
+			}
+		);
+		$this->assertArrayHasKey( $hold['holdId'], $this->engine()->get_open_holds( $this->room() ), 'removing another block leaves the hold alone' );
+		$this->assertSame( array(), $this->closed_holds() );
+
+		// The peer removes the held block.
+		$this->editor_edits(
+			function ( $doc ) {
+				$doc->getMap( 'document' )->get( 'blocks' )->delete( 0, 1 );
+			}
+		);
+
+		$this->assertSame( array(), $this->engine()->get_open_holds( $this->room() ), 'a hold with no block left to approve must close' );
+		$this->assertSame( array( $hold['holdId'] => 'block-removed' ), $this->closed_holds() );
+
+		// A client reads the removal before the closed hold.
+		$types = array_column( $this->engine()->get_updates_since( $this->room(), 606, 0, array() )['updates'], 'type' );
+		$this->assertSame( WP_Yjs_Server_Engine::UPDATE_TYPE_HELD_RESOLVED, end( $types ) );
+	}
+
+	public function test_a_held_block_moved_into_a_group_keeps_its_hold_and_can_be_approved_there() {
+		$hold = $this->raise_hold();
+
+		// A peer wraps the held block in a group: the block leaves the
+		// top level and comes back, under the same id, inside the group.
+		$this->editor_edits(
+			function ( $doc ) {
+				$blocks = $doc->getMap( 'document' )->get( 'blocks' );
+				$group  = new \Yjs\Types\YMap();
+				$inner  = new \Yjs\Types\YArray();
+				$inner->push( array( $blocks->get( 0 )->clone() ) );
+				$group->set( 'name', 'core/group' );
+				$group->set( 'clientId', 'the-group' );
+				$group->set( 'isValid', true );
+				$group->set( 'attributes', new \Yjs\Types\YMap() );
+				$group->set( 'innerBlocks', $inner );
+				$blocks->delete( 0, 1 );
+				$blocks->insert( 0, array( $group ) );
+			}
+		);
+
+		$this->assertArrayHasKey( $hold['holdId'], $this->engine()->get_open_holds( $this->room() ), 'the block is still in the document' );
+		$this->assertSame( array(), $this->closed_holds() );
+
+		$disposition = $this->approve( $hold['holdId'], "<!-- wp:paragraph -->\n<p>Approved inside</p>\n<!-- /wp:paragraph -->" );
+		$this->assertTrue( $disposition['applied'], 'the approval must find the block inside the group' );
+
+		$materialized = (string) $this->engine()->materialize( $this->room() );
+		$this->assertMatchesRegularExpression( '#<!-- wp:group.*Approved inside.*<!-- /wp:group -->#s', $materialized );
+		$this->assertSame( 'the-group', $this->block_id_at( 0 ) );
+		$this->assertNull( $this->block_id_at( 1 ), 'nothing lands at the top level' );
+	}
+
+	public function test_an_approval_that_removes_the_block_closes_another_authors_hold_on_it() {
+		$first = $this->raise_hold();
+		$this->second_filtered_author_edits_the_first_block( '<script>alert(2)</script>' );
+		$holds = $this->engine()->get_open_holds( $this->room() );
+		unset( $holds[ $first['holdId'] ] );
+		$second = array_values( $holds )[0];
+
+		// The reviewer decides the first hold with "remove the block".
+		$disposition = $this->approve( $first['holdId'], '' );
+		$this->assertTrue( $disposition['applied'] );
+
+		$this->assertSame( array(), $this->engine()->get_open_holds( $this->room() ) );
+		$this->assertSame(
+			array(
+				$second['holdId'] => 'block-removed',
+				$first['holdId']  => 'accepted',
+			),
+			$this->closed_holds()
+		);
+	}
+
+	public function test_a_hold_with_no_block_is_approved_after_the_block_that_was_before_it() {
+		// The filter removes the author's new block, which came right
+		// after the paragraph the post starts with.
+		$first_id = $this->block_id_at( 0 );
+		$hold     = $this->raise_hold_for_a_removed_block( 1 );
+		$this->assertSame( $first_id, $hold['afterId'] );
+
+		// A peer adds two blocks at the top. The recorded position (1)
+		// now points between them.
+		$this->editor_edits(
+			function ( $doc ) {
+				$doc->getMap( 'document' )->get( 'blocks' )->insert(
+					0,
+					array(
+						$this->paragraph_block( 'top-1', 'Top one' ),
+						$this->paragraph_block( 'top-2', 'Top two' ),
+					)
+				);
+			}
+		);
+
+		$disposition = $this->approve( $hold['holdId'], "<!-- wp:paragraph -->\n<p>Approved</p>\n<!-- /wp:paragraph -->" );
+		$this->assertTrue( $disposition['applied'] );
+		$this->assertSame( array( 'Top one', 'Top two', 'Hello world', 'Approved' ), $this->block_texts() );
+	}
+
+	public function test_a_hold_with_no_block_at_the_start_is_approved_at_the_start() {
+		$hold = $this->raise_hold_for_a_removed_block( 0 );
+		$this->assertSame( '', $hold['afterId'] );
+
+		$this->editor_edits(
+			function ( $doc ) {
+				$doc->getMap( 'document' )->get( 'blocks' )->push( array( $this->paragraph_block( 'last', 'Last' ) ) );
+			}
+		);
+
+		$this->approve( $hold['holdId'], "<!-- wp:paragraph -->\n<p>Approved</p>\n<!-- /wp:paragraph -->" );
+		$this->assertSame( array( 'Approved', 'Hello world', 'Last' ), $this->block_texts() );
+	}
+
+	public function test_a_hold_with_no_block_is_approved_at_the_end_when_its_neighbour_is_gone() {
+		$hold = $this->raise_hold_for_a_removed_block( 1 );
+
+		// A peer adds a block at the end, then removes the paragraph the
+		// hold came after.
+		$this->editor_edits(
+			function ( $doc ) {
+				$blocks = $doc->getMap( 'document' )->get( 'blocks' );
+				$blocks->push( array( $this->paragraph_block( 'last', 'Last' ) ) );
+				$blocks->delete( 0, 1 );
+			}
+		);
+		$this->assertArrayHasKey( $hold['holdId'], $this->engine()->get_open_holds( $this->room() ), 'the hold names no block, so no removal closes it' );
+
+		$this->approve( $hold['holdId'], "<!-- wp:paragraph -->\n<p>Approved</p>\n<!-- /wp:paragraph -->" );
+		$this->assertSame( array( 'Last', 'Approved' ), $this->block_texts() );
+	}
+
+	public function test_a_hold_from_before_the_neighbour_was_recorded_is_approved_at_its_recorded_position() {
+		$hold = $this->raise_hold_for_a_removed_block( 1 );
+
+		// The hold as an earlier version of the plugin stored it.
+		$storage = new WP_Sync_Table_Storage();
+		$ledger  = $storage->get_room_meta( $this->room(), WP_Yjs_Server_Engine::META_HELD );
+		unset( $ledger[ $hold['holdId'] ]['afterId'] );
+		$storage->set_room_meta( $this->room(), WP_Yjs_Server_Engine::META_HELD, $ledger );
+
+		$this->editor_edits(
+			function ( $doc ) {
+				$doc->getMap( 'document' )->get( 'blocks' )->insert( 0, array( $this->paragraph_block( 'top', 'Top' ) ) );
+			}
+		);
+
+		$this->approve( $hold['holdId'], "<!-- wp:paragraph -->\n<p>Approved</p>\n<!-- /wp:paragraph -->" );
+		$this->assertSame( array( 'Top', 'Approved', 'Hello world' ), $this->block_texts() );
+	}
+
+	public function test_privileged_markup_raises_no_hold() {
+		$response = $this->engine()->get_updates_since( $this->room(), 101, 0, array() );
+		$doc      = $this->client_doc_from_response( $response );
+		$update   = $this->encode_edit(
+			$doc,
+			function ( $doc ) {
+				$this->first_block_content( $doc )->insert( 11, ' <script>alert(1)</script>' );
+			}
+		);
+		$this->engine()->handle_updates(
+			$this->room(),
+			101,
+			(int) $response['end_cursor'],
+			array(
+				array(
+					'type' => 'update',
+					'data' => $update,
+				),
+			),
+			array()
+		);
+		$this->assertSame( array(), $this->engine()->get_open_holds( $this->room() ) );
+	}
+
+	/**
+	 * Dispatches a resolve POST as the client's REST review lane does.
+	 *
+	 * @param array $params Request body params.
+	 * @return WP_REST_Response Response.
+	 */
+	private function dispatch_resolve( array $params ): WP_REST_Response {
+		$request = new WP_REST_Request( 'POST', '/wp-sync/v1/yjs-server/resolve' );
+		$request->set_body_params( $params );
+		return rest_get_server()->dispatch( $request );
+	}
+
+	/**
+	 * Makes the filtered author the owner of the test post, so they may
+	 * edit it (an Author can only edit their own posts). The test's
+	 * transaction rolls the change back.
+	 *
+	 * @return void
+	 */
+	private function give_the_post_to_the_author(): void {
+		global $wpdb;
+		$wpdb->update( $wpdb->posts, array( 'post_author' => self::$author_id ), array( 'ID' => self::$post_id ) );
+		clean_post_cache( self::$post_id );
+	}
+
+	public function test_hold_decisions_travel_over_the_rest_review_lane() {
+		$this->give_the_post_to_the_author();
+		$hold = $this->raise_hold();
+		$this->assertArrayHasKey( '/wp-sync/v1/yjs-server/resolve', rest_get_server()->get_routes() );
+
+		// The filtered author may edit the post, but cannot approve.
+		$forbidden = $this->dispatch_resolve(
+			array(
+				'room'       => $this->room(),
+				'holdId'     => $hold['holdId'],
+				'resolution' => 'accepted',
+			)
+		);
+		$this->assertSame( 403, $forbidden->get_status() );
+		$this->assertSame( 'rest_sync_forbidden', $forbidden->get_data()['code'] );
+
+		wp_set_current_user( self::$editor_id );
+		$accepted = $this->dispatch_resolve(
+			array(
+				'room'       => $this->room(),
+				'holdId'     => $hold['holdId'],
+				'resolution' => 'accepted',
+				'content'    => $hold['held'],
+			)
+		);
+		$this->assertSame( 200, $accepted->get_status() );
+		$this->assertSame( 'resolved', $accepted->get_data()['disposition']['status'] );
+		$this->assertStringContainsString( '<script>alert(1)</script>', (string) $this->engine()->materialize( $this->room() ) );
+	}
+
+	public function test_the_review_lane_answers_a_stale_approval_with_a_conflict() {
+		$hold = $this->raise_hold();
+		$this->peer_edits_the_held_block( 'PEER EDIT ' );
+
+		$response = $this->dispatch_resolve(
+			array(
+				'room'       => $this->room(),
+				'holdId'     => $hold['holdId'],
+				'resolution' => 'accepted',
+				'content'    => $hold['held'],
+				// The sanitized block the reviewer saw.
+				'current'    => $hold['sanitized'],
+			)
+		);
+
+		$this->assertSame( 409, $response->get_status() );
+		$data = $response->get_data();
+		$this->assertSame( 'review_stale', $data['code'] );
+		// The answer carries the hold with the block as it reads now.
+		$this->assertSame( $hold['holdId'], $data['data']['hold']['holdId'] );
+		$this->assertStringContainsString( 'PEER EDIT', $data['data']['hold']['sanitized'] );
+		$this->assertStringNotContainsString( '<script>', (string) $this->engine()->materialize( $this->room() ) );
+	}
+
+	public function test_the_review_lane_refuses_a_user_who_cannot_edit_the_rooms_post() {
+		$hold   = $this->raise_hold();
+		$before = (string) $this->engine()->materialize( $this->room() );
+
+		// A Contributor has edit_posts, but not edit_post on the Editor's post.
+		wp_set_current_user( self::$contributor_id );
+		foreach ( array( 'dismissed', 'accepted' ) as $resolution ) {
+			$response = $this->dispatch_resolve(
+				array(
+					'room'       => $this->room(),
+					'holdId'     => $hold['holdId'],
+					'resolution' => $resolution,
+					'content'    => $hold['held'],
+				)
+			);
+			$this->assertSame( 403, $response->get_status(), $resolution );
+			$this->assertSame( 'rest_cannot_edit', $response->get_data()['code'], $resolution );
+		}
+
+		// The hold is still open and the block is unchanged.
+		$this->assertCount( 1, $this->engine()->get_open_holds( $this->room() ) );
+		$this->assertSame( $before, (string) $this->engine()->materialize( $this->room() ) );
+
+		// A room name that does not parse is a bad request.
+		wp_set_current_user( self::$editor_id );
+		$unparseable = $this->dispatch_resolve(
+			array(
+				'room'       => 'not-a-room',
+				'holdId'     => $hold['holdId'],
+				'resolution' => 'dismissed',
+			)
+		);
+		$this->assertSame( 400, $unparseable->get_status() );
 	}
 
 	public function test_kses_lane_leaves_untouched_privileged_blocks_alone() {

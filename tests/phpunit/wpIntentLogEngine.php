@@ -218,6 +218,45 @@ class Tests_Collaboration_WpIntentLogEngine extends WP_Test_REST_TestCase {
 		$this->assertSame( 'u' . self::$editor_id . 'c101', $stored['actorId'] );
 	}
 
+	public function test_accepted_row_the_transform_moved_keeps_the_authored_payload() {
+		$target = self::paragraph_id();
+		$typed  = function ( string $id, int $offset, string $text, int $base_seq ) use ( $target ): array {
+			return self::intent_update(
+				array(
+					'intentId' => $id,
+					'baseSeq'  => $base_seq,
+					'type'     => 'insert_text',
+					'payload'  => array(
+						'syncId' => $target,
+						'field'  => 'content',
+						'offset' => $offset,
+						'text'   => $text,
+					),
+				)
+			);
+		};
+
+		// A peer inserts at the start: log 0. The author, unaware, inserts
+		// further along: accepted, moved past the peer's text.
+		$this->poll( array( $typed( 'p-z', 0, 'Z', 0 ) ), array( 'client_id' => 202 ) );
+		$moved = $this->poll( array( $typed( 'a-x', 2, 'x', 0 ) ) );
+		$this->assertSame( 'applied', $moved['dispositions'][0]['status'] );
+		// A keystroke authored after observing the peer is stored as sent.
+		$this->poll( array( $typed( 'a-y', 4, 'y', 2 ) ) );
+
+		$rows = array();
+		foreach ( $this->poll( array(), array( 'client_id' => 303 ) )['updates'] as $update ) {
+			if ( WP_Intent_Log_Engine::UPDATE_TYPE_INTENT === $update['type'] ) {
+				$decoded                      = json_decode( $update['data'], true );
+				$rows[ $decoded['intentId'] ] = $decoded;
+			}
+		}
+		$this->assertSame( 3, $rows['a-x']['payload']['offset'] );
+		$this->assertSame( 2, $rows['a-x']['authoredPayload']['offset'] );
+		$this->assertArrayNotHasKey( 'authoredPayload', $rows['p-z'] );
+		$this->assertArrayNotHasKey( 'authoredPayload', $rows['a-y'] );
+	}
+
 	public function test_conflicting_intent_escalates_into_a_delivered_proposal() {
 		$target = self::paragraph_id();
 		$this->poll(
@@ -273,6 +312,67 @@ class Tests_Collaboration_WpIntentLogEngine extends WP_Test_REST_TestCase {
 		$proposal = json_decode( $proposals[0]['data'], true );
 		$this->assertSame( 'b-1', $proposal['intent']['intentId'] );
 		$this->assertSame( 'u' . self::$editor_id . 'c202', $proposal['actorId'] );
+	}
+
+	/**
+	 * A typist whose editor keeps showing a set-aside letter: the later
+	 * keystrokes still count it and keep the old baseSeq. The engine seeds
+	 * each request's frame state from the actor's parked rows, so they park
+	 * as dependents across requests instead of landing misplaced.
+	 */
+	public function test_later_keystrokes_after_a_set_aside_letter_park_as_dependents_across_requests() {
+		$target = self::paragraph_id();
+		$typed  = function ( string $id, int $offset, string $text, int $base_seq ) use ( $target ): array {
+			return self::intent_update(
+				array(
+					'intentId' => $id,
+					'baseSeq'  => $base_seq,
+					'type'     => 'insert_text',
+					'payload'  => array(
+						'syncId' => $target,
+						'field'  => 'content',
+						'offset' => $offset,
+						'text'   => $text,
+					),
+				)
+			);
+		};
+
+		// The typist writes "ki" at the start: log 0 and 1.
+		$this->poll( array( $typed( 't-k', 0, 'k', 0 ) ) );
+		$this->poll( array( $typed( 't-i', 1, 'i', 1 ) ) );
+		// A peer inserts at the start too, unaware: log 2.
+		$this->poll( array( $typed( 'p-z', 0, 'Z', 0 ) ), array( 'client_id' => 202 ) );
+
+		// The typist has not seen the peer: "o" clashes and takes "l",
+		// accepted just before it in the same request, along to review.
+		$first = $this->poll( array( $typed( 't-l', 2, 'l', 2 ), $typed( 't-o', 3, 'o', 2 ) ) );
+		$this->assertSame( 'escalated', $first['dispositions'][0]['status'] );
+		$this->assertSame( 'frame-conflict', $first['dispositions'][0]['reason'] );
+		$this->assertSame( 'escalated', $first['dispositions'][1]['status'] );
+		$this->assertSame( 'dependent-on-escalated', $first['dispositions'][1]['reason'] );
+
+		// The next request, same frame: a dependent of the set-aside "o".
+		$second = $this->poll( array( $typed( 't-space', 4, ' ', 2 ) ) );
+		$this->assertSame( 'escalated', $second['dispositions'][0]['status'] );
+		$this->assertSame( 'dependent-on-escalated', $second['dispositions'][0]['reason'] );
+
+		// The parked rows carry the settling seq (the peer's entry at 2).
+		$catchup   = $this->poll( array(), array( 'client_id' => 303 ) );
+		$proposals = array();
+		foreach ( $catchup['updates'] as $update ) {
+			if ( WP_Intent_Log_Engine::UPDATE_TYPE_PARKED === $update['type'] ) {
+				$proposals[] = json_decode( $update['data'], true );
+			}
+		}
+		$this->assertCount( 3, $proposals );
+		$this->assertSame( array( 't-l', 't-o', 't-space' ), array_column( array_column( $proposals, 'intent' ), 'intentId' ) );
+		$this->assertSame( array( 2, 2, 2 ), array_column( $proposals, 'atSeq' ) );
+
+		// A keystroke authored after the typist observed the clash is clean.
+		$head  = 3; // k, i, Z.
+		$third = $this->poll( array( $typed( 't-x', 0, 'x', $head ) ) );
+		$this->assertSame( 'applied', $third['dispositions'][0]['status'] );
 	}
 
 	public function test_redelivered_intent_settles_identically_without_growing_the_log() {
@@ -1294,6 +1394,59 @@ class Tests_Collaboration_WpIntentLogEngine extends WP_Test_REST_TestCase {
 		$engine  = new WP_Intent_Log_Engine( new WP_Sync_Table_Storage() );
 		$content = $engine->materialize( $this->room() );
 		$this->assertStringContainsString( '<a href="https://example.com/">Hello</a>', $content );
+	}
+
+	public function test_removing_protected_markup_as_filtered_author_parks_for_approval() {
+		// A privileged author lands a block whose markup rides an object
+		// span over the placeholder character (the custom HTML block shape).
+		$this->grant_unfiltered_html();
+		$applied = $this->poll(
+			array( self::object_block_intent( 'kses-app', '<script>alert(1)</script>' ) )
+		);
+		$this->assertSame( 'applied', $applied['dispositions'][0]['status'] );
+
+		$engine = new WP_Intent_Log_Engine( new WP_Sync_Table_Storage() );
+		$this->assertStringContainsString( '<script>alert(1)</script>', (string) $engine->materialize( $this->room() ) );
+
+		/*
+		 * A filtered author's attempt to REMOVE the protected format parks
+		 * instead of applying. This is the off half of a filtered author's
+		 * format replacement (a custom HTML block edit derives as off/on):
+		 * letting it apply would strip the approved markup out of the
+		 * canonical document without review while the on half parks.
+		 */
+		$this->revoke_unfiltered_html();
+		$protected = 'obj|' . wp_json_encode( array( 'html' => '<script>alert(1)</script>' ), JSON_UNESCAPED_SLASHES );
+		$off       = $this->poll(
+			array(
+				self::intent_update(
+					array(
+						'intentId' => 'kses-off',
+						'baseSeq'  => 0,
+						'type'     => 'format_text',
+						'payload'  => array(
+							'syncId' => 'kses-nb',
+							'field'  => 'content',
+							'start'  => 0,
+							'end'    => 1,
+							'format' => $protected,
+							'on'     => false,
+						),
+					)
+				),
+			)
+		);
+		$this->assertSame(
+			array(
+				'intentId' => 'kses-off',
+				'status'   => 'escalated',
+				'reason'   => WP_Intent_Log_Engine::ESCALATION_REQUIRES_APPROVAL,
+			),
+			$off['dispositions'][0]
+		);
+
+		// The approved markup is still in the canonical document.
+		$this->assertStringContainsString( '<script>alert(1)</script>', (string) $engine->materialize( $this->room() ) );
 	}
 
 	/**

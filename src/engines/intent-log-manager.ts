@@ -12,7 +12,13 @@ import type { Awareness } from 'y-protocols/awareness';
 import apiFetch from '@wordpress/api-fetch';
 import { parse as parseBlockDelimiters } from '@wordpress/block-serialization-default-parser';
 // eslint-disable-next-line import/no-unresolved -- Provided by the editor runtime.
-import { getBlockType, getSaveContent } from '@wordpress/blocks';
+import {
+	getBlockType,
+	getSaveContent,
+	parse,
+	serialize,
+	serializeRawBlock,
+} from '@wordpress/blocks';
 
 /**
  * Internal dependencies
@@ -35,13 +41,21 @@ import {
 	type IntentLogSession,
 } from './intent-log-session';
 import { mintSyncId } from './intent-log/sync-id.js';
-import { fieldToHtml } from './intent-log/rich-text.js';
 import {
 	createIntentLogUndoManager,
 	type IntentLogUndoManager,
 } from './intent-log-undo';
 import { getProviderCreators, LOCAL_UNDO_IGNORED_ORIGIN } from '../framework';
+import {
+	buildConflictRecords,
+	type ConflictRecord,
+} from './intent-log-conflicts';
 import type { EngineDocument } from './intent-log/engine-types';
+import type { SyncConflictSource } from '../review/types';
+import {
+	createEntityConflictSource,
+	type EntityConflicts,
+} from '../review/entity-source';
 import type {
 	CollectionHandlers,
 	ObjectData,
@@ -149,6 +163,8 @@ const MAX_PENDING_PUSHES = 8;
 
 interface EntityState {
 	session: IntentLogSession;
+	/** The entity's entry in the conflict review lane, once loaded. */
+	conflictEntity?: EntityConflicts;
 	handlers: RecordHandlers;
 	providers: ProviderCreatorResult[];
 	unloaded: boolean;
@@ -954,13 +970,138 @@ function chooseObservedBaseline(
 }
 
 /**
+ * The bridge blocks carrying the given ids, at any depth, in the order of
+ * the ids.
+ *
+ * @param blocks Bridge blocks.
+ * @param ids    The blocks' durable ids.
+ * @return The blocks found.
+ */
+function pickBlocksById( blocks: BridgeBlock[], ids: string[] ): BridgeBlock[] {
+	const found = new Map< string, BridgeBlock >();
+	const walk = ( list: BridgeBlock[] ) => {
+		for ( const block of list ) {
+			const syncId = ( block.attributes?.metadata as { syncId?: string } )
+				?.syncId;
+			if ( syncId && ids.includes( syncId ) && ! found.has( syncId ) ) {
+				found.set( syncId, block );
+			}
+			walk( block.innerBlocks );
+		}
+	};
+	walk( blocks );
+	return ids
+		.map( ( id ) => found.get( id ) )
+		.filter( ( block ): block is BridgeBlock => undefined !== block );
+}
+
+/**
+ * Parsed editor blocks as bridge blocks (name, attributes, children).
+ * Freeform whitespace between blocks parses as nameless blocks and is
+ * dropped.
+ *
+ * @param blocks Parsed blocks.
+ * @return Bridge blocks.
+ */
+function toBridgeBlocks( blocks: ReturnType< typeof parse > ): BridgeBlock[] {
+	return blocks
+		.filter( ( block ) => !! block.name )
+		.map( ( block ) => {
+			const { innerContent } = block as { innerContent?: unknown };
+			return {
+				name: block.name,
+				attributes: { ...( block.attributes ?? {} ) },
+				innerBlocks: toBridgeBlocks( block.innerBlocks ?? [] ),
+				// Raw-content blocks (custom HTML) carry their markup in
+				// inner fragments.
+				...( Array.isArray( innerContent )
+					? {
+							innerContent: innerContent as Array<
+								string | null
+							>,
+					  }
+					: {} ),
+			};
+		} );
+}
+
+/**
+ * A bridge tree with a record's blocks replaced: the replacement takes
+ * the place of the first of the ids met in document order, the other ids
+ * are removed. With none of the ids present (a proposed insertion) the
+ * replacement lands at the given slot.
+ *
+ * @param blocks        The tree.
+ * @param ids           The blocks the record covers.
+ * @param replacement   The replacement blocks.
+ * @param slot          Where an insertion lands: the parent's id (the top
+ *                      level when absent) and the index among its children.
+ * @param slot.parentId
+ * @param slot.index
+ * @return The rewritten tree.
+ */
+function replaceBlocksInTree(
+	blocks: BridgeBlock[],
+	ids: string[],
+	replacement: BridgeBlock[],
+	slot: { parentId?: string; index: number }
+): BridgeBlock[] {
+	let placed = false;
+	const walk = ( list: BridgeBlock[] ): BridgeBlock[] => {
+		const out: BridgeBlock[] = [];
+		for ( const block of list ) {
+			const syncId = ( block.attributes?.metadata as { syncId?: string } )
+				?.syncId;
+			if ( syncId && ids.includes( syncId ) ) {
+				if ( ! placed ) {
+					placed = true;
+					out.push( ...replacement );
+				}
+				continue;
+			}
+			out.push( { ...block, innerBlocks: walk( block.innerBlocks ) } );
+		}
+		return out;
+	};
+	const rewritten = walk( blocks );
+	if ( placed ) {
+		return rewritten;
+	}
+	const insertInto = ( list: BridgeBlock[] ): BridgeBlock[] => {
+		const next = list.slice();
+		next.splice( Math.min( slot.index, next.length ), 0, ...replacement );
+		return next;
+	};
+	if ( undefined === slot.parentId ) {
+		return insertInto( rewritten );
+	}
+	const intoParent = ( list: BridgeBlock[] ): BridgeBlock[] =>
+		list.map( ( block ) => {
+			const syncId = ( block.attributes?.metadata as { syncId?: string } )
+				?.syncId;
+			if ( syncId === slot.parentId ) {
+				return {
+					...block,
+					innerBlocks: insertInto( block.innerBlocks ),
+				};
+			}
+			return { ...block, innerBlocks: intoParent( block.innerBlocks ) };
+		} );
+	return intoParent( rewritten );
+}
+
+/**
  * Creates an intent-log sync manager.
  *
  * @param debug Whether to log debug output.
  * @return Sync manager.
  */
-export function createIntentLogManager( debug = false ): SyncManager {
+export function createIntentLogManager( debug = false ): SyncManager & {
+	/** The plugin's conflict review lane (src/review/): every parked proposal of a loaded entity as a SyncConflict record. */
+	conflicts: SyncConflictSource;
+} {
 	const entityStates = new Map< string, EntityState >();
+	const conflicts = createEntityConflictSource();
 	const collectionStates = new Map< ObjectType, CollectionState >();
 	/*
 	 * The collaborative undo manager (inverse intents; see
@@ -1569,148 +1710,270 @@ export function createIntentLogManager( debug = false ): SyncManager {
 		 * parked rows before their resolution rows, and notifying on raw
 		 * arrival would re-surface long-resolved conflicts on every reload.
 		 */
-		const notifiedProposalIds = new Set< string >();
 		let proposalsNotifyScheduled = false;
-		const summarizeProposal = ( proposal: {
-			intent: { type: string; payload: Record< string, unknown > };
-		} ): string | undefined => {
-			const { type, payload } = proposal.intent;
-			switch ( type ) {
-				case 'insert_text':
-				case 'replace_text':
-					return payload.text as string;
-				case 'replace_attr_content':
-					return payload.newText as string;
-				case 'delete_text':
-					return undefined; // A lost deletion has no content to show.
-				case 'set_attr':
-					return `${ payload.key as string }: ${ JSON.stringify(
-						payload.value
-					) }`;
-				case 'set_property':
-					return `${ payload.name as string }: ${ JSON.stringify(
-						payload.value
-					) }`;
-				case 'format_text':
-					return payload.format as string;
-				case 'insert_block': {
-					// The reviewer must SEE what they would approve —
-					// notably a raw-attr block's markup (core/html).
-					const block = payload.block as
-						| {
-								blockType?: string;
-								text?: string;
-								fields?: {
-									content?: { text?: string };
-								};
-								attrs?: Record< string, unknown >;
-						  }
-						| undefined;
-					const text =
-						block?.fields?.content?.text ??
-						block?.text ??
-						( typeof block?.attrs?.content === 'string'
-							? ( block.attrs.content as string )
-							: undefined );
-					return text
-						? `${ block?.blockType ?? 'block' }: ${ text }`
-						: block?.blockType;
+		/*
+		 * The conflict review lane: the open proposals as SyncConflict
+		 * records (one per parked unit, overlapping units folded, three
+		 * sides rebuilt from the retained log, see
+		 * intent-log-conflicts.ts), and the reviewer's decision applied
+		 * by the engine.
+		 */
+		const conflictRecords = (): ConflictRecord[] =>
+			buildConflictRecords( session.getOpenProposals(), {
+				getDocument: () => session.getDocument(),
+				getDocumentAt: ( seq ) => session.getDocumentAt( seq ),
+				getLogSince: ( seq ) => session.getLogSince( seq ),
+				serializeBlocks: ( doc, ids ) =>
+					pickBlocksById( documentBlocks( state, doc ), ids )
+						.map( ( block ) => {
+							try {
+								/*
+								 * A raw-content block (custom HTML) keeps
+								 * its markup in inner fragments, not in an
+								 * attribute its save function reads, so it
+								 * is written out by hand: the comment
+								 * delimiters around the markup itself.
+								 */
+								if ( state.rawContent?.is( block.name ) ) {
+									const markup = `\n${ state.rawContent.serialize(
+										block
+									) }\n`;
+									return serializeRawBlock( {
+										blockName: block.name,
+										attrs: block.attributes,
+										innerBlocks: [],
+										innerHTML: markup,
+										innerContent: [ markup ],
+									} );
+								}
+								return serialize(
+									toEditorBlocks(
+										[ block ],
+										new Map()
+									) as Parameters< typeof serialize >[ 0 ]
+								);
+							} catch {
+								return '';
+							}
+						} )
+						.filter( ( markup ) => '' !== markup )
+						.join( '\n\n' ),
+			} );
+		/**
+		 * Authors a record's accepted replacement as ordinary intents under
+		 * one new txn: the current document with the record's blocks
+		 * replaced by the content, diffed against the current document, so
+		 * the wire carries the smallest edit (a block that kept its
+		 * identity and changed its text derives a text edit).
+		 *
+		 * @param parked  The record.
+		 * @param content The replacement, as serialized blocks ('' removes).
+		 */
+		const authorReplacement = (
+			parked: ConflictRecord,
+			content: string
+		) => {
+			const doc = session.getDocument();
+			if ( ! doc ) {
+				return;
+			}
+			const { target } = parked.conflict;
+			const slot =
+				'blocks' === target.type
+					? { parentId: target.parentId, index: target.index }
+					: { index: 0 };
+			/*
+			 * The content replaces the whole run the record covers: the
+			 * blocks the parked edits touch and the blocks between them,
+			 * which is what the reviewer saw. Replacing only the touched
+			 * blocks would leave a block from in between behind the
+			 * merged result, out of order.
+			 */
+			const replacement =
+				'' === content.trim() ? [] : toBridgeBlocks( parse( content ) );
+			const tree = replaceBlocksInTree(
+				documentBlocks( state, doc ),
+				parked.spanIds,
+				replacement,
+				slot
+			);
+			/*
+			 * The content is the reviewer's choice, not a stale editor
+			 * tree, so a block it names must land even when this tab holds
+			 * a tombstone for it. The tab's own set-aside split is the
+			 * case: the replan took the second half out of the optimistic
+			 * document, which tombstoned its id as if a peer had removed
+			 * it, and the stale-tree filter then dropped the very block
+			 * the reviewer had just chosen to put back ("It should be
+			 * split into multiple paragraphs." vanished on accept).
+			 */
+			const excludeIds = new Set( state.docTombstones );
+			const liftTombstones = ( blocks: BridgeBlock[] ) => {
+				for ( const block of blocks ) {
+					const syncId = (
+						block.attributes?.metadata as { syncId?: string }
+					 )?.syncId;
+					if ( syncId ) {
+						excludeIds.delete( syncId );
+					}
+					liftTombstones( block.innerBlocks );
 				}
-				default:
-					return undefined;
-			}
-		};
-		// A parked new-block proposal (insert_block) has no block in the
-		// reviewer's canvas to anchor to. Surface its intended position and
-		// a readable content preview so the editor can render it INLINE
-		// where it would land, with approve/discard in place.
-		const proposedInsertionFor = ( proposal: {
-			intent: { type: string; payload: Record< string, unknown > };
-		} ) => {
-			if ( 'insert_block' !== proposal.intent.type ) {
-				return undefined;
-			}
-			const payload = proposal.intent.payload;
-			const block = payload.block as
-				| {
-						blockType?: string;
-						fields?: {
-							content?: { text: string; formats?: unknown[] };
-						};
-						attrs?: Record< string, unknown >;
-				  }
-				| undefined;
-			const field = block?.fields?.content;
-			let html = '';
-			if ( field ) {
-				html = fieldToHtml( field as never );
-			} else if ( typeof block?.attrs?.content === 'string' ) {
-				html = block.attrs.content as string;
-			}
-			return {
-				blockType: block?.blockType,
-				html,
-				afterSiblingId:
-					typeof payload.afterSiblingId === 'string'
-						? payload.afterSiblingId
-						: undefined,
-				parentId:
-					typeof payload.parentId === 'string'
-						? payload.parentId
-						: undefined,
 			};
+			liftTombstones( replacement );
+			// Only what the record showed may disappear: the run's blocks
+			// and the blocks inside them.
+			const removableIds = new Set( parked.blockIds );
+			const addRemovable = ( blocks: EngineDocument[ 'root' ] ) => {
+				for ( const block of blocks ) {
+					removableIds.add( block.syncId );
+					addRemovable( block.children );
+				}
+			};
+			const collectRun = ( blocks: EngineDocument[ 'root' ] ) => {
+				for ( const block of blocks ) {
+					if ( parked.spanIds.includes( block.syncId ) ) {
+						addRemovable( [ block ] );
+					} else {
+						collectRun( block.children );
+					}
+				}
+			};
+			collectRun( doc.root );
+			const derived = deriveIntents( doc, tree, {
+				removableIds,
+				excludeIds,
+				richTextFields: state.fieldsResolver,
+				rawContent: state.rawContent,
+				saveMarkup: saveMarkupAdapter,
+			} );
+			if ( ! derived || 0 === derived.intents.length ) {
+				return;
+			}
+			state.capturing = true;
+			try {
+				// Authored at the head, against the optimistic document the
+				// diff was taken from. The observed frame stays where the
+				// capture lane left it.
+				const envelopes = session.authorBatch( derived.intents, {
+					txnId: globalThis.crypto.randomUUID(),
+					baseSeq: session.getSeq(),
+					observe: false,
+				} );
+				undoManager?.noteAuthored( session, envelopes );
+			} finally {
+				state.capturing = false;
+			}
+			/*
+			 * Show the decision at once. The change handler skipped the
+			 * push while the batch was authored under the capture guard,
+			 * and the next push would otherwise wait for the server's
+			 * answer (a poll away): the reviewer watched the old blocks
+			 * stay for a second after accepting. A decision comes from a
+			 * dialog button, not from inside update(), so a push made here
+			 * reaches the editor.
+			 */
+			syncEditor( state );
 		};
-		const mapReviewItems = () =>
-			session.getOpenProposals().map( ( proposal ) => ( {
-				id: proposal.intent.intentId,
-				unitId: proposal.intent.txnId ?? proposal.intent.intentId,
-				isLocal: proposal.actorId === session.actorId,
-				actorId: proposal.actorId,
-				reason: proposal.reason,
-				intentType: proposal.intent.type,
-				summary: summarizeProposal( proposal ),
-				excerpt: proposal.context?.excerpt,
-				targetId:
-					typeof proposal.intent.payload.syncId === 'string'
-						? proposal.intent.payload.syncId
-						: undefined,
-				proposedInsertion: proposedInsertionFor( proposal ),
-			} ) );
-		session.onProposalsChange( () => {
+		const entity: EntityConflicts = {
+			list: () => conflictRecords().map( ( parked ) => parked.conflict ),
+			resolve: ( conflictId, decision ) => {
+				const parked = conflictRecords().find(
+					( candidate ) => candidate.conflict.id === conflictId
+				);
+				if ( ! parked ) {
+					return 'resolved';
+				}
+				const memberIds = parked.members.map(
+					( member ) => member.intent.intentId
+				);
+				if ( 'accept' === decision.action ) {
+					if (
+						'sequestration' === parked.conflict.kind &&
+						decision.content === parked.conflict.proposed
+					) {
+						// Approval of the held markup as parked: the
+						// restore lane re-authors each member under the
+						// reviewer's account and closes it as restored.
+						for ( const id of memberIds ) {
+							manager.restoreProposal?.(
+								objectType,
+								objectId,
+								id
+							);
+						}
+						return 'resolved';
+					}
+					if ( undefined !== parked.property ) {
+						const original =
+							parked.members.at( -1 )?.intent.payload.value;
+						let value: unknown = decision.content;
+						if ( 'string' !== typeof original ) {
+							try {
+								value = JSON.parse( decision.content );
+							} catch {
+								value = decision.content;
+							}
+						}
+						session.author( 'set_property', {
+							name: parked.property,
+							value,
+							observedVersion:
+								session.getDocument()?.propVersions?.[
+									parked.property
+								] ?? 0,
+						} );
+					} else {
+						authorReplacement( parked, decision.content );
+					}
+				}
+				/*
+				 * The closures go out AFTER the replacement, through the
+				 * same local update queue: one flush carries the intents
+				 * first and the resolutions behind them, so the parked
+				 * never closes ahead of the edit that settles it.
+				 */
+				for ( const id of memberIds ) {
+					session.resolveProposal( id, 'dismissed' );
+				}
+				return 'resolved';
+			},
+		};
+		conflicts.set( objectType, objectId, entity );
+		state.conflictEntity = entity;
+		/*
+		 * One notification per delivery batch. A change to the open list
+		 * always notifies. A change to the document notifies only when it
+		 * changed what a record shows (a record's sides are rebuilt from
+		 * the document on every read, so a collaborator's edit landing in
+		 * a block under review changes them without any proposal opening
+		 * or closing).
+		 */
+		let proposalsChanged = false;
+		const scheduleConflictNotify = ( isProposalsChange: boolean ) => {
+			proposalsChanged = proposalsChanged || isProposalsChange;
 			if ( proposalsNotifyScheduled ) {
 				return;
 			}
 			proposalsNotifyScheduled = true;
 			void Promise.resolve().then( () => {
 				proposalsNotifyScheduled = false;
+				const mustNotify = proposalsChanged;
+				proposalsChanged = false;
 				if ( state.unloaded ) {
 					return;
 				}
-				const items = mapReviewItems();
-				handlers.onProposalsChange?.( items );
-				for ( const item of items ) {
-					if ( notifiedProposalIds.has( item.id ) ) {
-						continue;
-					}
-					notifiedProposalIds.add( item.id );
-					if ( handlers.onEscalation ) {
-						handlers.onEscalation( {
-							reason: item.reason,
-							isLocal: item.isLocal,
-							proposalId: item.id,
-							summary: item.summary,
-							excerpt: item.excerpt,
-						} );
-					} else {
-						// eslint-disable-next-line no-console
-						console.warn(
-							'[IntentLog] An edit was escalated for review (%s): %s',
-							item.reason,
-							item.id
-						);
-					}
+				if ( mustNotify ) {
+					conflicts.notify( objectType, objectId );
+				} else {
+					conflicts.notifyIfChanged( objectType, objectId );
 				}
 			} );
+		};
+		session.onProposalsChange( () => scheduleConflictNotify( true ) );
+		session.onChange( () => {
+			if ( session.getOpenProposals().length > 0 ) {
+				scheduleConflictNotify( false );
+			}
 		} );
 
 		log( 'connecting', { key } );
@@ -1868,7 +2131,8 @@ export function createIntentLogManager( debug = false ): SyncManager {
 		} );
 	}
 
-	const manager: SyncManager = {
+	const manager: SyncManager & { conflicts: SyncConflictSource } = {
+		conflicts: conflicts.source,
 		load: loadEntity,
 
 		loadCollection,
@@ -2106,6 +2370,17 @@ export function createIntentLogManager( debug = false ): SyncManager {
 				}
 				state.capturing = true;
 				try {
+					/*
+					 * Captured batches are NOT stamped as one atomic unit.
+					 * A batch is everything the editor changed since the
+					 * last capture, related or not: stamped as a unit, one
+					 * conflicting member would set the whole batch aside
+					 * (an inserted paragraph parked because an attribute
+					 * write beside it conflicted). The members merge or
+					 * park one by one, and conflict review folds what
+					 * parked back into one record per author and block
+					 * (see intent-log-conflicts.ts).
+					 */
 					const envelopes = state.session.authorBatch(
 						derived.intents
 					);
@@ -2299,6 +2574,33 @@ export function createIntentLogManager( debug = false ): SyncManager {
 					observedVersion:
 						doc.propVersions?.[ payload.name as string ] ?? 0,
 				} );
+			} else if ( 'format_text' === type && doc ) {
+				/*
+				 * A parked format application. This is the kses lane's
+				 * shape for markup carried as an object format, e.g. a
+				 * custom HTML block's content change: the placeholder
+				 * character lands as safe plain text and only the format
+				 * carrying the markup parks. Re-author it over the target
+				 * range at the current head (clamped). The range's text is
+				 * ordinarily still there, since the paired text intent was
+				 * accepted). The re-authored intent carries the RESTORER's
+				 * capability, which is what makes this an approval.
+				 */
+				const block = findBlock( doc.root, payload.syncId as string );
+				const field = ( payload.field as string ) ?? 'content';
+				const text = block?.fields[ field ]?.text ?? '';
+				const start = Math.min( payload.start as number, text.length );
+				const end = Math.min( payload.end as number, text.length );
+				if ( block && start < end ) {
+					session.author( 'format_text', {
+						syncId: payload.syncId as string,
+						field,
+						start,
+						end,
+						format: payload.format as string,
+						on: payload.on,
+					} );
+				}
 			} else if ( 'insert_block' === type && doc ) {
 				/*
 				 * Re-insert the parked block spec under FRESH identities
@@ -2380,10 +2682,14 @@ export function createIntentLogManager( debug = false ): SyncManager {
 			state.awareness?.destroy();
 			state.session.destroy();
 			entityStates.delete( key );
+			if ( state.conflictEntity ) {
+				conflicts.delete( objectType, objectId, state.conflictEntity );
+			}
 		},
 
 		unloadAll() {
 			pendingLoads.clear();
+			conflicts.clear();
 			for ( const [ , state ] of entityStates ) {
 				state.unloaded = true;
 				if ( state.syncTimer ) {

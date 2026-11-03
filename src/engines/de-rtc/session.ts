@@ -19,6 +19,10 @@ import {
 } from '../../shared/awareness-sync';
 import { announceLocalWrite } from '../../providers/advisory/announce';
 import type { TransportSessionExtensions } from '../../providers/session-extensions';
+import {
+	createDeRtcCanonicalContents,
+	type DeRtcCanonicalContents,
+} from './canonical-contents';
 import type { DeRtcCommitAdapter } from './commit';
 import { buildDeRtcClientUpdate, hashDeRtcContent } from './descriptor';
 import { DE_RTC_REMOTE_ORIGIN, type DeRtcDocBridge } from './doc-bridge';
@@ -96,6 +100,14 @@ export interface DeRtcSessionOptions {
 	 * proposals tagged. Optional: collections and undo-less tests skip it.
 	 */
 	undoFeed?: import('./revert-undo').DeRtcUndoFeed;
+
+	/**
+	 * The entity's record of canonical content by version. The session
+	 * writes every version it receives into it. The engine's review lane
+	 * reads the newest one. Optional: a session without one keeps its
+	 * own.
+	 */
+	canonicalContents?: DeRtcCanonicalContents;
 
 	/**
 	 * The entity's review ledger. Parked/resolved rows feed it, and it
@@ -190,14 +202,9 @@ export function createDeRtcSessionCodec(
 	// string). The descriptor builder needs the exact content
 	// of the proposal's declared base version. Bounded: old versions can
 	// never become a proposal base again.
-	const canonicalContents = new Map< string, string >();
-	const recordCanonicalContent = ( version: string, content: string ) => {
-		canonicalContents.set( version, content );
-		while ( canonicalContents.size > 8 ) {
-			const oldest = canonicalContents.keys().next().value as string;
-			canonicalContents.delete( oldest );
-		}
-	};
+	const canonicalContents =
+		options.canonicalContents ?? createDeRtcCanonicalContents();
+	const recordCanonicalContent = canonicalContents.record;
 
 	/*
 	 * Announce-model catch-up state: announcements carry no
@@ -325,6 +332,20 @@ export function createDeRtcSessionCodec(
 	let lastCommitBuiltAt = 0;
 	let cadenceTimer: ReturnType< typeof setTimeout > | null = null;
 
+	/**
+	 * Whether this client has blocks of its own set aside for review.
+	 */
+	function hasOwnOpenRecord(): boolean {
+		return (
+			review
+				?.getOpen()
+				.some(
+					( parked ) =>
+						parked.authorClientId === clientId && ! parked.property
+				) ?? false
+		);
+	}
+
 	function maybePropose(): void {
 		if (
 			! dirty ||
@@ -348,10 +369,33 @@ export function createDeRtcSessionCodec(
 			return;
 		}
 		if ( commitIntervalMs > 0 ) {
-			const wait = lastCommitBuiltAt + commitIntervalMs - Date.now();
+			let wait = lastCommitBuiltAt + commitIntervalMs - Date.now();
+			/*
+			 * An open review record of this client's own waives the
+			 * cadence at the first pause in the typing. The record was
+			 * opened by the first keystroke of the burst (a commit goes
+			 * out at once when the dial's window has passed), and the rest
+			 * of the sentence would otherwise wait out the window while
+			 * the reviewer is shown that one keystroke as the whole
+			 * proposal. Only the pause commits early: typing without an
+			 * open record keeps the dial's cadence.
+			 */
+			const waived = wait > 0 && hasOwnOpenRecord();
+			if ( waived ) {
+				wait = Math.min(
+					wait,
+					lastLocalEditAt + burstQuietMs - Date.now()
+				);
+			}
 			if ( wait > 0 ) {
 				// Hold the commit to the dial's cadence; dirty keeps
-				// coalescing and ONE timer re-enters at the boundary.
+				// coalescing and ONE timer re-enters at the boundary (a
+				// waived wait moves with every keystroke, so its timer
+				// is set again each time).
+				if ( waived && null !== cadenceTimer ) {
+					clearTimeout( cadenceTimer );
+					cadenceTimer = null;
+				}
 				if ( null === cadenceTimer ) {
 					cadenceTimer = setTimeout( () => {
 						cadenceTimer = null;
@@ -498,6 +542,11 @@ export function createDeRtcSessionCodec(
 						? decoded.changedBlocks
 						: [],
 				} as DeRtcParkedProposal );
+				if ( decoded.authorClientId === clientId ) {
+					// Typing held to the cadence may now go out at the
+					// next pause (see maybePropose).
+					maybePropose();
+				}
 			}
 			return;
 		}

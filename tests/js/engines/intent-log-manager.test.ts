@@ -15,18 +15,40 @@ import {
  */
 import { addFilter, removeFilter } from '@wordpress/hooks';
 
-// The real module drags ESM-only deps into Jest; the manager only reads
-// attribute schemas for its block-default merge.
-jest.mock( '@wordpress/blocks', () => ( {
-	getBlockType: ( name: string ) =>
-		'core/group' === name
-			? {
-					attributes: {
-						tagName: { default: 'div', type: 'string' },
-					},
-			  }
-			: undefined,
-} ) );
+// The real module drags ESM-only deps into Jest. The manager reads
+// attribute schemas for its block-default merge, and serializes and parses
+// blocks for conflict review. The stand-ins render blocks as opaque JSON
+// (name, attributes, children), the same trick the de-rtc suites use.
+jest.mock( '@wordpress/blocks', () => {
+	const strip = ( block: any ): unknown => ( {
+		name: block.name,
+		attributes: block.attributes,
+		innerBlocks: ( block.innerBlocks ?? [] ).map( strip ),
+	} );
+	return {
+		getBlockType: ( name: string ) =>
+			'core/group' === name
+				? {
+						attributes: {
+							tagName: { default: 'div', type: 'string' },
+						},
+				  }
+				: undefined,
+		serialize: ( blocks: unknown[] ) =>
+			JSON.stringify( blocks.map( strip ) ),
+		serializeRawBlock: ( block: {
+			blockName: string;
+			innerContent: string[];
+		} ) =>
+			JSON.stringify( [
+				{
+					name: block.blockName,
+					markup: block.innerContent.join( '' ).trim(),
+				},
+			] ),
+		parse: ( content: string ) => ( content ? JSON.parse( content ) : [] ),
+	};
+} );
 
 // Taxonomy discovery (the manager mirrors entities.js: post-type
 // taxonomies by rest_base). The built-in post type carries the two
@@ -54,6 +76,11 @@ jest.mock( '@wordpress/api-fetch', () => ( {
  */
 import { Awareness } from 'y-protocols/awareness';
 import { createIntentLogManager } from '../../../src/engines/intent-log-manager';
+import {
+	registerConflictSource,
+	resetConflictSourcesForTesting,
+	resolveConflict as registryResolveConflict,
+} from '../../../src/review/conflicts';
 import { createIntentLogEngineAdapter } from '../../../src/engines/intent-log-adapter';
 import {
 	INTENT_LOG_UPDATE_TYPES,
@@ -140,6 +167,33 @@ const snapshotRow = (
 	type: INTENT_LOG_UPDATE_TYPES.SNAPSHOT,
 } );
 
+/**
+ * A parked row: an intent the server set aside for review.
+ *
+ * @param intent  The intent.
+ * @param actorId Its author.
+ * @param reason  Why it was set aside.
+ */
+const parkedRow = (
+	intent: Record< string, unknown >,
+	actorId: string,
+	reason = 'frame-conflict'
+) => ( {
+	data: JSON.stringify( { intent, actorId, reason } ),
+	type: INTENT_LOG_UPDATE_TYPES.PARKED,
+} );
+
+/**
+ * The paragraph texts of a record's side.
+ *
+ * @param side The side, as serialized blocks.
+ */
+const textOf = ( side: string | null ) =>
+	JSON.parse( side ?? '[]' ).map(
+		( block: { attributes: { content: string } } ) =>
+			block.attributes.content
+	);
+
 const FILTER = 'sync.providers';
 const HOOK = 'test/intent-log-manager';
 
@@ -162,6 +216,7 @@ describe( 'intent-log manager', () => {
 		jest.useRealTimers();
 		removeFilter( FILTER, HOOK );
 		resetEngineAdaptersForTesting();
+		resetConflictSourcesForTesting();
 		resetProviderCreatorsForTesting();
 		delete window.__experimentalEnableRealTimeCollaboration;
 		delete window._wpCollaborationSync;
@@ -532,11 +587,14 @@ describe( 'intent-log manager', () => {
 			session.receiveDispositions!( acknowledgments );
 			await flushEditorSync();
 			expect( transport.captured.sent ).toHaveLength( 0 );
+			// Same paragraph: the clash sets the whole burst aside, both
+			// keystrokes, not only the second (the first would otherwise
+			// land as a stray character).
 			expect( session.getOpenProposals() ).toHaveLength(
-				sameParagraph ? 1 : 0
+				sameParagraph ? 2 : 0
 			);
 			const expected = [
-				sameParagraph ? 'Remote Hello!!' : 'Hello!!!!',
+				sameParagraph ? 'Remote Hello!' : 'Hello!!!!',
 				'Remote Other',
 			];
 			expect(
@@ -559,18 +617,23 @@ describe( 'intent-log manager', () => {
 			).toEqual( expected );
 			if ( sameParagraph ) {
 				const [ proposal ] = session.getOpenProposals();
-				expect( handlers.onEscalation ).toHaveBeenCalledWith(
-					expect.objectContaining( {
-						reason: 'frame-conflict',
-						isLocal: true,
-					} )
-				);
+				expect( proposal.reason ).toBe( 'frame-conflict' );
+				// The set-aside burst is one review record on the paragraph.
+				expect(
+					manager.conflicts.getOpenConflicts( 'postType/post', '1' )
+				).toMatchObject( [
+					{
+						kind: 'merge',
+						target: { type: 'blocks', ids: [ 'p1' ] },
+					},
+				] );
 				manager.restoreProposal!(
 					'postType/post',
 					'1',
 					proposal.intent.intentId
 				);
-				expect( session.getOpenProposals() ).toHaveLength( 0 );
+				// The second keystroke of the burst stays set aside.
+				expect( session.getOpenProposals() ).toHaveLength( 1 );
 				expect( transport.captured.sent ).toHaveLength( 1 );
 				expect(
 					JSON.parse( transport.captured.sent[ 0 ].data )
@@ -2373,12 +2436,14 @@ describe( 'intent-log manager', () => {
 		expect( refetchRecords ).not.toHaveBeenCalled();
 	} );
 
-	it( 'surfaces proposals through onEscalation with local/remote attribution', async () => {
-		const { handlers, transport } = await loadManagedEntity();
-		const onEscalation = jest.fn();
-		// The manager reads the handler at proposal time, so assigning to
-		// the same handlers object after load is sufficient.
-		handlers.onEscalation = onEscalation;
+	it( 'publishes parked proposals as conflict records with kind and author', async () => {
+		const { manager, transport } = await loadManagedEntity();
+		const changed = jest.fn();
+		const unsubscribe = manager.conflicts.subscribe(
+			'postType/post',
+			'1',
+			changed
+		);
 
 		transport.captured.session!.receiveUpdate( snapshotRow( [] ) );
 
@@ -2400,88 +2465,101 @@ describe( 'intent-log manager', () => {
 		transport.captured.session!.receiveUpdate(
 			proposalRow( 'u999c999', 'frame-conflict' )
 		);
-		// Notices derive from the settled open list, one microtask later.
+		// Listeners hear about the settled open list one microtask later.
 		await Promise.resolve();
-		expect( onEscalation ).toHaveBeenCalledWith( {
-			reason: 'frame-conflict',
-			isLocal: false,
-			proposalId: 'i-frame-conflict',
-			summary: 'lost words',
-			excerpt: 'Around here',
-		} );
-
-		const ownActorId = ( transport.captured.session as IntentLogSession )
-			.actorId;
-		transport.captured.session!.receiveUpdate(
-			proposalRow( ownActorId, 'merge-dropped-field' )
-		);
-		await Promise.resolve();
-		expect( onEscalation ).toHaveBeenLastCalledWith(
+		expect( changed ).toHaveBeenCalledTimes( 1 );
+		expect(
+			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
+		).toEqual( [
 			expect.objectContaining( {
-				reason: 'merge-dropped-field',
-				isLocal: true,
-				proposalId: 'i-merge-dropped-field',
-			} )
+				id: 'i-frame-conflict',
+				kind: 'merge',
+				authorId: 999,
+			} ),
+		] );
+
+		// A security hold is a sequestration record.
+		transport.captured.session!.receiveUpdate(
+			proposalRow( 'u5c5', 'requires-approval' )
 		);
+		await Promise.resolve();
+		expect( changed ).toHaveBeenCalledTimes( 2 );
+		expect(
+			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
+		).toEqual( [
+			expect.objectContaining( { id: 'i-frame-conflict' } ),
+			expect.objectContaining( {
+				id: 'i-requires-approval',
+				kind: 'sequestration',
+				authorId: 5,
+			} ),
+		] );
+		unsubscribe();
 	} );
 
-	it( 'review items carry the target block identity when the intent addresses one', async () => {
-		const { handlers, transport } = await loadManagedEntity();
-		const onProposalsChange = jest.fn();
-		handlers.onProposalsChange = onProposalsChange;
-		handlers.onEscalation = jest.fn();
+	it( 'conflict records carry the target block identity and position when the intent addresses one', async () => {
+		const { manager, transport } = await loadManagedEntity();
 
-		transport.captured.session!.receiveUpdate( snapshotRow( [] ) );
-		transport.captured.session!.receiveUpdate( {
-			data: JSON.stringify( {
-				intent: {
+		transport.captured.session!.receiveUpdate(
+			snapshotRow( [
+				{ syncId: 'block-0', blockType: 'core/paragraph', text: 'A' },
+				{ syncId: 'block-a', blockType: 'core/paragraph', text: 'B' },
+			] )
+		);
+		transport.captured.session!.receiveUpdate(
+			parkedRow(
+				{
 					intentId: 'p-anchored',
 					txnId: null,
 					type: 'insert_text',
 					payload: { syncId: 'block-a', text: 'lost' },
 				},
-				actorId: 'u9c9',
-				reason: 'frame-conflict',
-			} ),
-			type: INTENT_LOG_UPDATE_TYPES.PARKED,
-		} );
+				'u9c9'
+			)
+		);
 		await Promise.resolve();
-		expect( onProposalsChange ).toHaveBeenLastCalledWith( [
+		expect(
+			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
+		).toEqual( [
 			expect.objectContaining( {
 				id: 'p-anchored',
-				targetId: 'block-a',
+				target: {
+					type: 'blocks',
+					ids: [ 'block-a' ],
+					parentId: undefined,
+					index: 1,
+					count: 1,
+				},
 			} ),
 		] );
 
-		// Document-level intents (entity properties) have no block target.
-		transport.captured.session!.receiveUpdate( {
-			data: JSON.stringify( {
-				intent: {
+		// Document-level intents (entity properties) target the property.
+		transport.captured.session!.receiveUpdate(
+			parkedRow(
+				{
 					intentId: 'p-property',
 					txnId: null,
 					type: 'set_property',
 					payload: { name: 'title', value: 'Lost title' },
 				},
-				actorId: 'u9c9',
-				reason: 'property-conflict',
-			} ),
-			type: INTENT_LOG_UPDATE_TYPES.PARKED,
-		} );
+				'u9c9',
+				'property-conflict'
+			)
+		);
 		await Promise.resolve();
-		expect( onProposalsChange ).toHaveBeenLastCalledWith( [
+		expect(
+			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
+		).toEqual( [
 			expect.objectContaining( { id: 'p-anchored' } ),
 			expect.objectContaining( {
 				id: 'p-property',
-				targetId: undefined,
+				target: { type: 'property', name: 'title' },
 			} ),
 		] );
 	} );
 
-	it( 'a parked insert_block proposal surfaces its position and decoded content for inline approval', async () => {
-		const { handlers, transport } = await loadManagedEntity();
-		const onProposalsChange = jest.fn();
-		handlers.onProposalsChange = onProposalsChange;
-		handlers.onEscalation = jest.fn();
+	it( 'a parked insert_block proposal targets the position after its anchor sibling', async () => {
+		const { manager, transport } = await loadManagedEntity();
 
 		transport.captured.session!.receiveUpdate(
 			snapshotRow( [
@@ -2492,9 +2570,9 @@ describe( 'intent-log manager', () => {
 				},
 			] )
 		);
-		transport.captured.session!.receiveUpdate( {
-			data: JSON.stringify( {
-				intent: {
+		transport.captured.session!.receiveUpdate(
+			parkedRow(
+				{
 					intentId: 'ins-1',
 					txnId: null,
 					type: 'insert_block',
@@ -2519,54 +2597,52 @@ describe( 'intent-log manager', () => {
 						afterSiblingId: 'p1',
 					},
 				},
-				actorId: 'u9c9',
-				reason: 'requires-approval',
-			} ),
-			type: INTENT_LOG_UPDATE_TYPES.PARKED,
-		} );
+				'u9c9',
+				'requires-approval'
+			)
+		);
 		await Promise.resolve();
 
-		const [ item ] = onProposalsChange.mock.calls.at( -1 )![ 0 ] as Array< {
-			proposedInsertion?: {
-				blockType?: string;
-				html: string;
-				afterSiblingId?: string;
-			};
-		} >;
-		// The card can position itself after 'p1' and preview the DECODED
-		// markup (not the object-replacement char).
-		expect( item.proposedInsertion ).toEqual( {
-			blockType: 'core/html',
-			html: '<script>x</script>',
-			afterSiblingId: 'p1',
-			parentId: undefined,
-		} );
+		// An insertion targets the slot after 'p1' with a count of 0 (no
+		// block exists yet), and its summary carries the DECODED markup
+		// (not the object-replacement char).
+		expect(
+			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
+		).toEqual( [
+			expect.objectContaining( {
+				id: 'ins-1',
+				kind: 'sequestration',
+				target: {
+					type: 'blocks',
+					parentId: undefined,
+					index: 1,
+					count: 0,
+				},
+				proposed: expect.stringContaining( '<script>x</script>' ),
+			} ),
+		] );
 	} );
 
-	it( 'a proposal resolved within the same delivery batch never notifies, and resolution round-trips', async () => {
-		const { manager, handlers, transport } = await loadManagedEntity();
-		const onEscalation = jest.fn();
-		const onProposalsChange = jest.fn();
-		handlers.onEscalation = onEscalation;
-		handlers.onProposalsChange = onProposalsChange;
+	it( 'a proposal resolved within the same delivery batch never opens, and a decision round-trips', async () => {
+		const { manager, transport } = await loadManagedEntity();
+		const changed = jest.fn();
+		manager.conflicts.subscribe( 'postType/post', '1', changed );
 
 		transport.captured.session!.receiveUpdate( snapshotRow( [] ) );
 
 		// Bootstrap replay shape: parked row immediately followed by its
 		// resolution row (a long-resolved conflict).
-		transport.captured.session!.receiveUpdate( {
-			data: JSON.stringify( {
-				intent: {
+		transport.captured.session!.receiveUpdate(
+			parkedRow(
+				{
 					intentId: 'old-1',
 					txnId: null,
 					type: 'insert_text',
 					payload: { text: 'ancient' },
 				},
-				actorId: 'u9c9',
-				reason: 'frame-conflict',
-			} ),
-			type: INTENT_LOG_UPDATE_TYPES.PARKED,
-		} );
+				'u9c9'
+			)
+		);
 		transport.captured.session!.receiveUpdate( {
 			data: JSON.stringify( {
 				proposalId: 'old-1',
@@ -2575,28 +2651,31 @@ describe( 'intent-log manager', () => {
 			type: INTENT_LOG_UPDATE_TYPES.RESOLVED,
 		} );
 		await Promise.resolve();
-		expect( onEscalation ).not.toHaveBeenCalled();
-		expect( onProposalsChange ).toHaveBeenLastCalledWith( [] );
+		expect(
+			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
+		).toEqual( [] );
 
-		// A live open proposal notifies; resolving it emits the wire row
-		// and empties the review list.
-		transport.captured.session!.receiveUpdate( {
-			data: JSON.stringify( {
-				intent: {
+		// A live open proposal opens a record. Dismissing it emits the
+		// wire row and empties the list.
+		transport.captured.session!.receiveUpdate(
+			parkedRow(
+				{
 					intentId: 'live-1',
 					txnId: null,
 					type: 'insert_text',
 					payload: { text: 'fresh' },
 				},
-				actorId: 'u9c9',
-				reason: 'frame-conflict',
-			} ),
-			type: INTENT_LOG_UPDATE_TYPES.PARKED,
-		} );
+				'u9c9'
+			)
+		);
 		await Promise.resolve();
-		expect( onEscalation ).toHaveBeenCalledTimes( 1 );
+		expect(
+			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
+		).toHaveLength( 1 );
 
-		manager.resolveProposal!( 'postType/post', '1', 'live-1', 'dismissed' );
+		manager.conflicts.resolveConflict( 'postType/post', '1', 'live-1', {
+			action: 'dismiss',
+		} );
 		const resolvedRows = transport.captured.sent.filter(
 			( update ) => INTENT_LOG_UPDATE_TYPES.RESOLVED === update.type
 		);
@@ -2606,12 +2685,895 @@ describe( 'intent-log manager', () => {
 			resolution: 'dismissed',
 		} );
 		await Promise.resolve();
-		expect( onProposalsChange ).toHaveBeenLastCalledWith( [] );
+		expect(
+			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
+		).toEqual( [] );
+	} );
+
+	it( 'a parked text edit carries its base, proposed, and current sides', async () => {
+		const { manager, transport } = await loadManagedEntity();
+
+		transport.captured.session!.receiveUpdate(
+			snapshotRow( [
+				{ syncId: 'p1', blockType: 'core/paragraph', text: 'Hello' },
+			] )
+		);
+		// A collaborator's edit landed first...
+		transport.captured.session!.receiveUpdate( {
+			data: JSON.stringify( {
+				intentId: 'remote-1',
+				actorId: 'u9c9',
+				baseSeq: 0,
+				txnId: null,
+				type: 'insert_text',
+				payload: {
+					syncId: 'p1',
+					field: 'content',
+					offset: 5,
+					text: ' there',
+				},
+			} ),
+			type: INTENT_LOG_UPDATE_TYPES.INTENT,
+		} );
+		// ...and another author's edit against the same base parked.
+		transport.captured.session!.receiveUpdate(
+			parkedRow(
+				{
+					intentId: 'parked-1',
+					actorId: 'u8c8',
+					baseSeq: 0,
+					txnId: null,
+					type: 'insert_text',
+					payload: {
+						syncId: 'p1',
+						field: 'content',
+						offset: 5,
+						text: ' friend',
+					},
+				},
+				'u8c8'
+			)
+		);
+		await Promise.resolve();
+
+		const [ conflict ] = manager.conflicts.getOpenConflicts(
+			'postType/post',
+			'1'
+		);
+		expect( conflict ).toMatchObject( {
+			id: 'parked-1',
+			kind: 'merge',
+			authorId: 8,
+			target: { type: 'blocks', ids: [ 'p1' ], index: 0, count: 1 },
+		} );
+		expect( textOf( conflict.base ) ).toEqual( [ 'Hello' ] );
+		expect( textOf( conflict.proposed ) ).toEqual( [ 'Hello friend' ] );
+		expect( textOf( conflict.current ) ).toEqual( [ 'Hello there' ] );
+	} );
+
+	it( "publishes a record again when a collaborator's edit changes its current side, and refuses a decision made against the older one", async () => {
+		const { manager, transport } = await loadManagedEntity();
+
+		transport.captured.session!.receiveUpdate(
+			snapshotRow( [
+				{ syncId: 'p1', blockType: 'core/paragraph', text: 'Hello' },
+			] )
+		);
+		transport.captured.session!.receiveUpdate(
+			parkedRow(
+				{
+					intentId: 'parked-1',
+					actorId: 'u8c8',
+					baseSeq: 0,
+					txnId: null,
+					type: 'insert_text',
+					payload: {
+						syncId: 'p1',
+						field: 'content',
+						offset: 5,
+						text: ' friend',
+					},
+				},
+				'u8c8'
+			)
+		);
+		await Promise.resolve();
+
+		const changed = jest.fn();
+		manager.conflicts.subscribe( 'postType/post', '1', changed );
+		// The reviewer opens the dialog on this record.
+		const [ seen ] = manager.conflicts.getOpenConflicts(
+			'postType/post',
+			'1'
+		);
+		expect( textOf( seen.current ) ).toEqual( [ 'Hello' ] );
+
+		// A collaborator edits the block while the dialog is open. No
+		// proposal opens or closes.
+		transport.captured.session!.receiveUpdate( {
+			data: JSON.stringify( {
+				intentId: 'remote-1',
+				actorId: 'u9c9',
+				baseSeq: 0,
+				txnId: null,
+				type: 'insert_text',
+				payload: {
+					syncId: 'p1',
+					field: 'content',
+					offset: 5,
+					text: ' there',
+				},
+			} ),
+			type: INTENT_LOG_UPDATE_TYPES.INTENT,
+		} );
+		await Promise.resolve();
+
+		// The listeners hear about it, and the record shows the edit.
+		expect( changed ).toHaveBeenCalledTimes( 1 );
+		const [ fresh ] = manager.conflicts.getOpenConflicts(
+			'postType/post',
+			'1'
+		);
+		expect( textOf( fresh.current ) ).toEqual( [ 'Hello there' ] );
+
+		// A decision made against the older current side is refused:
+		// nothing is sent, and the record stays open.
+		transport.captured.sent.length = 0;
+		const replacement = JSON.stringify( [
+			{
+				name: 'core/paragraph',
+				attributes: {
+					content: 'Hello friend',
+					metadata: { syncId: 'p1' },
+				},
+				innerBlocks: [],
+			},
+		] );
+		// The refusal is the conflict registry's, against the record the
+		// engine publishes; the engine is never asked.
+		registerConflictSource( manager.conflicts );
+		await expect(
+			registryResolveConflict( 'postType/post', '1', seen.id, {
+				action: 'accept',
+				content: replacement,
+				current: seen.current,
+			} )
+		).resolves.toBe( 'stale' );
+		expect( transport.captured.sent ).toEqual( [] );
+		expect(
+			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
+		).toHaveLength( 1 );
+
+		// The same decision against the current side as it is now goes
+		// through.
+		expect(
+			manager.conflicts.resolveConflict( 'postType/post', '1', fresh.id, {
+				action: 'accept',
+				content: replacement,
+				current: fresh.current,
+			} )
+		).toBe( 'resolved' );
+		expect(
+			transport.captured.sent.some(
+				( update ) => INTENT_LOG_UPDATE_TYPES.RESOLVED === update.type
+			)
+		).toBe( true );
+	} );
+
+	it( 'says nothing when a document change leaves every record as it was', async () => {
+		const { manager, transport } = await loadManagedEntity();
+
+		transport.captured.session!.receiveUpdate(
+			snapshotRow( [
+				{ syncId: 'p1', blockType: 'core/paragraph', text: 'Hello' },
+				{ syncId: 'p2', blockType: 'core/paragraph', text: 'Other' },
+			] )
+		);
+		transport.captured.session!.receiveUpdate(
+			parkedRow(
+				{
+					intentId: 'parked-1',
+					actorId: 'u8c8',
+					baseSeq: 0,
+					txnId: null,
+					type: 'insert_text',
+					payload: {
+						syncId: 'p1',
+						field: 'content',
+						offset: 5,
+						text: ' friend',
+					},
+				},
+				'u8c8'
+			)
+		);
+		await Promise.resolve();
+		const changed = jest.fn();
+		manager.conflicts.subscribe( 'postType/post', '1', changed );
+		manager.conflicts.getOpenConflicts( 'postType/post', '1' );
+
+		// An edit to ANOTHER block: the record reads the same.
+		transport.captured.session!.receiveUpdate( {
+			data: JSON.stringify( {
+				intentId: 'remote-1',
+				actorId: 'u9c9',
+				baseSeq: 0,
+				txnId: null,
+				type: 'insert_text',
+				payload: {
+					syncId: 'p2',
+					field: 'content',
+					offset: 5,
+					text: ' words',
+				},
+			} ),
+			type: INTENT_LOG_UPDATE_TYPES.INTENT,
+		} );
+		await Promise.resolve();
+
+		expect( changed ).not.toHaveBeenCalled();
+	} );
+
+	it( 'accept authors the replacement as ordinary intents, then closes every member, in that order', async () => {
+		const { manager, handlers, transport } = await loadManagedEntity();
+
+		transport.captured.session!.receiveUpdate(
+			snapshotRow( [
+				{ syncId: 'p1', blockType: 'core/paragraph', text: 'Hello' },
+			] )
+		);
+		// Two parked keystrokes on the same block: one record.
+		for ( const [ intentId, offset, text ] of [
+			[ 'k1', 5, '!' ],
+			[ 'k2', 6, '?' ],
+		] as Array< [ string, number, string ] > ) {
+			transport.captured.session!.receiveUpdate(
+				parkedRow(
+					{
+						intentId,
+						actorId: 'u8c8',
+						baseSeq: 0,
+						txnId: null,
+						type: 'insert_text',
+						payload: {
+							syncId: 'p1',
+							field: 'content',
+							offset,
+							text,
+						},
+					},
+					'u8c8'
+				)
+			);
+		}
+		await Promise.resolve();
+		const open = manager.conflicts.getOpenConflicts( 'postType/post', '1' );
+		expect( open ).toHaveLength( 1 );
+		transport.captured.sent.length = 0;
+
+		// The reviewer's merged result keeps the block's identity.
+		const replacement = JSON.stringify( [
+			{
+				name: 'core/paragraph',
+				attributes: {
+					content: 'Hello, merged',
+					metadata: { syncId: 'p1' },
+				},
+				innerBlocks: [],
+			},
+		] );
+		handlers.edits.length = 0;
+		manager.conflicts.resolveConflict( 'postType/post', '1', open[ 0 ].id, {
+			action: 'accept',
+			content: replacement,
+		} );
+
+		// The canvas shows the decision at once, not a poll later.
+		const pushed = handlers.edits.at( -1 ) as {
+			blocks: Array< { attributes: Record< string, unknown > } >;
+		};
+		expect( pushed.blocks[ 0 ].attributes.content ).toBe( 'Hello, merged' );
+
+		const sent = transport.captured.sent.map( ( update ) => ( {
+			type: update.type,
+			decoded: JSON.parse( update.data ),
+		} ) );
+		const firstResolution = sent.findIndex(
+			( row ) => INTENT_LOG_UPDATE_TYPES.RESOLVED === row.type
+		);
+		const intents = sent.filter(
+			( row ) => INTENT_LOG_UPDATE_TYPES.INTENT === row.type
+		);
+		// The replacement is an ordinary edit of the SAME block, under one
+		// txn, and every intent precedes every resolution.
+		expect( intents.length ).toBeGreaterThan( 0 );
+		expect(
+			intents.every( ( row ) => 'p1' === row.decoded.payload.syncId )
+		).toBe( true );
+		expect(
+			new Set( intents.map( ( row ) => row.decoded.txnId ) ).size
+		).toBe( 1 );
+		expect( intents[ 0 ].decoded.txnId ).toEqual( expect.any( String ) );
+		expect( firstResolution ).toBe( intents.length );
+		expect(
+			sent.slice( firstResolution ).map( ( row ) => row.decoded )
+		).toEqual( [
+			{ proposalId: 'k1', resolution: 'dismissed' },
+			{ proposalId: 'k2', resolution: 'dismissed' },
+		] );
+
+		// The document holds the merged text, and the record is closed.
+		const doc = (
+			transport.captured.session as IntentLogSession
+		 ).getDocument()!;
+		expect( doc.root[ 0 ].fields.content.text ).toBe( 'Hello, merged' );
+		expect(
+			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
+		).toEqual( [] );
+	} );
+
+	it( 'a record over two blocks that are not neighbours shows the block between them, and accept keeps the order', async () => {
+		const { manager, transport } = await loadManagedEntity();
+		transport.captured.session!.receiveUpdate(
+			snapshotRow( [
+				{ syncId: 'p1', blockType: 'core/paragraph', text: 'One' },
+				{ syncId: 'p2', blockType: 'core/paragraph', text: 'Two' },
+				{ syncId: 'p3', blockType: 'core/paragraph', text: 'Three' },
+			] )
+		);
+		// One edit by another author changed the first and the third
+		// paragraph, and was set aside.
+		for ( const [ intentId, syncId, offset ] of [
+			[ 'm1', 'p1', 3 ],
+			[ 'm2', 'p3', 5 ],
+		] as Array< [ string, string, number ] > ) {
+			transport.captured.session!.receiveUpdate(
+				parkedRow(
+					{
+						intentId,
+						actorId: 'u8c8',
+						baseSeq: 0,
+						txnId: 'txn-ends',
+						type: 'insert_text',
+						payload: {
+							syncId,
+							field: 'content',
+							offset,
+							text: '!',
+						},
+					},
+					'u8c8'
+				)
+			);
+		}
+		await Promise.resolve();
+
+		const [ conflict ] = manager.conflicts.getOpenConflicts(
+			'postType/post',
+			'1'
+		);
+		// This record's sides hold several serialized runs.
+		const textOfRuns = ( side: string | null ) =>
+			JSON.parse( `[${ ( side ?? '' ).split( '\n\n' ).join( ',' ) }]` )
+				.flat()
+				.map(
+					( block: { attributes: { content: string } } ) =>
+						block.attributes.content
+				);
+		expect( conflict.target ).toMatchObject( {
+			type: 'blocks',
+			ids: [ 'p1', 'p2', 'p3' ],
+			index: 0,
+			count: 3,
+		} );
+		expect( textOfRuns( conflict.current ) ).toEqual( [
+			'One',
+			'Two',
+			'Three',
+		] );
+		expect( textOfRuns( conflict.proposed ) ).toEqual( [
+			'One!',
+			'Two',
+			'Three!',
+		] );
+
+		// The reviewer accepts a merged result of all three blocks.
+		const merged = ( syncId: string, content: string ) => ( {
+			name: 'core/paragraph',
+			attributes: { content, metadata: { syncId } },
+			innerBlocks: [],
+		} );
+		const outcome = manager.conflicts.resolveConflict(
+			'postType/post',
+			'1',
+			conflict.id,
+			{
+				action: 'accept',
+				content: JSON.stringify( [
+					merged( 'p1', 'One, merged' ),
+					merged( 'p2', 'Two' ),
+					merged( 'p3', 'Three, merged' ),
+				] ),
+				current: conflict.current,
+			}
+		);
+		expect( outcome ).toBe( 'resolved' );
+
+		const doc = (
+			transport.captured.session as IntentLogSession
+		 ).getDocument()!;
+		expect(
+			doc.root.map(
+				( block ) => `${ block.syncId }:${ block.fields.content.text }`
+			)
+		).toEqual( [ 'p1:One, merged', 'p2:Two', 'p3:Three, merged' ] );
+		expect(
+			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
+		).toEqual( [] );
+	} );
+
+	it( 'a record over a block and a block inside a group covers the group, and accept keeps the inner block in it', async () => {
+		const { manager, transport } = await loadManagedEntity();
+		transport.captured.session!.receiveUpdate(
+			snapshotRow( [
+				{ syncId: 'p1', blockType: 'core/paragraph', text: 'One' },
+				{
+					syncId: 'g',
+					blockType: 'core/group',
+					children: [
+						{
+							syncId: 'p3',
+							blockType: 'core/paragraph',
+							text: 'Three',
+						},
+					],
+				},
+			] )
+		);
+		for ( const [ intentId, syncId, offset ] of [
+			[ 'm1', 'p1', 3 ],
+			[ 'm2', 'p3', 5 ],
+		] as Array< [ string, string, number ] > ) {
+			transport.captured.session!.receiveUpdate(
+				parkedRow(
+					{
+						intentId,
+						actorId: 'u8c8',
+						baseSeq: 0,
+						txnId: 'txn-ends',
+						type: 'insert_text',
+						payload: {
+							syncId,
+							field: 'content',
+							offset,
+							text: '!',
+						},
+					},
+					'u8c8'
+				)
+			);
+		}
+		await Promise.resolve();
+		const [ conflict ] = manager.conflicts.getOpenConflicts(
+			'postType/post',
+			'1'
+		);
+		expect( conflict.target ).toMatchObject( {
+			ids: [ 'p1', 'g' ],
+			index: 0,
+			count: 2,
+		} );
+
+		// The reviewer takes the proposed side as it is. (The stand-in
+		// parser reads one JSON list, the sides are one list per block.)
+		const proposed = JSON.stringify(
+			conflict.proposed
+				.split( '\n\n' )
+				.flatMap( ( block ) => JSON.parse( block ) )
+		);
+		manager.conflicts.resolveConflict( 'postType/post', '1', conflict.id, {
+			action: 'accept',
+			content: proposed,
+		} );
+
+		const doc = (
+			transport.captured.session as IntentLogSession
+		 ).getDocument()!;
+		expect( doc.root.map( ( block ) => block.syncId ) ).toEqual( [
+			'p1',
+			'g',
+		] );
+		expect( doc.root[ 0 ].fields.content.text ).toBe( 'One!' );
+		expect(
+			doc.root[ 1 ].children.map(
+				( block ) => `${ block.syncId }:${ block.fields.content.text }`
+			)
+		).toEqual( [ 'p3:Three!' ] );
+	} );
+
+	it( 'an accepted result may leave out a block from between the two blocks, because the reviewer saw it', async () => {
+		const { manager, transport } = await loadManagedEntity();
+		transport.captured.session!.receiveUpdate(
+			snapshotRow( [
+				{ syncId: 'p1', blockType: 'core/paragraph', text: 'One' },
+				{ syncId: 'p2', blockType: 'core/paragraph', text: 'Two' },
+				{ syncId: 'p3', blockType: 'core/paragraph', text: 'Three' },
+				{ syncId: 'p4', blockType: 'core/paragraph', text: 'Four' },
+			] )
+		);
+		for ( const [ intentId, syncId, offset ] of [
+			[ 'm1', 'p1', 3 ],
+			[ 'm2', 'p3', 5 ],
+		] as Array< [ string, string, number ] > ) {
+			transport.captured.session!.receiveUpdate(
+				parkedRow(
+					{
+						intentId,
+						actorId: 'u8c8',
+						baseSeq: 0,
+						txnId: 'txn-ends',
+						type: 'insert_text',
+						payload: {
+							syncId,
+							field: 'content',
+							offset,
+							text: '!',
+						},
+					},
+					'u8c8'
+				)
+			);
+		}
+		await Promise.resolve();
+		const [ conflict ] = manager.conflicts.getOpenConflicts(
+			'postType/post',
+			'1'
+		);
+
+		manager.conflicts.resolveConflict( 'postType/post', '1', conflict.id, {
+			action: 'accept',
+			content: JSON.stringify( [
+				{
+					name: 'core/paragraph',
+					attributes: {
+						content: 'One and three',
+						metadata: { syncId: 'p1' },
+					},
+					innerBlocks: [],
+				},
+			] ),
+		} );
+
+		// The run is replaced as one piece. The block after it stays.
+		const doc = (
+			transport.captured.session as IntentLogSession
+		 ).getDocument()!;
+		expect(
+			doc.root.map(
+				( block ) => `${ block.syncId }:${ block.fields.content.text }`
+			)
+		).toEqual( [ 'p1:One and three', 'p4:Four' ] );
+	} );
+
+	it( "accept with empty content removes the record's block", async () => {
+		const { manager, transport } = await loadManagedEntity();
+		transport.captured.session!.receiveUpdate(
+			snapshotRow( [
+				{ syncId: 'p1', blockType: 'core/paragraph', text: 'Keep' },
+				{ syncId: 'p2', blockType: 'core/paragraph', text: 'Drop' },
+			] )
+		);
+		transport.captured.session!.receiveUpdate(
+			parkedRow(
+				{
+					intentId: 'parked-1',
+					actorId: 'u8c8',
+					baseSeq: 0,
+					txnId: null,
+					type: 'insert_text',
+					payload: {
+						syncId: 'p2',
+						field: 'content',
+						offset: 4,
+						text: '!',
+					},
+				},
+				'u8c8'
+			)
+		);
+		await Promise.resolve();
+
+		manager.conflicts.resolveConflict( 'postType/post', '1', 'parked-1', {
+			action: 'accept',
+			content: '',
+		} );
+		const doc = (
+			transport.captured.session as IntentLogSession
+		 ).getDocument()!;
+		expect( doc.root.map( ( block ) => block.syncId ) ).toEqual( [ 'p1' ] );
+	} );
+
+	it( "REGRESSION: accepting the split version of the reviewer's OWN parked split keeps both halves", async () => {
+		// Manual finding: user B split "This block is too long. It
+		// should be split…" at the period while user A typed into the
+		// same paragraph. B's split was set aside; the record's proposed
+		// side showed both halves. B chose that version and accepted,
+		// and only the first half remained. The parked split had left
+		// B's optimistic document, so the second half's id was
+		// tombstoned, and the accept path's stale-tree filter dropped
+		// the block the reviewer had just chosen to put back.
+		const paragraph = {
+			syncId: 'p1',
+			blockType: 'core/paragraph',
+			text: 'This block is too long. It should be split into multiple paragraphs.',
+		};
+		const head = 'This block is too long.';
+		const tail = ' It should be split into multiple paragraphs.';
+		const server = rebaseCreateServer(
+			createDocument( [ paragraph ] )
+		) as unknown as {
+			log: Array< Record< string, unknown > >;
+			proposals: Array< Record< string, unknown > >;
+		};
+		const ingest = ( rows: Parameters< typeof serverIngestBatch >[ 1 ] ) =>
+			serverIngestBatch( server as never, rows ) as Array< {
+				status: string;
+				reason?: string;
+			} >;
+		const takeSent = () =>
+			transport.captured.sent
+				.splice( 0 )
+				.filter(
+					( update ) => INTENT_LOG_UPDATE_TYPES.INTENT === update.type
+				)
+				.map( ( update ) => JSON.parse( update.data ) );
+		const { manager, handlers, transport } = await loadManagedEntity();
+		const session = transport.captured.session as IntentLogSession;
+		session.receiveUpdate( snapshotRow( [ paragraph ] ) );
+		const lastPush = () =>
+			handlers.edits.at( -1 ) as {
+				blocks: Array< {
+					clientId: string;
+					attributes: { content: string };
+				} >;
+			};
+		const clientId = lastPush().blocks[ 0 ].clientId;
+		const tree = ( blocks: Array< [ string, string | undefined ] > ) => ( {
+			blocks: blocks.map( ( [ content, syncId ] ) => ( {
+				name: 'core/paragraph',
+				clientId: syncId ? clientId : 'editor-tail',
+				attributes: syncId
+					? { content, metadata: { syncId } }
+					: { content },
+				innerBlocks: [],
+			} ) ),
+		} );
+
+		// B types into the paragraph, then presses Enter after the
+		// period: the editor hands over the head with p1's identity and
+		// a new tail block.
+		manager.update(
+			'postType/post',
+			'1',
+			tree( [ [ `Yes, ${ paragraph.text }`, 'p1' ] ] ),
+			'gutenberg'
+		);
+		flushEditorSync();
+		manager.update(
+			'postType/post',
+			'1',
+			tree( [
+				[ `Yes, ${ head }`, 'p1' ],
+				[ tail, undefined ],
+			] ),
+			'gutenberg'
+		);
+		flushEditorSync();
+		const burst = takeSent();
+		expect( burst.map( ( row ) => row.type ) ).toEqual( [
+			'insert_text',
+			'split_block',
+		] );
+		const tailId = burst[ 1 ].payload.newSyncId as string;
+		expect( session.getDocument()!.root.map( ( b ) => b.syncId ) ).toEqual(
+			[ 'p1', tailId ]
+		);
+
+		// A's keystroke into the same paragraph reaches the server
+		// first, and B's burst, planned against the older frame, is set
+		// aside whole (rule 5).
+		expect(
+			ingest( [
+				{
+					intentId: 'a-1',
+					actorId: 'u9c9',
+					baseSeq: 0,
+					txnId: null,
+					type: 'insert_text',
+					payload: {
+						syncId: 'p1',
+						field: 'content',
+						offset: 0,
+						text: 'I think ',
+					},
+				},
+			] ).map( ( d ) => d.status )
+		).toEqual( [ 'applied' ] );
+		const dispositions = ingest( burst );
+		expect( dispositions.map( ( d ) => d.reason ) ).toEqual( [
+			'frame-conflict',
+			'dependent-on-escalated',
+		] );
+		// One poll: the accepted row, the parked rows, the acks.
+		session.receiveUpdate( {
+			data: JSON.stringify( server.log[ 0 ] ),
+			type: INTENT_LOG_UPDATE_TYPES.INTENT,
+		} );
+		for ( const proposal of server.proposals ) {
+			session.receiveUpdate( {
+				data: JSON.stringify( proposal ),
+				type: INTENT_LOG_UPDATE_TYPES.PARKED,
+			} );
+		}
+		session.receiveDispositions!(
+			dispositions.map( ( disposition, index ) => ( {
+				...disposition,
+				intentId: burst[ index ].intentId as string,
+			} ) ) as never
+		);
+		await Promise.resolve();
+		// B's optimistic document no longer shows the split.
+		expect(
+			session
+				.getDocument()!
+				.root.map( ( b ) => `${ b.syncId }:${ b.fields.content.text }` )
+		).toEqual( [ `p1:I think ${ paragraph.text }` ] );
+		const open = manager.conflicts.getOpenConflicts( 'postType/post', '1' );
+		expect( open ).toHaveLength( 1 );
+		// The side is one serialized chunk per block (the test's serialize
+		// is JSON, so re-join the chunks into one block list).
+		const proposedBlocks = JSON.parse(
+			`[${ open[ 0 ].proposed.split( '\n\n' ).join( ',' ) }]`
+		).flat() as Array< {
+			attributes: { content: string; metadata?: { syncId?: string } };
+		} >;
+		expect( proposedBlocks.map( ( b ) => b.attributes.content ) ).toEqual( [
+			`Yes, ${ head }`,
+			tail,
+		] );
+		expect( proposedBlocks[ 1 ].attributes.metadata?.syncId ).toBe(
+			tailId
+		);
+
+		// B restores "Your version" (the proposed side) and accepts.
+		handlers.edits.length = 0;
+		manager.conflicts.resolveConflict( 'postType/post', '1', open[ 0 ].id, {
+			action: 'accept',
+			content: JSON.stringify( proposedBlocks ),
+			current: open[ 0 ].current,
+		} );
+
+		const bothHalves = [ `Yes, ${ head }`, tail ];
+		expect(
+			session.getDocument()!.root.map( ( b ) => b.fields.content.text )
+		).toEqual( bothHalves );
+		expect(
+			lastPush().blocks.map( ( b ) => b.attributes.content )
+		).toEqual( bothHalves );
+		expect(
+			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
+		).toEqual( [] );
+
+		// The server takes the accepted result as it was authored.
+		const acceptBatch = takeSent();
+		expect( acceptBatch.length ).toBeGreaterThan( 0 );
+		expect( ingest( acceptBatch ).map( ( d ) => d.status ) ).toEqual(
+			acceptBatch.map( () => 'applied' )
+		);
+		const serverHead = serverDocAtForTest(
+			server as never,
+			server.log.length
+		);
+		expect( serverHead.root.map( ( b ) => b.fields.content.text ) ).toEqual(
+			bothHalves
+		);
+	} );
+
+	it( 'accept of a post-field record authors one set_property at the observed version, then closes the record', async () => {
+		const { manager, handlers, transport } = await loadManagedEntity( {
+			title: { raw: 'Original' },
+		} );
+		const session = transport.captured.session as IntentLogSession;
+		session.receiveUpdate( snapshotRow( [], { title: 'Original' } ) );
+		// A collaborator's title landed first...
+		session.receiveUpdate( {
+			data: JSON.stringify( {
+				intentId: 'remote-title-1',
+				actorId: 'u9c9',
+				baseSeq: 0,
+				txnId: null,
+				type: 'set_property',
+				payload: {
+					name: 'title',
+					value: 'Winning title',
+					observedVersion: 0,
+				},
+			} ),
+			type: INTENT_LOG_UPDATE_TYPES.INTENT,
+		} );
+		// ...and another author's title against the same base parked.
+		session.receiveUpdate(
+			parkedRow(
+				{
+					intentId: 'p-title',
+					actorId: 'u8c8',
+					baseSeq: 0,
+					txnId: null,
+					type: 'set_property',
+					payload: {
+						name: 'title',
+						value: 'Set-aside title',
+						observedVersion: 0,
+					},
+				},
+				'u8c8',
+				'property-conflict'
+			)
+		);
+		await Promise.resolve();
+		expect(
+			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
+		).toEqual( [
+			expect.objectContaining( {
+				id: 'p-title',
+				target: { type: 'property', name: 'title' },
+			} ),
+		] );
+		const observedVersion = session.getDocument()!.propVersions!.title;
+		expect( observedVersion ).toBeGreaterThan( 0 );
+		transport.captured.sent.length = 0;
+
+		manager.conflicts.resolveConflict( 'postType/post', '1', 'p-title', {
+			action: 'accept',
+			content: 'Merged title',
+		} );
+
+		// One property write that has seen the current title, then the
+		// closure behind it.
+		const sent = transport.captured.sent.map( ( update ) => ( {
+			type: update.type,
+			decoded: JSON.parse( update.data ),
+		} ) );
+		expect( sent ).toEqual( [
+			{
+				type: INTENT_LOG_UPDATE_TYPES.INTENT,
+				decoded: expect.objectContaining( {
+					type: 'set_property',
+					payload: {
+						name: 'title',
+						value: 'Merged title',
+						observedVersion,
+					},
+				} ),
+			},
+			{
+				type: INTENT_LOG_UPDATE_TYPES.RESOLVED,
+				decoded: { proposalId: 'p-title', resolution: 'dismissed' },
+			},
+		] );
+
+		// The document and the reviewer's editor hold the accepted title,
+		// and the record is closed.
+		expect( session.getDocument()!.props!.title ).toBe( 'Merged title' );
+		expect( handlers.edits.at( -1 ) ).toEqual( { title: 'Merged title' } );
+		await Promise.resolve();
+		expect(
+			manager.conflicts.getOpenConflicts( 'postType/post', '1' )
+		).toEqual( [] );
 	} );
 
 	it( 'restoreProposal re-authors lost text at the current head, then resolves', async () => {
 		const { manager, handlers, transport } = await loadManagedEntity();
-		handlers.onEscalation = jest.fn();
 		transport.captured.session!.receiveUpdate(
 			snapshotRow( [
 				{
@@ -2621,9 +3583,9 @@ describe( 'intent-log manager', () => {
 				},
 			] )
 		);
-		transport.captured.session!.receiveUpdate( {
-			data: JSON.stringify( {
-				intent: {
+		transport.captured.session!.receiveUpdate(
+			parkedRow(
+				{
 					intentId: 'lost-1',
 					txnId: null,
 					type: 'insert_text',
@@ -2634,11 +3596,9 @@ describe( 'intent-log manager', () => {
 						text: ' recovered',
 					},
 				},
-				actorId: 'u9c9',
-				reason: 'frame-conflict',
-			} ),
-			type: INTENT_LOG_UPDATE_TYPES.PARKED,
-		} );
+				'u9c9'
+			)
+		);
 		await Promise.resolve();
 
 		manager.restoreProposal!( 'postType/post', '1', 'lost-1' );
@@ -2677,8 +3637,7 @@ describe( 'intent-log manager', () => {
 	} );
 
 	it( 'restoreProposal re-inserts a parked block under fresh identity, then resolves', async () => {
-		const { manager, handlers, transport } = await loadManagedEntity();
-		handlers.onEscalation = jest.fn();
+		const { manager, transport } = await loadManagedEntity();
 		transport.captured.session!.receiveUpdate(
 			snapshotRow( [
 				{
@@ -2689,9 +3648,9 @@ describe( 'intent-log manager', () => {
 			] )
 		);
 		// A requires-approval park of a raw-attr block (core/html shape).
-		transport.captured.session!.receiveUpdate( {
-			data: JSON.stringify( {
-				intent: {
+		transport.captured.session!.receiveUpdate(
+			parkedRow(
+				{
 					intentId: 'parked-html',
 					txnId: null,
 					type: 'insert_block',
@@ -2705,11 +3664,10 @@ describe( 'intent-log manager', () => {
 						afterSiblingId: 'gone-sibling',
 					},
 				},
-				actorId: 'u9c9',
-				reason: 'requires-approval',
-			} ),
-			type: INTENT_LOG_UPDATE_TYPES.PARKED,
-		} );
+				'u9c9',
+				'requires-approval'
+			)
+		);
 		await Promise.resolve();
 
 		manager.restoreProposal!( 'postType/post', '1', 'parked-html' );
@@ -2739,6 +3697,74 @@ describe( 'intent-log manager', () => {
 		);
 		expect( resolved!.decoded ).toEqual( {
 			proposalId: 'parked-html',
+			resolution: 'restored',
+		} );
+	} );
+
+	it( 'restoreProposal re-authors a parked format application, then resolves', async () => {
+		const { manager, transport } = await loadManagedEntity();
+		// The kses lane's shape for a custom HTML block content change: the
+		// placeholder character landed as safe plain text, and only the
+		// format carrying the markup parked.
+		transport.captured.session!.receiveUpdate(
+			snapshotRow( [
+				{
+					syncId: 'h1',
+					blockType: 'core/html',
+					text: '￼',
+				},
+			] )
+		);
+		const format = 'obj|{"html":"<script>alert(0);</script>"}';
+		transport.captured.session!.receiveUpdate(
+			parkedRow(
+				{
+					intentId: 'parked-format',
+					txnId: null,
+					type: 'format_text',
+					payload: {
+						syncId: 'h1',
+						field: 'content',
+						start: 0,
+						end: 1,
+						format,
+						on: true,
+					},
+				},
+				'u9c9',
+				'requires-approval'
+			)
+		);
+		await Promise.resolve();
+
+		manager.restoreProposal!( 'postType/post', '1', 'parked-format' );
+
+		// The format re-applies over the surviving placeholder as an
+		// ORDINARY intent (carrying the restorer's capability), and the
+		// proposal closes as restored.
+		const sentTypes = transport.captured.sent.map( ( update ) => ( {
+			type: update.type,
+			decoded: JSON.parse( update.data ),
+		} ) );
+		const authored = sentTypes.find(
+			( row ) =>
+				INTENT_LOG_UPDATE_TYPES.INTENT === row.type &&
+				'format_text' === row.decoded.type
+		);
+		expect( authored ).toBeDefined();
+		expect( authored!.decoded.payload ).toMatchObject( {
+			syncId: 'h1',
+			field: 'content',
+			start: 0,
+			end: 1,
+			format,
+			on: true,
+		} );
+		const resolved = sentTypes.find(
+			( row ) => INTENT_LOG_UPDATE_TYPES.RESOLVED === row.type
+		);
+		expect( resolved!.decoded ).toEqual( {
+			proposalId: 'parked-format',
 			resolution: 'restored',
 		} );
 	} );
@@ -3119,6 +4145,8 @@ describe( 'intent-log manager', () => {
 		 * user typed — pushes during a burst are superseded before they
 		 * render, so peer text never appears in these trees).
 		 */
+		const typed = new Map< typeof clientA, string >();
+		const pushesBeforePolling = new Map< typeof clientA, number >();
 		const typeBurst = ( client: typeof clientA, text: string ) => {
 			for ( let i = 1; i <= text.length; i++ ) {
 				client.manager.update(
@@ -3133,6 +4161,8 @@ describe( 'intent-log manager', () => {
 				);
 				jest.advanceTimersByTime( 80 );
 			}
+			typed.set( client, `Alpha paragraph${ text }` );
+			pushesBeforePolling.set( client, client.handlers.edits.length );
 		};
 
 		// Both users type concurrently: neither has polled since genesis.
@@ -3153,7 +4183,19 @@ describe( 'intent-log manager', () => {
 		}
 		flushEditorSync();
 
+		/*
+		 * The canvas holds the last push, or, when nothing was pushed
+		 * since the burst, what the editor itself typed: a window whose
+		 * burst was accepted whole and whose peer's burst parked whole
+		 * receives no row and is pushed nothing.
+		 */
 		const canvasText = ( client: typeof clientA ) => {
+			if (
+				client.handlers.edits.length ===
+				pushesBeforePolling.get( client )
+			) {
+				return typed.get( client );
+			}
 			const last = client.handlers.edits.at( -1 ) as {
 				blocks: Array< { attributes: { content?: unknown } } >;
 			};
@@ -3174,10 +4216,11 @@ describe( 'intent-log manager', () => {
 		await Promise.resolve();
 		await Promise.resolve();
 
-		// The losing burst escalated (the scenario's premise).
-		(
-			expect( console ) as unknown as { toHaveWarned: () => void }
-		 ).toHaveWarned();
+		// The losing burst (B's) escalated, the scenario's premise: a
+		// parked proposal is open for review on B's side.
+		expect(
+			clientB.manager.conflicts.getOpenConflicts( 'postType/post', '1' )
+		).not.toHaveLength( 0 );
 
 		// Both canvases must show the server's canonical text — the
 		// escalated remainder is parked for review, not on the canvas.

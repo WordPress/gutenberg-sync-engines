@@ -133,6 +133,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Plugin' ) ) {
 			// Code the base provides to more than one engine.
 			require_once GUTENBERG_SYNC_ENGINES_PATH . 'includes/shared/class-wp-sync-block-identity.php';
 			require_once GUTENBERG_SYNC_ENGINES_PATH . 'includes/shared/class-wp-sync-post-genesis-props.php';
+			require_once GUTENBERG_SYNC_ENGINES_PATH . 'includes/shared/class-wp-sync-review-permissions.php';
 
 			$engines = GUTENBERG_SYNC_ENGINES_PATH . 'includes/engines/';
 			require_once $engines . 'intent-log/class-wp-intent-log-document.php';
@@ -153,6 +154,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Plugin' ) ) {
 			require_once $engines . 'de-rtc/class-wp-de-rtc-base-version-preflight.php';
 			require_once $engines . 'de-rtc/class-wp-de-rtc-autosave-commits.php';
 			require_once $engines . 'de-rtc/class-wp-de-rtc-review-controller.php';
+			require_once $engines . 'yjs-server/class-wp-yjs-server-review-controller.php';
 
 			$transports = GUTENBERG_SYNC_ENGINES_PATH . 'includes/transports/';
 			require_once $transports . 'class-wp-sync-connection.php';
@@ -220,6 +222,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Plugin' ) ) {
 			WP_De_RTC_Base_Version_Preflight::register();
 			WP_De_RTC_Autosave_Commits::register();
 			add_action( 'rest_api_init', array( new WP_De_RTC_Review_Controller(), 'register_routes' ) );
+			add_action( 'rest_api_init', array( new WP_Yjs_Server_Review_Controller(), 'register_routes' ) );
 			WP_Intent_Log_Base_Seq_Preflight::register();
 			// A reset room must not resume from de-rtc's out-of-row canonical.
 			add_action( 'gutenberg_sync_engines_room_reset', array( 'WP_De_RTC_Engine', 'forget_room_state' ) );
@@ -418,12 +421,34 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Plugin' ) ) {
 					true
 				);
 
+				// The conflict review dialogs' stylesheet (the in-canvas
+				// cards carry their own styles inline).
+				$style = GUTENBERG_SYNC_ENGINES_PATH . 'build/style-sync-engines.css';
+				if ( file_exists( $style ) ) {
+					wp_enqueue_style(
+						'gutenberg-sync-engines',
+						GUTENBERG_SYNC_ENGINES_URL . 'build/style-sync-engines.css',
+						array( 'wp-components' ),
+						isset( $meta['version'] ) ? $meta['version'] : GUTENBERG_SYNC_ENGINES_VERSION
+					);
+				}
+
 				$settings = array(
 					'deRtcCommitIntervalMs' => max( 0, $commit_interval ) * 1000,
 					'httpPollingIntervalMs' => max( 0, min( 25, $polling_interval ) ) * 1000,
 					'awarenessIntervalMs'   => $awareness_interval * 1000,
 					'awarenessChannel'      => $awareness_channel,
 				);
+
+				/*
+				 * Whether the user may approve markup held for
+				 * unfiltered-HTML review. This only decides what the review
+				 * UI shows: the server checks the authoring user's capability
+				 * again on every write. The framework prints the same flag
+				 * as a global of its own. The plugin reads this one so the
+				 * UI outlives the framework's globals.
+				 */
+				$settings['canUnfilteredHtml'] = current_user_can( 'unfiltered_html' );
 
 				/*
 				 * The advisory channel's per-tab settings: this tab's

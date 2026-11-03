@@ -17,6 +17,9 @@ About an hour's reading, in this order.
   types per engine, who may do what, and how to add an engine.
 - [storage.md](storage.md) — the two tables, the keys each engine
   writes, the object cache, presence, and the lifecycle commands.
+- [conflict-review.md](conflict-review.md) — how a set-aside change is
+  shown in the editor and decided: the record every engine publishes,
+  the cards and dialogs, and what each engine does with a decision.
 
 **Rules and reference**
 

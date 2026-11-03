@@ -21,6 +21,38 @@ release, which the release script generates from the commit history.
   by the sync daemon instead of a PHP worker, so a tab holds no worker
   and the stream passes proxies that block WebSocket upgrades
   ([#132](https://github.com/WordPress/gutenberg-sync-engines/pull/132)).
+- Conflict review in the editor, owned by this plugin. A block whose
+  edit was set aside shows a card in its place with a "Review
+  conflict" action. The action opens a dialog that compares the
+  proposed version and the current version with the version both
+  started from, and Accept applies the merged result for everyone.
+  Tables and multi-block sections get their own comparison. Editor
+  notices for set-aside edits are gone.
+- Review of blocks held by the security filter (wp_kses). A held block
+  shows a card with its markup as inert text. Users allowed to publish
+  unfiltered HTML can open a dialog to approve, edit, or remove it.
+- de-rtc: a review card waits for a pause in typing (1.2 seconds, 20
+  seconds at most) before it replaces a block its author is still
+  typing in. The typing that follows a set-aside edit joins the same
+  review record, so the reviewer sees the whole sentence.
+- intent-log: the same card wait. The server now remembers a person's
+  set-aside edits between requests, so the typing that follows one
+  is set aside into the same record instead of landing in the
+  paragraph at the wrong place.
+- A "Changes to review" panel in the document sidebar. It lists the
+  set-aside changes that have no block to show a card on, such as a
+  post title or a proposed new block.
+- The review cards and dialogs show real contents. Each engine
+  supplies what was proposed, what the document has now, and the
+  version both started from.
+- intent-log: accepting a review writes the reviewer's merged result
+  as a new change under the reviewer's account.
+- de-rtc: the review route takes a new `accepted` resolution that
+  carries the reviewer's merged content.
+- yjs-server: markup that the security filter strips is now held for
+  review, where it used to be discarded. The filtered block still
+  lands at once. A new route, `/wp-sync/v1/yjs-server/resolve`,
+  approves or discards a hold.
 
 ### Changed
 
@@ -33,6 +65,10 @@ release, which the release script generates from the commit history.
 - The default collaboration join limit is five editor tabs per post,
   including the joining tab. The same limit now applies to WebSocket,
   HTTP polling, SSE, and SSE-daemon connections.
+- intent-log: when a typing burst clashes with a peer's edit to the same
+  paragraph, the whole burst from that request is set aside for review.
+  Before, the first keystroke landed and only the rest went to review, so
+  the paragraph gained a stray character nobody typed.
 - The bundled Gutenberg includes the entity sync interface from
   [Gutenberg #83410](https://github.com/WordPress/gutenberg/pull/83410).
   The plugin registers its adapter at startup for all existing engines and
@@ -41,6 +77,22 @@ release, which the release script generates from the commit history.
   de-rtc, other people's text carets no longer show (who is editing still
   does), saves no longer store a Yjs copy of the post in post meta, and
   the editor treats autosaves as it does without collaboration.
+
+### Fixed
+
+- Intent-log: a change to protected markup by an author without the
+  `unfiltered_html` capability (editing a custom HTML block, for
+  example) silently stripped the previously approved markup out of
+  the document while the new markup was parked for review. The change
+  derives as a remove/apply format pair and only the apply half was
+  gated; removing a protected format now requires approval too, so
+  the pair parks together and the block keeps its approved content
+  until review.
+- Intent-log: restoring a parked format application (the shape a
+  custom HTML block's held content takes) now re-authors the format
+  under the restorer's account. It previously closed the proposal
+  without re-authoring anything, so approving such a hold never
+  brought the content back.
 
 ## 0.0.2 — September 2026
 
