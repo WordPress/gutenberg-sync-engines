@@ -364,20 +364,54 @@ if ( ! class_exists( 'WP_Sync_Table_Storage' ) ) {
 		 * @return bool True on success, false on failure.
 		 */
 		public function set_awareness_state( string $room, array $awareness ): bool {
+			return $this->notify_change( $room, $this->write_awareness_state( $room, $awareness ) );
+		}
+
+		/**
+		 * Writes the awareness array WITHOUT telling anyone: no version
+		 * bump, no `gutenberg_sync_engines_room_changed`. For a write that
+		 * changes nothing a peer can see, which is a presence refresh that
+		 * moves only an entry's timestamp: the timestamp must land (a
+		 * later reader expires entries by it), but every stream on the
+		 * room would otherwise re-read storage for it, N tabs waking each
+		 * other N times per refresh. Not part of the WP_Sync_Storage
+		 * contract; `WP_Sync_Awareness` chooses this write when it has
+		 * compared the entries itself.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param string            $room      Room identifier.
+		 * @param array<int, mixed> $awareness Serializable awareness state.
+		 * @return bool True on success, false on failure.
+		 */
+		public function refresh_awareness_state( string $room, array $awareness ): bool {
+			return $this->write_awareness_state( $room, $awareness );
+		}
+
+		/**
+		 * The awareness write itself: the object cache when one outlives
+		 * the request, else the room-meta row.
+		 *
+		 * @since n.e.x.t
+		 *
+		 * @param string            $room      Room identifier.
+		 * @param array<int, mixed> $awareness Serializable awareness state.
+		 * @return bool True on success, false on failure.
+		 */
+		private function write_awareness_state( string $room, array $awareness ): bool {
 			if ( $this->uses_object_cache() ) {
 				if ( ! $this->is_storable_room( $room ) ) {
 					return false;
 				}
-				$stored = (bool) wp_cache_set(
+				return (bool) wp_cache_set(
 					$this->cache_key( $room, self::AWARENESS_KEY ),
 					array_values( $awareness ),
 					WP_Sync_Table_Schema::CACHE_GROUP,
 					self::AWARENESS_CACHE_TTL
 				);
-				return $this->notify_change( $room, $stored );
 			}
 
-			return $this->notify_change( $room, $this->upsert_meta( $room, self::AWARENESS_KEY, (string) wp_json_encode( $awareness ) ) );
+			return $this->upsert_meta( $room, self::AWARENESS_KEY, (string) wp_json_encode( $awareness ) );
 		}
 
 		/**

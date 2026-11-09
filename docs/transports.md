@@ -87,7 +87,9 @@ What a stream waits on is chosen per request:
 | Version counter in the object cache | any persistent object cache | one memory read twice a second |
 | Version counter in the room-meta table | no cache | one indexed query twice a second |
 
-The counter is bumped on every storage write ([storage.md](storage.md)).
+The counter is bumped on every storage write ([storage.md](storage.md)),
+except a presence refresh that changes only a timestamp. That one sends
+no notice, so streams are not woken for it.
 Redis carries only the notice, never content, and a Redis that stops
 answering falls back to the checks by itself. Every stream response
 carries an `X-WP-Sync-SSE-Wait` header naming what it got: `redis`,
