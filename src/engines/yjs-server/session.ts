@@ -25,7 +25,7 @@ import { holdFromJson, type YjsServerHolds } from './holds';
  * Origin tag for Yjs transactions applied by this session, so updates the
  * session applies are not reported back as local updates.
  */
-const YJS_SERVER_SESSION_ORIGIN = 'yjs-server-session';
+export const YJS_SERVER_SESSION_ORIGIN = 'yjs-server-session';
 
 /**
  * Slug of the yjs-server engine. Must match WP_Yjs_Server_Engine::SLUG on

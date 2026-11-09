@@ -44,6 +44,8 @@ import { test, expect } from '../config/collaboration-fixtures';
  * The engine now carries over only the difference between the saved post
  * and the buffered tree, once the whole bootstrapping response has
  * landed, so cases 3 and 4 pass: the keystroke lands and nothing else.
+ * Since issue #100 that difference may include blocks (a new paragraph),
+ * applied to the version of the room that shows the saved post.
  */
 
 const HOLD_MS = 4000;
@@ -140,6 +142,7 @@ test.describe( 'Collaboration - yjs-server late join (issue #57)', () => {
 		typeDuringHold: boolean;
 		savedBeforeJoin: boolean;
 		compacted: boolean;
+		newParagraph?: boolean;
 	} > = [
 		{
 			title: 'a window whose first sync response is delayed does not revert a peer’s unsaved text',
@@ -165,6 +168,20 @@ test.describe( 'Collaboration - yjs-server late join (issue #57)', () => {
 			savedBeforeJoin: false,
 			compacted: true,
 		},
+		{
+			title: 'a new paragraph started before the delayed first sync response is kept too (issue #100)',
+			typeDuringHold: true,
+			savedBeforeJoin: false,
+			compacted: false,
+			newParagraph: true,
+		},
+		{
+			title: 'the same after user 1 SAVED (issue #100)',
+			typeDuringHold: true,
+			savedBeforeJoin: true,
+			compacted: false,
+			newParagraph: true,
+		},
 	];
 
 	for ( const {
@@ -172,6 +189,7 @@ test.describe( 'Collaboration - yjs-server late join (issue #57)', () => {
 		typeDuringHold,
 		savedBeforeJoin,
 		compacted,
+		newParagraph = false,
 	} of CASES ) {
 		test(
 			title,
@@ -290,6 +308,10 @@ test.describe( 'Collaboration - yjs-server late join (issue #57)', () => {
 							.click();
 						await page2.keyboard.press( 'End' );
 						await page2.keyboard.type( ' B' );
+						if ( newParagraph ) {
+							await page2.keyboard.press( 'Enter' );
+							await page2.keyboard.type( 'New paragraph' );
+						}
 						expect( Date.now() ).toBeLessThan( releaseAt );
 					}
 
@@ -328,6 +350,17 @@ test.describe( 'Collaboration - yjs-server late join (issue #57)', () => {
 						  ]
 						: [ `Existing content${ peerText }` ];
 					expect( acceptable ).toContain( text1 );
+					const rest = ( blocks: typeof blocks1 ) =>
+						blocks
+							.slice( 1 )
+							.map( ( block ) =>
+								String( block.attributes.content )
+							);
+					const expectedRest = newParagraph
+						? [ 'New paragraph' ]
+						: [];
+					expect( rest( blocks1 ) ).toEqual( expectedRest );
+					expect( rest( blocks2 ) ).toEqual( expectedRest );
 				} finally {
 					if ( compacted ) {
 						await requestUtils.deactivatePlugin(

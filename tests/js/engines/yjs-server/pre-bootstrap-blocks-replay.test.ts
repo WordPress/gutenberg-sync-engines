@@ -1,7 +1,14 @@
 /**
  * External dependencies
  */
-import { describe, expect, it, jest, beforeEach } from '@jest/globals';
+import {
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	jest,
+} from '@jest/globals';
 import * as Y from 'yjs';
 import * as buffer from 'lib0/buffer';
 
@@ -52,11 +59,14 @@ const {
  * joiner's own edit: a peer's saved text inserted twice, a peer's unsaved
  * text deleted, and the block re-identified for everyone.
  *
- * The engine now applies only the TEXT the person typed: the buffered tree
- * is compared with the saved post as parsed, and each rich-text difference
- * goes straight into the document's own text at that block position. A
- * tree that differs in any other way (a block added, a non-text attribute)
- * is dropped. These tests run that lane through the framework's REAL post
+ * The engine now applies the edit to the version of the room that shows
+ * the saved post (issue #100): it rebuilds the document at each row of the
+ * first response, finds the newest state whose blocks match the saved post
+ * as parsed, applies the person's changes over the saved post there, and
+ * adds only the result to the document, so the CRDT merges it with what
+ * landed since. When no row matches (a checkpoint newer than the save),
+ * only the TEXT the person typed carries over, at the same block position
+ * (#57). These tests run both lanes through the framework's REAL post
  * merge (`applyPostChangesToCRDTDoc` builds the room, `mergeCrdtBlocks`
  * is what the old replay ran). The browser-level reproduction is
  * `tests/e2e/specs/collaboration-yjs-server-late-join.spec.ts`, which also
@@ -278,7 +288,12 @@ describe( 'yjs-server › pre-bootstrap blocks replay (issue #57)', () => {
 	let syncConfig: SyncConfig;
 
 	beforeEach( () => {
+		jest.useFakeTimers();
 		syncConfig = makePostSyncConfig();
+	} );
+
+	afterEach( () => {
+		jest.useRealTimers();
 	} );
 
 	function makeEntity() {
@@ -360,6 +375,8 @@ describe( 'yjs-server › pre-bootstrap blocks replay (issue #57)', () => {
 		);
 		session.receiveUpdate( theRoom.snapshot as any );
 		session.receiveUpdate( theRoom.tail as any );
+		// The replay waits for the rest of the first response.
+		jest.runOnlyPendingTimers();
 
 		const blocks = blocksOf( entity, content );
 		expect( blocks ).toHaveLength( 1 );
@@ -388,6 +405,8 @@ describe( 'yjs-server › pre-bootstrap blocks replay (issue #57)', () => {
 		);
 		session.receiveUpdate( theRoom.snapshot as any );
 		session.receiveUpdate( theRoom.tail as any );
+		// The replay waits for the rest of the first response.
+		jest.runOnlyPendingTimers();
 
 		// The keystroke went into the snapshot row's text at the offset
 		// the person typed it, concurrently with the peer's row, so the
@@ -417,6 +436,8 @@ describe( 'yjs-server › pre-bootstrap blocks replay (issue #57)', () => {
 		);
 		session.receiveUpdate( theRoom.snapshot as any );
 		session.receiveUpdate( theRoom.tail as any );
+		// The replay waits for the rest of the first response.
+		jest.runOnlyPendingTimers();
 
 		// What matters is that nothing is doubled; the order is the
 		// merge's call, as above.
@@ -448,6 +469,8 @@ describe( 'yjs-server › pre-bootstrap blocks replay (issue #57)', () => {
 		);
 		session.receiveUpdate( theRoom.snapshot as any );
 		session.receiveUpdate( theRoom.tail as any );
+		// The replay waits for the rest of the first response.
+		jest.runOnlyPendingTimers();
 
 		const blocks = blocksOf( entity, content );
 		expect( String( blocks[ 0 ].attributes.content ) ).toBe(
@@ -477,6 +500,8 @@ describe( 'yjs-server › pre-bootstrap blocks replay (issue #57)', () => {
 		);
 		session.receiveUpdate( theRoom.snapshot as any );
 		session.receiveUpdate( theRoom.tail as any );
+		// The replay waits for the rest of the first response.
+		jest.runOnlyPendingTimers();
 
 		// Nothing to compare the tree against: the keystroke is dropped
 		// rather than the tree merged, and the peer's text is intact.
@@ -505,6 +530,8 @@ describe( 'yjs-server › pre-bootstrap blocks replay (issue #57)', () => {
 		const theRoom = room( [], [ paragraph( 'Peer', 'server-1' ) ] );
 		session.receiveUpdate( theRoom.snapshot as any );
 		session.receiveUpdate( theRoom.tail as any );
+		// The replay waits for the rest of the first response.
+		jest.runOnlyPendingTimers();
 
 		const contents = ( blocks: any[] ) =>
 			blocks
@@ -521,7 +548,7 @@ describe( 'yjs-server › pre-bootstrap blocks replay (issue #57)', () => {
 		] );
 	} );
 
-	it( 'drops a buffered tree that changed the block structure (a paragraph split)', () => {
+	it( 'keeps a paragraph split made before the snapshot, against the saved version', () => {
 		const { entity, session, sent, content } = joinAndType(
 			'Existing content',
 			[
@@ -543,13 +570,62 @@ describe( 'yjs-server › pre-bootstrap blocks replay (issue #57)', () => {
 		);
 		session.receiveUpdate( theRoom.snapshot as any );
 		session.receiveUpdate( theRoom.tail as any );
+		// The replay waits for the rest of the first response.
+		jest.runOnlyPendingTimers();
+
+		// The split is applied to the genesis (the saved version): the
+		// first paragraph loses " content", which moves to a new block.
+		// The peer's text was typed after "content" in the first block,
+		// so the merge keeps it there; nothing is lost or doubled.
+		const texts = ( blocks: any[] ) =>
+			blocks.map( ( block ) => String( block.attributes.content ) );
+		const blocks = blocksOf( entity, content );
+		expect( texts( blocks ) ).toEqual( [
+			'Existing plus user one',
+			' content',
+		] );
+		expect( blocks[ 0 ].clientId ).toBe( 'server-1' );
+		expect( texts( theRoom.blocksAfter( sent ) ) ).toEqual(
+			texts( blocks )
+		);
+	} );
+
+	it( 'keeps a paragraph added after the saved one, beside the peer’s newer text', () => {
+		const { entity, session, sent, content } = joinAndType(
+			'Existing content',
+			[
+				editorParagraph(
+					'Existing content B',
+					'fresh-uuid-1',
+					'Existing content'
+				),
+				editorParagraph( 'New paragraph', 'fresh-uuid-2', '' ),
+			]
+		);
+		const theRoom = room(
+			[ paragraph( 'Existing content', 'server-1' ) ],
+			[ paragraph( 'Existing content plus user one', 'server-1' ) ]
+		);
+		session.receiveUpdate( theRoom.snapshot as any );
+		session.receiveUpdate( theRoom.tail as any );
+		// The replay waits for the rest of the first response.
+		jest.runOnlyPendingTimers();
 
 		const blocks = blocksOf( entity, content );
-		expect( blocks ).toHaveLength( 1 );
-		expect( String( blocks[ 0 ].attributes.content ) ).toBe(
-			'Existing content plus user one'
+		expect( blocks ).toHaveLength( 2 );
+		expect( CONCURRENT_ORDERS ).toContain(
+			String( blocks[ 0 ].attributes.content )
 		);
-		expect( sent ).toHaveLength( 0 );
+		expect( String( blocks[ 1 ].attributes.content ) ).toBe(
+			'New paragraph'
+		);
+		expect(
+			theRoom
+				.blocksAfter( sent )
+				.map( ( block: any ) => String( block.attributes.content ) )
+		).toEqual(
+			blocks.map( ( block: any ) => String( block.attributes.content ) )
+		);
 	} );
 
 	it( 'applies a keystroke typed inside a nested block', () => {
@@ -601,6 +677,8 @@ describe( 'yjs-server › pre-bootstrap blocks replay (issue #57)', () => {
 		);
 		session.receiveUpdate( theRoom.snapshot as any );
 		session.receiveUpdate( theRoom.tail as any );
+		// The replay waits for the rest of the first response.
+		jest.runOnlyPendingTimers();
 
 		const blocks = blocksOf( entity, saved );
 		const text = String( blocks[ 0 ].innerBlocks[ 0 ].attributes.content );
@@ -625,6 +703,8 @@ describe( 'yjs-server › pre-bootstrap blocks replay (issue #57)', () => {
 		);
 		session.receiveUpdate( theRoom.snapshot as any );
 		session.receiveUpdate( theRoom.tail as any );
+		// The replay waits for the rest of the first response.
+		jest.runOnlyPendingTimers();
 
 		const blocks = blocksOf( entity, content );
 		expect( String( blocks[ 0 ].attributes.content ) ).toBe(
