@@ -59,6 +59,10 @@ jest.mock( '../../../src/providers/http-polling/polling-manager', () => ( {
 jest.mock( '../../../src/awareness', () => ( {
 	bootstrapSlowAwareness: jest.fn(),
 } ) );
+// The review UI loads the editor packages, which this test does not need.
+jest.mock( '../../../src/review', () => ( {
+	registerConflictSource: jest.fn(),
+} ) );
 
 let base;
 beforeEach( () => {

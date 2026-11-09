@@ -317,6 +317,13 @@ class WP_Sync_SSE_Server extends WP_HTTP_Polling_Sync_Server {
 		$presence_at = $this->now() + 20.0;
 		$rooms       = $request['rooms'];
 		$data        = $initial;
+		/**
+		 * Allows opt-in diagnostics to sample an open stream's resource use.
+		 * No handler is installed during normal requests.
+		 *
+		 * @since n.e.x.t
+		 */
+		do_action( 'gutenberg_sync_engines_sse_checkpoint' );
 		try {
 			while ( true ) {
 				$emit( "event: sync\ndata: " . wp_json_encode( $data ) . "\n\n" );
@@ -337,7 +344,9 @@ class WP_Sync_SSE_Server extends WP_HTTP_Polling_Sync_Server {
 					if ( $remaining <= 0 || connection_aborted() ) {
 						return;
 					}
+					do_action( 'gutenberg_sync_engines_sse_checkpoint' );
 					$changed = $this->subscriber->wait( max( 0.0, min( 5.0, $remaining, min( $catch_up_at, $presence_at ) - $this->now() ) ) );
+					do_action( 'gutenberg_sync_engines_sse_checkpoint' );
 					if ( ! $changed ) {
 						$emit( ": keepalive\n\n" );
 					}
@@ -387,6 +396,7 @@ class WP_Sync_SSE_Server extends WP_HTTP_Polling_Sync_Server {
 			// if Redis restarted and discarded every notification.
 			$emit( "event: retry\ndata: {}\n\n" );
 		} finally {
+			do_action( 'gutenberg_sync_engines_sse_checkpoint' );
 			$this->stream_rooms     = array();
 			$this->stream_awareness = array();
 			$this->stream_versions  = array();

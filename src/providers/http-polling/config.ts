@@ -3,7 +3,8 @@
  */
 import { applyFilters } from '@wordpress/hooks';
 
-export const DEFAULT_CLIENT_LIMIT_PER_ROOM = 3;
+// Total editor connections, including the joining editor.
+export const DEFAULT_CLIENT_LIMIT_PER_ROOM = 5;
 
 // Retry delays after poll failures.
 // The disconnect dialog shows after all retries are exhausted, then retries
@@ -122,7 +123,7 @@ export const POLLING_INTERVAL_WITH_COLLABORATORS_IN_MS =
 	);
 
 /*
- * Advisory-channel cadences (docs/plan/advisory-channel.md). While every
+ * Advisory-channel cadences (docs/transports.md). While every
  * known peer is reachable over the channel there is no timer at all;
  * polls happen on demand — shortly after the first queued local update,
  * shortly after a peer announces new rows (coalesced, with a floor that

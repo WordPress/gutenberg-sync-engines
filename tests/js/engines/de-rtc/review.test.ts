@@ -15,6 +15,11 @@ import {
  */
 import { createDeRtcEngine } from '../../../../src/engines/de-rtc/engine';
 import {
+	registerConflictSource,
+	resetConflictSourcesForTesting,
+	resolveConflict as registryResolveConflict,
+} from '../../../../src/review/conflicts';
+import {
 	DE_RTC_ANNOUNCE_TYPE,
 	DE_RTC_PARKED_TYPE,
 	DE_RTC_PROPOSAL_TYPE,
@@ -81,6 +86,10 @@ const parkedRow = (
 	} ),
 } );
 
+afterEach( () => {
+	resetConflictSourcesForTesting();
+} );
+
 describe( 'de-rtc review lane (client)', () => {
 	let syncConfig: jest.MockedObject< SyncConfig >;
 	let engine: ReturnType< typeof createDeRtcEngine >;
@@ -107,6 +116,296 @@ describe( 'de-rtc review lane (client)', () => {
 		session.onLocalUpdate( ( update: any ) => sent.push( update ) );
 		return { entity, session, sent };
 	}
+
+	it( 'publishes a parked row as a conflict record with base, proposed, and current sides', () => {
+		const { session } = makeEntity();
+		const changed = jest.fn();
+		engine.conflicts.subscribe( 'postType/book', '1', changed );
+
+		// The document holds Alpha and Beta. A collaborator's rewrite of
+		// Beta (index 1) parked against its base form.
+		session.receiveUpdate(
+			snapshotRow( 'v1', contentOf( BLOCK_A, BLOCK_B ) )
+		);
+		session.receiveUpdate( {
+			type: DE_RTC_PARKED_TYPE,
+			data: JSON.stringify( {
+				proposalId: 'p-9-1',
+				reason: 'manual-conflict-required',
+				authorClientId: 9,
+				author: 7,
+				at: 1000,
+				baseVersion: 'v1',
+				changedBlocks: [
+					{
+						index: 1,
+						html: contentOf( BLOCK_C ),
+						baseHtml: contentOf( BLOCK_B ),
+					},
+				],
+				excerpt: 'Gamma',
+			} ),
+		} );
+
+		expect( changed ).toHaveBeenCalled();
+		const [ conflict ] = engine.conflicts.getOpenConflicts(
+			'postType/book',
+			'1'
+		);
+		expect( conflict ).toMatchObject( {
+			id: 'p-9-1',
+			kind: 'merge',
+			authorId: 7,
+			target: { type: 'blocks', index: 1, count: 1 },
+			base: contentOf( BLOCK_B ),
+			proposed: contentOf( BLOCK_C ),
+		} );
+		// `current` is THIS client's document at the same span (the mock
+		// serializer renders one block as a one-element JSON array).
+		expect( conflict.current ).toBe( contentOf( BLOCK_B ) );
+	} );
+
+	it( 'leaves the base side null on parked rows that predate baseHtml', () => {
+		const { session } = makeEntity();
+		session.receiveUpdate( snapshotRow( 'v1', contentOf( BLOCK_A ) ) );
+		session.receiveUpdate(
+			parkedRow( 'p-old', 'manual-conflict-required', 9, [
+				{ index: 0, html: contentOf( BLOCK_C ) },
+			] )
+		);
+		const [ conflict ] = engine.conflicts.getOpenConflicts(
+			'postType/book',
+			'1'
+		);
+		expect( conflict.base ).toBeNull();
+		expect( conflict.proposed ).toBe( contentOf( BLOCK_C ) );
+		expect( conflict.current ).toBe( contentOf( BLOCK_A ) );
+	} );
+
+	it( 'maps a security hold to a sequestration record', () => {
+		const { session } = makeEntity();
+		session.receiveUpdate( snapshotRow( 'v1', contentOf( BLOCK_A ) ) );
+		session.receiveUpdate(
+			parkedRow( 'p-risky', 'requires-unfiltered-html', 9, [
+				{ index: 1, html: contentOf( BLOCK_C ) },
+			] )
+		);
+		expect(
+			engine.conflicts.getOpenConflicts( 'postType/book', '1' )[ 0 ]
+		).toMatchObject( { id: 'p-risky', kind: 'sequestration' } );
+	} );
+
+	it( 'accept sends the accepted resolution with the content; dismiss sends dismissed', async () => {
+		const { session } = makeEntity();
+		session.receiveUpdate(
+			snapshotRow( 'v1', contentOf( BLOCK_A, BLOCK_B ) )
+		);
+		session.receiveUpdate(
+			parkedRow( 'p-9-1', 'manual-conflict-required', 9, [
+				{ index: 1, html: contentOf( BLOCK_C ) },
+			] )
+		);
+		session.receiveUpdate(
+			parkedRow( 'p-9-2', 'manual-conflict-required', 9, [
+				{ index: 0, html: contentOf( BLOCK_C ) },
+			] )
+		);
+
+		engine.conflicts.resolveConflict( 'postType/book', '1', 'p-9-1', {
+			action: 'accept',
+			content: contentOf( BLOCK_A ),
+		} );
+		engine.conflicts.resolveConflict( 'postType/book', '1', 'p-9-2', {
+			action: 'dismiss',
+		} );
+		await Promise.resolve();
+
+		// Both close optimistically. The decisions ride the REST lane.
+		expect(
+			engine.conflicts.getOpenConflicts( 'postType/book', '1' )
+		).toEqual( [] );
+		expect( apiFetchMock ).toHaveBeenCalledWith(
+			expect.objectContaining( {
+				method: 'POST',
+				path: '/wp-sync/v1/de-rtc/resolve',
+				data: expect.objectContaining( {
+					proposalId: 'p-9-1',
+					resolution: 'accepted',
+					content: contentOf( BLOCK_A ),
+					room: 'postType/book:1',
+				} ),
+			} )
+		);
+		expect( apiFetchMock ).toHaveBeenCalledWith(
+			expect.objectContaining( {
+				data: expect.objectContaining( {
+					proposalId: 'p-9-2',
+					resolution: 'dismissed',
+				} ),
+			} )
+		);
+		const dismissedCall = apiFetchMock.mock.calls.find(
+			( [ options ]: any[] ) => 'p-9-2' === options.data.proposalId
+		)?.[ 0 ] as any;
+		expect( dismissedCall.data ).not.toHaveProperty( 'content' );
+	} );
+
+	it( 'publishes a record again when a new version changes its current side', () => {
+		const { session } = makeEntity();
+		session.receiveUpdate(
+			snapshotRow( 'v1', contentOf( BLOCK_A, BLOCK_B ) )
+		);
+		session.receiveUpdate(
+			parkedRow( 'p-9-1', 'manual-conflict-required', 9, [
+				{ index: 1, html: contentOf( BLOCK_C ) },
+			] )
+		);
+		const changed = jest.fn();
+		engine.conflicts.subscribe( 'postType/book', '1', changed );
+		// The review UI reads the record, as it does after every change.
+		expect(
+			engine.conflicts.getOpenConflicts( 'postType/book', '1' )[ 0 ]
+				.current
+		).toBe( contentOf( BLOCK_B ) );
+
+		// A collaborator's edit of the block under review lands.
+		const edited = {
+			name: 'core/paragraph',
+			attributes: { content: 'Beta, edited by a peer' },
+		};
+		session.receiveUpdate(
+			snapshotRow( 'v2', contentOf( BLOCK_A, edited ) )
+		);
+
+		// No row opened or closed, but the record changed: the listeners
+		// hear about it, or an open dialog would keep the old block.
+		expect( changed ).toHaveBeenCalled();
+		expect(
+			engine.conflicts.getOpenConflicts( 'postType/book', '1' )[ 0 ]
+				.current
+		).toBe( contentOf( edited ) );
+
+		// A version that leaves the record's block alone says nothing.
+		changed.mockClear();
+		session.receiveUpdate(
+			snapshotRow(
+				'v3',
+				contentOf(
+					{ name: 'core/paragraph', attributes: { content: 'A2' } },
+					edited
+				)
+			)
+		);
+		expect( changed ).not.toHaveBeenCalled();
+	} );
+
+	it( 'an accepted result names the version the reviewer saw, and a stale refusal reopens the record', async () => {
+		const { session } = makeEntity();
+		session.receiveUpdate(
+			snapshotRow( 'v1', contentOf( BLOCK_A, BLOCK_B ) )
+		);
+		session.receiveUpdate(
+			parkedRow( 'p-9-1', 'manual-conflict-required', 9, [
+				{ index: 1, html: contentOf( BLOCK_C ) },
+			] )
+		);
+		// The server holds a newer version in which the block changed.
+		apiFetchMock.mockRejectedValueOnce( {
+			code: 'review_stale',
+			message: 'This content changed after the decision was made.',
+			data: { status: 409 },
+		} );
+
+		const outcome = await engine.conflicts.resolveConflict(
+			'postType/book',
+			'1',
+			'p-9-1',
+			{
+				action: 'accept',
+				content: contentOf( BLOCK_A ),
+				current: contentOf( BLOCK_B ),
+			}
+		);
+
+		expect( apiFetchMock ).toHaveBeenCalledWith(
+			expect.objectContaining( {
+				data: expect.objectContaining( {
+					proposalId: 'p-9-1',
+					resolution: 'accepted',
+					seenVersion: 'v1',
+				} ),
+			} )
+		);
+		expect( outcome ).toBe( 'stale' );
+		expect(
+			engine.conflicts.getOpenConflicts( 'postType/book', '1' )
+		).toHaveLength( 1 );
+	} );
+
+	it( 'refuses an accepted result made against a current side the document no longer has, without a request', async () => {
+		const { session } = makeEntity();
+		session.receiveUpdate(
+			snapshotRow( 'v1', contentOf( BLOCK_A, BLOCK_B ) )
+		);
+		session.receiveUpdate(
+			parkedRow( 'p-9-1', 'manual-conflict-required', 9, [
+				{ index: 1, html: contentOf( BLOCK_C ) },
+			] )
+		);
+		const seen = engine.conflicts.getOpenConflicts(
+			'postType/book',
+			'1'
+		)[ 0 ].current;
+
+		// The block changes after the reviewer last saw it.
+		session.receiveUpdate(
+			snapshotRow(
+				'v2',
+				contentOf( BLOCK_A, {
+					name: 'core/paragraph',
+					attributes: { content: 'Beta, edited by a peer' },
+				} )
+			)
+		);
+
+		// The refusal is the conflict registry's, against the record the
+		// engine publishes; the engine is never asked.
+		registerConflictSource( engine.conflicts );
+		const outcome = await registryResolveConflict(
+			'postType/book',
+			'1',
+			'p-9-1',
+			{ action: 'accept', content: contentOf( BLOCK_A ), current: seen }
+		);
+
+		expect( outcome ).toBe( 'stale' );
+		expect( apiFetchMock ).not.toHaveBeenCalled();
+		expect(
+			engine.conflicts.getOpenConflicts( 'postType/book', '1' )
+		).toHaveLength( 1 );
+	} );
+
+	it( 'dismiss sends no version: keeping the document as it is cannot be stale', async () => {
+		const { session } = makeEntity();
+		session.receiveUpdate( snapshotRow( 'v1', contentOf( BLOCK_A ) ) );
+		session.receiveUpdate(
+			parkedRow( 'p-9-1', 'manual-conflict-required', 9, [
+				{ index: 0, html: contentOf( BLOCK_C ) },
+			] )
+		);
+
+		expect(
+			await engine.conflicts.resolveConflict(
+				'postType/book',
+				'1',
+				'p-9-1',
+				{ action: 'dismiss' }
+			)
+		).toBe( 'resolved' );
+		expect( apiFetchMock.mock.calls[ 0 ][ 0 ].data ).not.toHaveProperty(
+			'seenVersion'
+		);
+	} );
 
 	it( 'presents a parked row as a review item with normalized reasons', () => {
 		const { session } = makeEntity();
@@ -423,7 +722,7 @@ describe( 'de-rtc review lane (client)', () => {
 		};
 
 		beforeEach( () => {
-			// Edits and snapshots land in the same tick here; the typing-
+			// Edits and snapshots land in the same tick here. The typing-
 			// burst quiet gate would defer every snapshot otherwise.
 			setDeRtcBurstQuietMsForTesting( 0 );
 		} );
@@ -490,6 +789,68 @@ describe( 'de-rtc review lane (client)', () => {
 			expect( changed ).toHaveBeenCalled();
 		} );
 
+		it( 'a contest is a conflict record: the canonical form proposed, the local block current', () => {
+			raiseContest();
+
+			expect(
+				engine.conflicts.getOpenConflicts( 'postType/book', '1' )
+			).toEqual( [
+				{
+					id: 'contested-0',
+					kind: 'merge',
+					authorId: 0,
+					target: { type: 'blocks', index: 0, count: 1 },
+					base: null,
+					proposed: contentOf( A_PEER ),
+					current: contentOf( A_NEWER ),
+				},
+			] );
+		} );
+
+		it( 'accepting the canonical form adopts it; accepting anything else writes it locally', () => {
+			const adopted = raiseContest();
+			engine.conflicts.resolveConflict(
+				'postType/book',
+				'1',
+				'contested-0',
+				{ action: 'accept', content: contentOf( A_PEER ) }
+			);
+			expect(
+				(
+					adopted.entity.getEditorChanges( {
+						blocks: [],
+					} as any ) as any
+				 ).blocks
+			).toEqual( [ A_PEER ] );
+			expect(
+				engine.conflicts.getOpenConflicts( 'postType/book', '1' )
+			).toEqual( [] );
+
+			// A fresh engine: the reviewer hand-merges the two.
+			engine = createDeRtcEngine();
+			const merged = raiseContest();
+			const A_MERGED = {
+				name: 'core/paragraph',
+				attributes: { content: 'Alpha merged by hand' },
+			};
+			engine.conflicts.resolveConflict(
+				'postType/book',
+				'1',
+				'contested-0',
+				{ action: 'accept', content: contentOf( A_MERGED ) }
+			);
+			expect(
+				(
+					merged.entity.getEditorChanges( {
+						blocks: [],
+					} as any ) as any
+				 ).blocks
+			).toEqual( [ A_MERGED ] );
+			expect(
+				engine.conflicts.getOpenConflicts( 'postType/book', '1' )
+			).toEqual( [] );
+		} );
+
 		it( 'dismiss routes to REJECT: the local block survives, the item closes', () => {
 			const { entity } = raiseContest();
 
@@ -525,6 +886,209 @@ describe( 'de-rtc review lane (client)', () => {
 				blocks: [],
 			} as any ) as any;
 			expect( changes.blocks ).toEqual( [ A_PEER ] );
+		} );
+	} );
+
+	describe( "the current side in the author's own window", () => {
+		const B_PEER = {
+			name: 'core/paragraph',
+			attributes: { content: 'Beta, rewritten by a peer' },
+		};
+
+		beforeEach( () => {
+			// Edits and snapshots land in the same tick here. The typing-
+			// burst quiet gate would put every snapshot on a timer.
+			setDeRtcBurstQuietMsForTesting( 0 );
+		} );
+
+		afterEach( () => {
+			setDeRtcBurstQuietMsForTesting( 500 );
+		} );
+
+		const documentBlocks = ( entity: any ) =>
+			( entity.getEditorChanges( { blocks: [] } as any ) as any ).blocks;
+
+		/**
+		 * The author rewrites Beta, and the change is set aside because a
+		 * collaborator's rewrite of the same block became version 2
+		 * first. The author's document keeps their own text: a version
+		 * waits while a local edit is unanswered.
+		 */
+		function parkOwnChange() {
+			const made = makeEntity();
+			const { entity, session } = made;
+			session.receiveUpdate(
+				snapshotRow( 'v1', contentOf( BLOCK_A, BLOCK_B ) )
+			);
+			entity.applyLocalChanges(
+				{ blocks: [ BLOCK_A, BLOCK_C ] } as any,
+				'editor',
+				{}
+			);
+			session.receiveUpdate(
+				snapshotRow( 'v2', contentOf( BLOCK_A, B_PEER ) )
+			);
+			session.receiveUpdate( {
+				type: DE_RTC_PARKED_TYPE,
+				data: JSON.stringify( {
+					proposalId: 'p-own-1',
+					reason: 'manual-conflict-required',
+					authorClientId: session.clientId,
+					author: 7,
+					at: 1000,
+					baseVersion: 'v1',
+					changedBlocks: [
+						{
+							index: 1,
+							html: contentOf( BLOCK_C ),
+							baseHtml: contentOf( BLOCK_B ),
+						},
+					],
+				} ),
+			} );
+			// The parked text is still in the author's document.
+			expect( documentBlocks( entity ) ).toEqual( [ BLOCK_A, BLOCK_C ] );
+			return made;
+		}
+
+		it( 'is the canonical block, not the parked text', () => {
+			parkOwnChange();
+
+			const [ conflict ] = engine.conflicts.getOpenConflicts(
+				'postType/book',
+				'1'
+			);
+			expect( conflict ).toMatchObject( {
+				id: 'p-own-1',
+				base: contentOf( BLOCK_B ),
+				proposed: contentOf( BLOCK_C ),
+				current: contentOf( B_PEER ),
+			} );
+		} );
+
+		it( 'follows a version the document has not taken yet, and the listeners hear it', () => {
+			const { entity, session } = parkOwnChange();
+			const changed = jest.fn();
+			engine.conflicts.subscribe( 'postType/book', '1', changed );
+			engine.conflicts.getOpenConflicts( 'postType/book', '1' );
+
+			const newer = {
+				name: 'core/paragraph',
+				attributes: { content: 'Beta, rewritten again' },
+			};
+			session.receiveUpdate(
+				snapshotRow( 'v3', contentOf( BLOCK_A, newer ) )
+			);
+
+			expect( documentBlocks( entity ) ).toEqual( [ BLOCK_A, BLOCK_C ] );
+			expect( changed ).toHaveBeenCalled();
+			expect(
+				engine.conflicts.getOpenConflicts( 'postType/book', '1' )[ 0 ]
+					.current
+			).toBe( contentOf( newer ) );
+		} );
+
+		it( 'an accepted result names the version the current side was read from', async () => {
+			parkOwnChange();
+			const [ conflict ] = engine.conflicts.getOpenConflicts(
+				'postType/book',
+				'1'
+			);
+
+			const outcome = await engine.conflicts.resolveConflict(
+				'postType/book',
+				'1',
+				'p-own-1',
+				{
+					action: 'accept',
+					content: contentOf( BLOCK_C ),
+					current: conflict.current,
+				}
+			);
+
+			// The document is still at version 1. Naming that version
+			// would get the result refused: the block differs between
+			// versions 1 and 2, and the reviewer saw version 2.
+			expect( outcome ).toBe( 'resolved' );
+			expect( apiFetchMock ).toHaveBeenCalledWith(
+				expect.objectContaining( {
+					data: expect.objectContaining( {
+						proposalId: 'p-own-1',
+						resolution: 'accepted',
+						seenVersion: 'v2',
+					} ),
+				} )
+			);
+		} );
+
+		it( 'finds the block by its identity when the canonical content moved it', () => {
+			const withId = ( syncId: string, content: string ) => ( {
+				name: 'core/paragraph',
+				attributes: { content, metadata: { syncId } },
+			} );
+			const { entity, session } = makeEntity();
+			session.receiveUpdate(
+				snapshotRow(
+					'v1',
+					contentOf( withId( 'a', 'Alpha' ), withId( 'b', 'Beta' ) )
+				)
+			);
+			entity.applyLocalChanges(
+				{
+					blocks: [
+						withId( 'a', 'Alpha' ),
+						withId( 'b', 'Beta, by the author' ),
+					],
+				} as any,
+				'editor',
+				{}
+			);
+			// Version 2 rewrote the block and put a new block above it.
+			session.receiveUpdate(
+				snapshotRow(
+					'v2',
+					contentOf(
+						withId( 'new', 'New first block' ),
+						withId( 'a', 'Alpha' ),
+						withId( 'b', 'Beta, by a peer' )
+					)
+				)
+			);
+			session.receiveUpdate( {
+				type: DE_RTC_PARKED_TYPE,
+				data: JSON.stringify( {
+					proposalId: 'p-own-1',
+					reason: 'manual-conflict-required',
+					authorClientId: session.clientId,
+					baseVersion: 'v1',
+					changedBlocks: [
+						{
+							index: 1,
+							syncId: 'b',
+							html: contentOf(
+								withId( 'b', 'Beta, by the author' )
+							),
+						},
+					],
+				} ),
+			} );
+
+			expect(
+				engine.conflicts.getOpenConflicts( 'postType/book', '1' )[ 0 ]
+					.current
+			).toBe( contentOf( withId( 'b', 'Beta, by a peer' ) ) );
+		} );
+
+		it( 'falls back to the document when no canonical content is held', () => {
+			const { session } = parkOwnChange();
+
+			// A room restart: every version this client held is gone.
+			( session as any ).onRoomRestart();
+
+			expect(
+				engine.conflicts.getOpenConflicts( 'postType/book', '1' )[ 0 ]
+					.current
+			).toBe( contentOf( BLOCK_C ) );
 		} );
 	} );
 

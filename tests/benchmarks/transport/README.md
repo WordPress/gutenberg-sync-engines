@@ -68,7 +68,7 @@ Arguments are bare `key=value` tokens (the engine benchmark's convention):
 | ------------ | --------- | --------------------------------------------------- |
 | `transport=` | `current` | Transport to measure; switched via the Settings →   |
 |              |           | Collaboration screen and restored afterwards.       |
-| `engine=`    | `current` | Engine to measure under (`intent-log`/`yjs-server`). |
+| `engine=`    | `current` | Engine to measure under (`intent-log`, `yjs-server`, `de-rtc`). |
 | `cache=`     | `current` | Persistent object cache for the run: `none`, `redis` (the Redis Object Cache drop-in on the env's Redis; this checkout's wp-env sites only), or leave alone. Restored after. |
 | `wake=`      | `auto`    | What an SSE stream sleeps on: `auto` (whatever the site has), `redis`, `cache` (needs `cache=redis`), `table` (needs `cache=none`). The report's `sseWaitObserved` says what the streams actually got. |
 | `trials=`    | `30`      | Measured token round-trips.                         |
@@ -130,18 +130,12 @@ The benchmark then works with `transport=websocket`: it counts WebSocket
 frames/bytes instead of HTTP requests, and fails with a clear message when
 the daemon is unreachable (window B never receives the anchor paragraph).
 
-Known caveat: as of 2026-08-11 the **intent-log engine mangles live typing
-over the websocket transport** (characters drop/reorder in the author's own
-window — the per-keystroke frame cadence exposes a client-session race that
-the HTTP transports' ~1 s batching masks). Benchmark the websocket transport
-under `engine=yjs-server` until that is fixed.
-
 ## Reading the numbers
 
 - **http-polling**: latency has *two* polling legs — the edit waits in A's
   queue until A's next poll sends it, then B receives it on B's next poll —
-  so with the 1 s with-collaborators cadence expect a p50 around one full
-  interval (~1–1.5 s) and a max near two. Requests continue at the same
+  so expect a p50 around one full polling interval (5 s by default; the
+  e2e setup pins the tests site to 1 s) and a max near two. Requests continue at the same
   cadence while idle; that idle request rate × collaborators is the host's
   steady-state load.
 - **sse**: receive latency drops to near-push: with Redis the stream is
@@ -185,7 +179,7 @@ stream is open. JSON counters include `sseRequests`, `sseStreams`, and
 `sseBytesReceived`; only a successful stream with received bytes counts as
 observed SSE. A Redis outage can make the run use polling, so check the
 observed transport. Setup and recovery details are in
-[the transport guide](../../../docs/transports.md#server-sent-events-with-redis).
+[the transport guide](../../../docs/transports.md#server-sent-events).
 
 Add `--recovery` to the transport benchmark to interrupt the receiving tab,
 accept an edit while it is offline, and require it to catch up without a reload.

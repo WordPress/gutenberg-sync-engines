@@ -7,6 +7,12 @@ import type { RequestUtils } from '@wordpress/e2e-test-utils-playwright';
  * Internal dependencies
  */
 import { test, expect } from '../config/collaboration-fixtures';
+import {
+	CONFLICT_CARD,
+	decideConflictCards,
+	findConflictCard,
+	openConflictDialog,
+} from '../config/review-cards';
 // The engine's deterministic genesis id function (vector-pinned against the
 // PHP twin) — imported directly so the spec asserts EXACT id agreement.
 import { genesisSyncId } from '../../js/engines/intent-log/genesis-sync-id.js';
@@ -31,6 +37,11 @@ import { genesisSyncId } from '../../js/engines/intent-log/genesis-sync-id.js';
 function unescapeCommentDashes( raw: string ): string {
 	return raw.replaceAll( '\\u002d', '-' );
 }
+
+// The fixture plugin that removes the editor's revision comparison, the way
+// a standalone Gutenberg lacks it (tests/e2e/plugins).
+const WITHOUT_REVISION_COMPARISON_PLUGIN =
+	'gutenberg-test-plugin-editor-without-revision-comparison';
 
 async function setSyncEngine(
 	requestUtils: RequestUtils,
@@ -789,12 +800,12 @@ test.describe( 'Collaboration - intent-log engine @engine-intent-log', () => {
 		}
 	} );
 
-	test( 'concurrent same-paragraph edits surface an escalation notice instead of silently merging', async ( {
+	test( 'concurrent same-paragraph edits surface a review card instead of silently merging', async ( {
 		collaborationUtils,
 		requestUtils,
 		editor,
 	} ) => {
-		// The discard-until-quiescent loop (60 s budget with 3 s settle
+		// Deciding cards until they stay gone (60 s budget with 3 s settle
 		// waits per attempt) plus the reload and bootstrap-replay waits
 		// push this test's happy path past the 60 s default cap on CI.
 		test.setTimeout( 120_000 );
@@ -831,128 +842,169 @@ test.describe( 'Collaboration - intent-log engine @engine-intent-log', () => {
 			page2.keyboard.type( 'two two two two two ', { delay: 100 } ),
 		] );
 
-		// At least one side surfaces the escalation: per-item notices below
-		// the aggregation threshold, one counter notice above it.
-		let noticePage = page1;
-		let noticeEditor = editor;
-		await expect( async () => {
-			const counts = await Promise.all( [
-				page1.getByText( /set aside/ ).count(),
-				page2.getByText( /set aside/ ).count(),
-			] );
-			expect( counts[ 0 ] + counts[ 1 ] ).toBeGreaterThan( 0 );
-			noticePage = counts[ 0 ] > 0 ? page1 : page2;
-			noticeEditor = counts[ 0 ] > 0 ? editor : editor2;
-		} ).toPass( { timeout: 15000 } );
-
 		/*
-		 * The conflicts anchor IN CONTEXT: the contested paragraph gets an
-		 * inline pending-edit card (ONE merged task per block, no chip),
-		 * whose Adopt/Reject verbs are the primary resolution surface.
+		 * At least one side surfaces the conflict IN PLACE: the contested
+		 * paragraph is replaced by the review card, the way an invalid
+		 * block is replaced by its recovery card, so its content cannot be
+		 * edited until the conflict is reviewed. No notice announces it.
 		 */
-		const pendingCard = noticePage.locator(
-			'.editor-collaboration-pending-card__body'
-		);
-		await expect( pendingCard.first() ).toBeVisible( { timeout: 15000 } );
+		const card = CONFLICT_CARD;
+		const { page: cardPage, editor: cardEditor } = await findConflictCard( [
+			{ page: page1, editor },
+			{ page: page2, editor: editor2 },
+		] );
 		await expect(
-			pendingCard
-				.getByRole( 'button', { name: 'Reject', exact: true } )
+			cardEditor.canvas
+				.getByRole( 'button', {
+					name: 'Review conflict',
+					exact: true,
+				} )
 				.first()
 		).toBeVisible();
+		for ( const page of [ page1, page2 ] ) {
+			await expect( page.getByText( /set aside/ ) ).toHaveCount( 0 );
+		}
 
 		/*
-		 * The review panel in the document sidebar is a summary-only index:
-		 * anchored conflicts list without verbs and link to their block;
-		 * resolution happens at the inline card. Rejecting closes each
-		 * proposal for every collaborator, durably — after a reload the
-		 * resolved conflicts must NOT resurface (the resolution rows settle
-		 * the bootstrap replay). A sustained typing race parks many edits;
-		 * reject them all through the cards (and any unanchored leftovers
-		 * through the panel, which keeps verbs only for those).
+		 * Deciding a conflict closes it for every collaborator, durably:
+		 * after a reload the decided conflicts must NOT resurface (the
+		 * resolution rows settle the bootstrap replay). A sustained typing
+		 * race sets many edits aside. They present as one card per author
+		 * and block, one after the other. Decide them all.
 		 */
-		await noticeEditor.openDocumentSettingsSidebar();
-		// The sidebar auto-switches to the Block tab while a block is
-		// selected; the review panel lives in the document (Post) tab.
-		await noticePage
-			.getByRole( 'tab', { name: 'Post', exact: true } )
-			.click();
-		const panel = noticePage.locator(
-			'.editor-collaboration-review-panel'
-		);
-		await expect( panel ).toBeVisible( { timeout: 15000 } );
-		// Anchored conflicts carry no panel verbs — the summary-only
-		// contract (the panel still renders the group summaries).
-		await expect(
-			panel.getByRole( 'button', { name: 'Reject', exact: true } )
-		).toHaveCount( 0 );
 		await expect( async () => {
-			// Reject everything currently parked: each block's merged card
-			// resolves every conflict on that block; unanchored items (no
-			// live block) resolve through their panel verbs.
-			for ( let i = 0; i < 40; i++ ) {
-				const cardReject = pendingCard
-					.getByRole( 'button', { name: 'Reject', exact: true } )
-					.first();
-				if ( ( await cardReject.count() ) > 0 ) {
-					await cardReject.click();
-					continue;
-				}
-				const panelReject = panel
-					.getByRole( 'button', { name: 'Reject', exact: true } )
-					.first();
-				if ( ( await panelReject.count() ) > 0 ) {
-					await panelReject.click();
-					continue;
-				}
-				break;
-			}
-			// Quiescence, not just momentary emptiness: in-flight pushes
-			// from the typing race can escalate MORE edits after the list
-			// first empties. Only settled-and-still-empty after a full
-			// poll/flush cycle counts — otherwise reject again.
-			await noticePage.waitForTimeout( 3000 );
-			expect( await panel.count() ).toBe( 0 );
-			// The in-canvas cards unmount with the list.
-			expect( await pendingCard.count() ).toBe( 0 );
-			// Resolving also clears the notices (per-item and aggregate
-			// alike).
-			expect(
-				await noticePage
-					.locator( '.components-notice' )
-					.filter( { hasText: 'set aside' } )
-					.count()
-			).toBe( 0 );
+			await decideConflictCards( cardPage, cardEditor.canvas );
+			// The cards must stay gone, not just clear for a moment.
+			// In-flight pushes from the typing race can set MORE edits
+			// aside after the cards first clear, so only a canvas still
+			// empty after a full poll/flush cycle counts. Otherwise
+			// decide again.
+			await cardPage.waitForTimeout( 3000 );
+			expect( await cardEditor.canvas.getByText( card ).count() ).toBe(
+				0
+			);
 		} ).toPass( { timeout: 60000 } );
 
-		// Let the resolution rows flush to the server (the list shrinks
+		// The resolution rows travel to the OTHER collaborator too: their
+		// cards clear.
+		await expect( async () => {
+			const otherEditor = cardEditor === editor ? editor2 : editor;
+			expect( await otherEditor.canvas.getByText( card ).count() ).toBe(
+				0
+			);
+		} ).toPass( { timeout: 20000 } );
+
+		// Let the resolution rows flush to the server (the cards clear
 		// optimistically; durability needs the wire round trip) before
 		// testing persistence across a reload.
-		await noticePage.waitForTimeout( 4000 );
+		await cardPage.waitForTimeout( 4000 );
 
-		await noticePage.reload();
+		await cardPage.reload();
 		await expect(
-			noticePage.locator( 'iframe[name="editor-canvas"]' )
+			cardPage.locator( 'iframe[name="editor-canvas"]' )
 		).toBeVisible( { timeout: 30000 } );
-		// Allow the bootstrap replay to settle; a resolved proposal must
-		// not re-notify or repopulate the review panel.
-		await noticePage.waitForTimeout( 4000 );
-		await expect(
-			noticePage
-				.locator( '.components-notice' )
-				.filter( { hasText: 'set aside' } )
-		).toHaveCount( 0 );
-		await noticeEditor.openDocumentSettingsSidebar();
-		// The sidebar remembers the Block tab across reloads; the panel
-		// (were it wrongly present) would live in the Post tab.
-		await noticePage
-			.getByRole( 'tab', { name: 'Post', exact: true } )
-			.click();
-		await expect(
-			noticePage.locator( '.editor-collaboration-review-panel' )
-		).toHaveCount( 0 );
-		await expect(
-			noticePage.locator( '.editor-collaboration-pending-card__body' )
-		).toHaveCount( 0 );
+		// Allow the bootstrap replay to settle. A decided conflict must
+		// not come back.
+		await cardPage.waitForTimeout( 4000 );
+		await expect( cardEditor.canvas.getByText( card ) ).toHaveCount( 0 );
+		await expect( cardPage.getByText( /set aside/ ) ).toHaveCount( 0 );
+	} );
+
+	test( 'the conflict dialog opens with a text comparison when the editor has no revision comparison', async ( {
+		collaborationUtils,
+		requestUtils,
+		editor,
+	} ) => {
+		test.setTimeout( 120_000 );
+
+		const post = await requestUtils.createPost( {
+			title: 'Intent Log Review Without Revision Comparison',
+			status: 'draft',
+			content:
+				'<!-- wp:paragraph -->\n<p>Contested paragraph</p>\n<!-- /wp:paragraph -->',
+			date_gmt: new Date().toISOString(),
+		} );
+
+		/*
+		 * A standalone Gutenberg wins over the bundled one and does not
+		 * export the revision comparison the dialog's panes render with.
+		 * The fixture removes those names from the bundled editor before
+		 * the plugin reads them, which is what the plugin sees on such a
+		 * site.
+		 */
+		await requestUtils.activatePlugin( WITHOUT_REVISION_COMPARISON_PLUGIN );
+
+		try {
+			await collaborationUtils.openCollaborativeSession( post.id );
+			const { editor2, page2 } = collaborationUtils;
+			const page1 = editor.page;
+
+			const pageErrors: string[] = [];
+			for ( const page of [ page1, page2 ] ) {
+				page.on( 'pageerror', ( error ) =>
+					pageErrors.push( error.message )
+				);
+			}
+
+			// The same typing race as the test above: both users write into
+			// one paragraph, so at least one edit is set aside.
+			await editor.canvas
+				.locator( '[data-type="core/paragraph"]' )
+				.first()
+				.click();
+			await page1.keyboard.press( 'End' );
+			await editor2.canvas
+				.locator( '[data-type="core/paragraph"]' )
+				.first()
+				.click();
+			await page2.keyboard.press( 'Home' );
+
+			await Promise.all( [
+				page1.keyboard.type( ' one one one one one', { delay: 100 } ),
+				page2.keyboard.type( 'two two two two two ', { delay: 100 } ),
+			] );
+
+			const { page: cardPage, editor: cardEditor } =
+				await findConflictCard( [
+					{ page: page1, editor },
+					{ page: page2, editor: editor2 },
+				] );
+
+			const dialog = await openConflictDialog(
+				cardPage,
+				cardEditor.canvas
+			);
+
+			// Both panes show their version as text. Neither renders blocks,
+			// which is what needs the revision comparison.
+			const panes = dialog.locator( '.gse-review-block-diff' );
+			await expect( panes ).toHaveCount( 2 );
+			await expect(
+				panes.locator( '.gse-review-plain-diff' )
+			).toHaveCount( 2 );
+			await expect(
+				panes.locator( '.block-editor-block-list__layout' )
+			).toHaveCount( 0 );
+			for ( const pane of await panes.all() ) {
+				await expect( pane ).toContainText( 'Contested paragraph' );
+			}
+
+			// The rest of the dialog works: the merged result can be
+			// accepted, and that closes the dialog.
+			await expect(
+				dialog.getByText( 'Merged result', { exact: true } )
+			).toBeVisible();
+			await dialog
+				.getByRole( 'button', { name: 'Accept', exact: true } )
+				.click();
+			await expect( dialog ).toBeHidden( { timeout: 10000 } );
+
+			expect( pageErrors ).toEqual( [] );
+		} finally {
+			await requestUtils.deactivatePlugin(
+				WITHOUT_REVISION_COMPARISON_PLUGIN
+			);
+		}
 	} );
 
 	test( 'custom HTML blocks sync between users and persist through save', async ( {
@@ -1537,55 +1589,90 @@ test.describe( 'Collaboration - intent-log engine @engine-intent-log', () => {
 		} ).toPass( { timeout: 15000 } );
 	} );
 
-	test( 'concurrent divergent title edits surface an escalation notice, and editors converge', async ( {
-		collaborationUtils,
-		requestUtils,
-		editor,
-	} ) => {
-		const post = await requestUtils.createPost( {
-			title: 'Contested',
-			status: 'draft',
-			content:
-				'<!-- wp:paragraph -->\n<p>Body</p>\n<!-- /wp:paragraph -->',
-			date_gmt: new Date().toISOString(),
-		} );
+	// The two decisions on a set-aside title: keep the title that won, or
+	// use the one that was set aside.
+	for ( const decision of [ 'Keep current', 'Use proposed' ] ) {
+		test( `concurrent divergent title edits list the set-aside title for review, and "${ decision }" converges the editors`, async ( {
+			collaborationUtils,
+			requestUtils,
+			editor,
+		} ) => {
+			const post = await requestUtils.createPost( {
+				title: 'Contested',
+				status: 'draft',
+				content:
+					'<!-- wp:paragraph -->\n<p>Body</p>\n<!-- /wp:paragraph -->',
+				date_gmt: new Date().toISOString(),
+			} );
 
-		await collaborationUtils.openCollaborativeSession( post.id );
-		const { editor2, page2 } = collaborationUtils;
-		const page1 = editor.page;
+			await collaborationUtils.openCollaborativeSession( post.id );
+			const { editor2, page2 } = collaborationUtils;
+			const page1 = editor.page;
 
-		// Both users rewrite the title at the same moment: one write wins
-		// the register, the other is set aside for review.
-		await Promise.all( [
-			editor.canvas
-				.getByRole( 'textbox', { name: 'Add title' } )
-				.fill( 'Title A' ),
-			editor2.canvas
-				.getByRole( 'textbox', { name: 'Add title' } )
-				.fill( 'Title B' ),
-		] );
-
-		await expect( async () => {
-			const counts = await Promise.all( [
-				page1.getByText( /was set aside/ ).count(),
-				page2.getByText( /was set aside/ ).count(),
+			// Both users rewrite the title at the same moment: one write
+			// wins the register, the other is set aside for review.
+			await Promise.all( [
+				editor.canvas
+					.getByRole( 'textbox', { name: 'Add title' } )
+					.fill( 'Title A' ),
+				editor2.canvas
+					.getByRole( 'textbox', { name: 'Add title' } )
+					.fill( 'Title B' ),
 			] );
-			expect( counts[ 0 ] + counts[ 1 ] ).toBeGreaterThan( 0 );
-		} ).toPass( { timeout: 15000 } );
 
-		// Both editors converge on the winning title.
-		await expect( async () => {
-			const titles = await Promise.all(
-				[ editor, editor2 ].map( ( currentEditor ) =>
-					currentEditor.canvas
-						.getByRole( 'textbox', { name: 'Add title' } )
-						.textContent()
-				)
-			);
-			expect( titles[ 0 ] ).toBe( titles[ 1 ] );
-			expect( [ 'Title A', 'Title B' ] ).toContain( titles[ 0 ] );
-		} ).toPass( { timeout: 15000 } );
-	} );
+			// A title has no block to show a card on, so the document
+			// sidebar lists it.
+			const setAside = 'A change to the title was set aside.';
+			await expect( async () => {
+				const counts = await Promise.all( [
+					page1.getByText( setAside ).count(),
+					page2.getByText( setAside ).count(),
+				] );
+				expect( counts[ 0 ] + counts[ 1 ] ).toBeGreaterThan( 0 );
+			} ).toPass( { timeout: 15000 } );
+
+			// One decision settles the conflict for everyone. The item
+			// shows the proposed title first and the current one second.
+			let decided = '';
+			for ( const page of [ page1, page2 ] ) {
+				const item = page.locator( '.gse-review-panel__item' ).first();
+				if ( await item.count() ) {
+					const [ proposed, current ] = await item
+						.locator( '.gse-review-panel__value' )
+						.allTextContents();
+					decided = current;
+					if ( 'Use proposed' === decision ) {
+						decided = proposed;
+					}
+					await item
+						.getByRole( 'button', { name: decision } )
+						.click();
+					break;
+				}
+			}
+			expect( [ 'Title A', 'Title B' ] ).toContain( decided );
+
+			await expect( async () => {
+				const counts = await Promise.all( [
+					page1.getByText( setAside ).count(),
+					page2.getByText( setAside ).count(),
+				] );
+				expect( counts[ 0 ] + counts[ 1 ] ).toBe( 0 );
+			} ).toPass( { timeout: 15000 } );
+
+			// Both editors converge on the decided title.
+			await expect( async () => {
+				const titles = await Promise.all(
+					[ editor, editor2 ].map( ( currentEditor ) =>
+						currentEditor.canvas
+							.getByRole( 'textbox', { name: 'Add title' } )
+							.textContent()
+					)
+				);
+				expect( titles ).toEqual( [ decided, decided ] );
+			} ).toPass( { timeout: 15000 } );
+		} );
+	}
 
 	test( 'a mid-session engine change drops open tabs into the lock modal instead of retry-hammering', async ( {
 		collaborationUtils,

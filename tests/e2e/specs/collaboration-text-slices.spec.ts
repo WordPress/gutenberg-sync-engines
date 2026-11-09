@@ -127,8 +127,15 @@ for ( const engine of [ 'intent-log', 'yjs-server', 'de-rtc' ] ) {
 				const actual = await contents( editor );
 				expect( actual ).toEqual( expected[ engine ][ edit ] );
 				if ( engine === 'de-rtc' && edit === 'format' ) {
+					// The set-aside edit shows as a review card on the
+					// block (the plugin's conflict review, src/review/).
 					await expect(
-						page2.getByText( /set aside/ ).first()
+						editor2.canvas
+							.getByRole( 'button', {
+								name: 'Review conflict',
+								exact: true,
+							} )
+							.first()
 					).toBeVisible( { timeout: 15000 } );
 				}
 				await testInfo.attach( 'split-result', {

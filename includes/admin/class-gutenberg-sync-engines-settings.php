@@ -143,7 +143,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
 		 * Option holding the unsaved-changes policy: `discard` (the saved post
 		 * is the only durable copy; a room nobody is in is reset to it) or
 		 * `keep` (rooms live on as a shared working copy). See
-		 * docs/plan/room-lifetime.md.
+		 * docs/transports.md.
 		 *
 		 * @since 0.0.1
 		 * @var string
@@ -159,7 +159,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
 		 * switches every editor tab to block-level presence exchanged once
 		 * per interval: each tab names the block its selection is in and
 		 * peers draw an outline and an avatar on it. See
-		 * docs/awareness-high-latency.md.
+		 * docs/transports.md.
 		 *
 		 * @since 0.0.1
 		 * @var string
@@ -278,9 +278,9 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
 		 */
 		public static function engine_descriptions(): array {
 			$descriptions = array(
-				'intent-log' => __( 'Concurrent edits merge by operational transform. Conflicts escalate for review.', 'gutenberg-sync-engines' ),
-				'yjs-server' => __( 'Concurrent edits merge silently via a conflict-free algorithm. No review lane.', 'gutenberg-sync-engines' ),
-				'de-rtc'     => __( 'Editors propose revisions against a base version and the server conducts a three-way merge. Conflicts escalate for review.', 'gutenberg-sync-engines' ),
+				'intent-log' => __( 'The server combines everyone\'s changes. When two people change the same thing, it sets the change aside for someone to review. The cheapest engine to run, and the default.', 'gutenberg-sync-engines' ),
+				'yjs-server' => __( 'The server combines changes automatically, even when two people change the same thing: the later change wins and nobody is told. Two people can type in the same sentence. It costs the most per edit.', 'gutenberg-sync-engines' ),
+				'de-rtc'     => __( 'Each editor sends the whole post and names the version it started from. The server merges it into the current version, block by block. When two people change the same block, it sets that block aside for someone to review. Scripts and plugins that save a post join the merge too.', 'gutenberg-sync-engines' ),
 			);
 
 			/**
@@ -522,7 +522,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
 				self::POLLING_INTERVAL_OPTION,
 				array(
 					'type'              => 'integer',
-					'description'       => __( 'HTTP short-polling interval in seconds', 'gutenberg-sync-engines' ),
+					'description'       => __( 'HTTP short-polling interval in seconds, 1 to 25 (0 = the default of 5)', 'gutenberg-sync-engines' ),
 					'sanitize_callback' => array( $this, 'sanitize_polling_interval' ),
 					'show_in_rest'      => true,
 					'default'           => self::POLLING_INTERVAL_DEFAULT,
@@ -533,7 +533,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
 				self::DE_RTC_COMMIT_INTERVAL_OPTION,
 				array(
 					'type'              => 'integer',
-					'description'       => __( 'DE-RTC commit cadence in seconds (0 = every settle)', 'gutenberg-sync-engines' ),
+					'description'       => __( 'DE-RTC send interval in seconds, 0 to 300 (0 = after every pause in typing)', 'gutenberg-sync-engines' ),
 					'sanitize_callback' => array( $this, 'sanitize_commit_interval' ),
 					'show_in_rest'      => true,
 					'default'           => self::DE_RTC_COMMIT_INTERVAL_DEFAULT,
@@ -544,7 +544,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
 				self::AWARENESS_INTERVAL_OPTION,
 				array(
 					'type'              => 'integer',
-					'description'       => __( 'Slow awareness interval in seconds (0 = the built-in live cursors)', 'gutenberg-sync-engines' ),
+					'description'       => __( 'Block presence interval in seconds, 0 to 120 (0 = the built-in live cursors)', 'gutenberg-sync-engines' ),
 					'sanitize_callback' => array( $this, 'sanitize_awareness_interval' ),
 					'show_in_rest'      => true,
 					'default'           => 0,
@@ -699,6 +699,19 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
 			}
 			echo '</fieldset>';
 
+			if ( defined( 'WP_COLLABORATION_TRANSPORT' ) && is_string( WP_COLLABORATION_TRANSPORT ) && '' !== WP_COLLABORATION_TRANSPORT ) {
+				printf(
+					'<p class="description">%s</p>',
+					esc_html(
+						sprintf(
+							/* translators: %s: the transport slug the constant names. */
+							__( 'The WP_COLLABORATION_TRANSPORT constant is set to "%s" and takes priority over the choice above.', 'gutenberg-sync-engines' ),
+							WP_COLLABORATION_TRANSPORT
+						)
+					)
+				);
+			}
+
 			// Shown only while DE-RTC is the engine: its commits travel
 			// through the autosave endpoint, so the transport's job shrinks.
 			printf(
@@ -734,7 +747,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
 				(int) self::polling_interval(),
 				esc_html__( 'seconds', 'gutenberg-sync-engines' ),
 				wp_kses(
-					__( 'The base polling interval. When an advisory channel is connected, the interval raises to <code>25</code> seconds.', 'gutenberg-sync-engines' ),
+					__( 'How often a tab asks WordPress for changes, in seconds (1 to 25; the default is <code>5</code>). It applies only while another editor is present whom the tab cannot reach directly through the channel between tabs. When it can reach every editor, it asks only when told to. A background tab asks every 25 seconds.', 'gutenberg-sync-engines' ),
 					array( 'code' => array() )
 				)
 			);
@@ -756,7 +769,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
 				(int) $value,
 				esc_html__( 'seconds', 'gutenberg-sync-engines' ),
 				wp_kses(
-					__( 'Peers see each other\'s work at this cadence. When set to <code>0</code>, commits are sent continuously whenever edits settle. Under DE-RTC an edit stays private until the next commit, so this cadence, not the polling interval, decides how soon peers see it.', 'gutenberg-sync-engines' ),
+					__( 'How often an editor sends its changes to the server under DE-RTC, 0 to 300 seconds. Other people do not see an edit until it is sent, so this setting, not the polling interval, decides how soon they see it. <code>0</code> sends after every pause in typing.', 'gutenberg-sync-engines' ),
 					array( 'code' => array() )
 				)
 			);
@@ -855,6 +868,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
 				} )();</script>',
 				wp_json_encode( $descriptions )
 			);
+			echo '<p class="description">' . esc_html__( 'Each post keeps using the engine it started with. After you switch engines, editors on a post that is still open under the old engine are refused until its session resets. With "Discard" chosen under Unsaved changes, that happens once everyone has closed the post.', 'gutenberg-sync-engines' ) . '</p>';
 		}
 
 		/**
@@ -915,8 +929,15 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
 				self::sanitize_websocket_url( get_option( self::ADVISORY_WEBSOCKET_URL_OPTION, '' ) ),
 				self::advisory_websocket_url()
 			);
-			if ( class_exists( 'WP_WebSocket_Access_Token' && true !== WP_WebSocket_Access_Token::is_enabled() ) ) {
-				printf( '<p class="description">The access token is NOT configured. Please provide a <code>WP_SYNC_WEBSOCKET_ACCESS_TOKEN_SECRET</code>.</p>' );
+			echo '<p class="description">' . esc_html__( 'The server that passes presence and "go and poll" notices between the tabs on a post: the sync daemon, or a relay you run (see examples/advisory-relay in the plugin). Empty uses the WebSocket transport server.', 'gutenberg-sync-engines' ) . '</p>';
+			if ( class_exists( 'WP_WebSocket_Access_Token' ) && true !== WP_WebSocket_Access_Token::is_enabled() ) {
+				printf(
+					'<p class="description">%s</p>',
+					wp_kses(
+						__( 'To use your own relay, define the <code>WP_SYNC_WEBSOCKET_ACCESS_TOKEN_SECRET</code> constant. It is not set, so only the sync daemon can accept connections.', 'gutenberg-sync-engines' ),
+						array( 'code' => array() )
+					)
+				);
 			}
 			$this->show_row_for( self::ADVISORY_WEBSOCKET_URL_OPTION, array( self::DELIVERY_POLLING_WEBSOCKET ) );
 		}
@@ -931,7 +952,11 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
 		public function render_websocket_url_field(): void {
 			$effective = class_exists( 'WP_WebSocket_Sync_Transport' ) ? WP_WebSocket_Sync_Transport::get_socket_url() : '';
 			$this->render_url_input( self::WEBSOCKET_URL_OPTION, self::websocket_url(), $effective );
-			$this->show_row_for( self::WEBSOCKET_URL_OPTION, array( self::DELIVERY_WEBSOCKET ) );
+			echo '<p class="description">' . wp_kses(
+				__( 'The address of the sync daemon, the long-running process that serves the WebSocket and the daemon\'s event stream (use <code>wss://</code> behind TLS in production). If empty, the daemon\'s own host and port are used: <code>WP_SYNC_WEBSOCKET_HOST</code> and <code>WP_SYNC_WEBSOCKET_PORT</code>, default <code>127.0.0.1:8787</code>. The <code>wp_sync_websocket_url</code> filter overrides this field and makes it read-only.', 'gutenberg-sync-engines' ),
+				array( 'code' => array() )
+			) . '</p>';
+			$this->show_row_for( self::WEBSOCKET_URL_OPTION, array( self::DELIVERY_WEBSOCKET, self::DELIVERY_SSE_DAEMON ) );
 		}
 
 		/**
@@ -1097,7 +1122,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
 				esc_attr( self::AWARENESS_INTERVAL_OPTION ),
 				(int) self::awareness_interval(),
 				esc_html__( 'seconds', 'gutenberg-sync-engines' ),
-				esc_html__( '0 keeps the built-in awareness (live cursors). Any other value replaces cursors with block presence: once per interval each editor names the block it is in, and other editors see an outline and an avatar on that block. Use this to try presence on connections too slow for cursors.', 'gutenberg-sync-engines' ),
+				esc_html__( '0 keeps the built-in live cursors. Any other value, up to 120 seconds, replaces cursors with block presence. Once per interval, each editor shares the block they are in, and others see an outline and an avatar on that block. Use this on connections too slow for cursors.', 'gutenberg-sync-engines' ),
 				(int) self::AWARENESS_INTERVAL_MAX
 			);
 		}
@@ -1118,7 +1143,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
 				),
 				self::AWARENESS_CHANNEL_HEARTBEAT => array(
 					__( 'WordPress Heartbeat.', 'gutenberg-sync-engines' ),
-					__( 'A separate request stream with its own timing, so presence can arrive before the content it points at. The block name rides the advisory channel\'s discovery beat, so this needs an advisory channel selected above. This also changes how often Heartbeat itself runs on editor screens, to match the interval above.', 'gutenberg-sync-engines' ),
+					__( 'Presence travels separately from content, so a person\'s block can show before their edit does. The block name rides on the channel between tabs, so select a transport with one above. This also sets how often WordPress Heartbeat runs on editor screens, to match the interval above.', 'gutenberg-sync-engines' ),
 				),
 			);
 			echo '<fieldset>';
@@ -1172,6 +1197,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Settings' ) ) {
 			}
 			echo '<div class="wrap">';
 			echo '<h1>' . esc_html( get_admin_page_title() ) . '</h1>';
+			echo '<p>' . esc_html__( 'Choose how edits from several people are combined (the engine) and how they travel between the editor and WordPress (the transport). The defaults work on any host. Each setting is a plain WordPress option, so WP-CLI and the REST settings endpoint can change it. Guides for engines and transports are in the plugin\'s docs folder.', 'gutenberg-sync-engines' ) . '</p>';
 
 			/*
 			 * Nothing on this screen does anything while real-time

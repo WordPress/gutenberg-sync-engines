@@ -28,3 +28,20 @@ if ( typeof global.crypto === 'undefined' ) {
 		configurable: true,
 	} );
 }
+
+// The editor package registers viewport listeners at import time through
+// `window.matchMedia`, which jsdom does not implement. The review UI's
+// component tests import the editor store, so give them a stub that
+// matches nothing (the desktop layout).
+if ( typeof global.window !== 'undefined' && ! global.window.matchMedia ) {
+	global.window.matchMedia = ( query ) => ( {
+		matches: false,
+		media: query,
+		onchange: null,
+		addListener: () => {},
+		removeListener: () => {},
+		addEventListener: () => {},
+		removeEventListener: () => {},
+		dispatchEvent: () => false,
+	} );
+}

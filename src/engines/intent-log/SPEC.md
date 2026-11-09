@@ -1,9 +1,12 @@
-# Sync Foundations — Prototype Spec
+# Intent-log core spec
 
-Status: prototype / investigation (originally branch
-`chriszarate/investigate-rtc-arch`; continued on `chriszarate/try-intent-log`).
-This directory is a standalone, dependency-free library. It is **not** wired
-into the Gutenberg build or npm workspaces, and nothing here is a shipping API.
+Status: this directory is the shipping intent-log core. It is kept
+identical in JavaScript and PHP (`includes/engines/intent-log/`), checked
+against shared JSON test vectors, and changed only in both at once. It began as a prototype (branch
+`chriszarate/investigate-rtc-arch`, continued on
+`chriszarate/try-intent-log`), and this spec keeps that vocabulary. It is
+a standalone, dependency-free library: the modules run under Node with no
+build step, and the plugin bundle imports them.
 
 ## Purpose
 
@@ -182,7 +185,7 @@ prevents.
 
 ## The batch planner (shared client/server core)
 
-`planBatch( units, log, docAt )` in `src/rebase.js` is a pure function that
+`planBatch( units, log, docAt )` in `rebase.js` is a pure function that
 plans one client's batch against a log: frame checks, rebase, rule-4 unit
 settlement, and the apply phase. The server commits a plan at ingest; a
 caught-up client runs the SAME function over its verbatim log copy to
@@ -191,7 +194,7 @@ therefore by construction, and the simulator's prediction oracle guards the
 construction (any server-only state or client-side shortcut surfaces as a
 mismatch). The PHP twin must mirror exactly this function.
 
-Client model (`src/client.js`): a replica keeps `log` (observed prefix),
+Client model (`client.js`): a replica keeps `log` (observed prefix),
 `baseDoc` (acked state), and `outbox` (pending intents exactly as authored —
 the server always receives originals and re-derives transforms itself). On
 every catch-up it replans; escalated/voided pending intents drop out of the
@@ -199,12 +202,29 @@ optimistic document but stay in the outbox so the server records their
 dispositions and files proposals.
 
 Settlement positions (`atSeq`): every non-clean outcome carries the log
-index of the entry that settled it. A well-behaved client observes that
-entry, drops the effect locally, and re-authors on a clean frame — so
-phantom state only poisons intents whose `baseSeq` predates the settlement
-(rule 6), and a rule-4 unit settles at the EARLIEST trigger among its
-members (any other choice would depend on how entries were batched during
-delivery).
+index of the entry that settled it (a proposal carries it as `atSeq`). A
+well-behaved client observes that entry, drops the effect locally, and
+re-authors on a clean frame — so phantom state only poisons intents whose
+`baseSeq` predates the settlement (rule 6), and a rule-4 unit settles at
+the EARLIEST trigger among its members (any other choice would depend on
+how entries were batched during delivery).
+
+Phantoms persist ACROSS batches (`seedFrameState`): `planBatch` takes an
+optional starting frame state, and both servers (`serverIngestBatch`, the
+PHP engine) seed it from the actor's earlier proposals, as does the client
+replica from its own parked rows (`client.parked`). A live editor cannot
+always drop a set-aside effect mid-burst (pushing into the editor would eat
+the next keystrokes), so its later edits keep counting the set-aside text
+and keep their old `baseSeq`; seeding makes rule 6 settle them as
+dependents in every later request instead of accepting them at offsets the
+server's text does not have. The scoping is unchanged, so an intent
+authored after its author observed the clash is clean, and an applied own
+write authored after a phantom's settlement clears that phantom from the
+key (`recordFrameOutcome`): the author re-authored on a clean frame, so a
+later reader of the key is checked for rule 5 against it. A phantom
+settled below a replica's retained window can poison nothing it may still
+author and is dropped (`trimClientLog`). Security holds (the server-side
+`requires-approval` policy) are not frame phantoms and never seed.
 
 ## Escalation rules (complete list)
 
@@ -229,11 +249,18 @@ An intent escalates to the proposal lane iff:
    written (one-sided transform cannot reconcile the frames). Includes the
    intra-unit case where the own write is an earlier member of the same txn.
    Field-scoped: a remote write to a different field of the same block does
-   not conflict.
+   not conflict. The clash sets aside the whole burst: the author's writes
+   to that field accepted earlier in the SAME batch escalate beside it
+   (same reason, same settling position; the planner runs again with them
+   set aside), so the document never gains the first keystroke of a word
+   whose rest went to review. Writes accepted by an earlier request stay.
 6. `dependent-on-escalated` — it depends on an earlier own intent that did
    not apply: it reads a frame containing a phantom write, or addresses a
    block only a phantom intent created. Scoped by `baseSeq`: intents
-   authored after the author observed the settling entry are clean.
+   authored after the author observed the settling entry are clean. Holds
+   across batches: the planner starts from the actor's earlier proposals
+   (`seedFrameState`), so a typist's later keystrokes park beside a
+   set-aside one until their editor observes the clash.
 
 Everything else auto-merges. Formats avoid POSITIONAL escalation (a format
 range crossing a concurrent split follows both halves; format frames may
@@ -248,7 +275,7 @@ concurrent merge into a DIFFERENT survivor, or any other identity-addressed
 intent on a merge-absorbed block, escalates (`target-deleted`): the
 absorption must never silently swallow another actor's work.
 
-`ESCALATION_REASONS` in `src/rebase.js` is the closed set of reasons; the
+`ESCALATION_REASONS` in `rebase.js` is the closed set of reasons; the
 escalation-soundness oracle rejects anything else.
 
 ## Server policy escalations (outside the planner)

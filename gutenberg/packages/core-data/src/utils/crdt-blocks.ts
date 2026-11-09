@@ -708,7 +708,10 @@ export function mergeCrdtBlocks(
 			}
 		);
 		localYBlock.forEach( ( _v, k ) => {
-			if ( ! incomingYBlock.hasOwnProperty( k ) ) {
+			if (
+				k !== CRDT_BLOCK_SAVE_KEY &&
+				! incomingYBlock.hasOwnProperty( k )
+			) {
 				localYBlock.delete( k );
 			}
 		} );

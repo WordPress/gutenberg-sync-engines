@@ -2,6 +2,7 @@
  * Internal dependencies
  */
 import { createSyncManager } from '../framework';
+import { registerConflictSource } from '../review/conflicts';
 import {
 	createDeRtcEngine,
 	DE_RTC_ENGINE_PROTOCOL,
@@ -14,9 +15,14 @@ import {
  * version it last incorporated; the SERVER three-way-merges every
  * proposal with the ported DE-RTC merge core and announces each canonical
  * version. It composes the framework's engine-neutral sync manager
- * with this plugin's proposal-based engine; the engine's `review` source
- * is how its parked escalations reach the framework's conflict-review
- * surface (the manager drives the handlers and resolution verbs from it).
+ * with this plugin's proposal-based engine.
+ *
+ * The engine's parked escalations reach the reviewer through the plugin's
+ * own conflict review lane (src/review/), not the framework's: each
+ * engine's conflict source is registered with the conflict registry on
+ * creation, and the manager is composed WITHOUT the engine's `review`
+ * source, so the framework's panel, notices, and resolution verbs stay
+ * idle.
  *
  * @return {Object} A SyncEngineAdapter for `registerSyncEngine`.
  */
@@ -24,7 +30,13 @@ export function createDeRtcEngineAdapter() {
 	return {
 		slug: DE_RTC_ENGINE_SLUG,
 		protocolVersion: DE_RTC_ENGINE_PROTOCOL,
-		createManager: ( debug?: boolean ) =>
-			createSyncManager( createDeRtcEngine(), { debug } ),
+		createManager: ( debug?: boolean ) => {
+			const engine = createDeRtcEngine();
+			registerConflictSource( engine.conflicts );
+			return createSyncManager(
+				{ ...engine, review: undefined },
+				{ debug }
+			);
+		},
 	};
 }

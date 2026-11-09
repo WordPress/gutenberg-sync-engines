@@ -17,7 +17,7 @@ import os from 'node:os';
 import nodePath from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const BASE = process.env.WP_BASE_URL ?? 'http://localhost:8889';
+export let BASE = process.env.WP_BASE_URL ?? 'http://localhost:8889';
 export const USER = process.env.WP_USERNAME ?? 'admin';
 export const PASS = process.env.WP_PASSWORD ?? 'password';
 
@@ -781,6 +781,51 @@ function wpEnvWorkDirectory( configBasename ) {
 		// No wp-env home yet.
 	}
 	return null;
+}
+
+/**
+ * Select this checkout's running test site for the host benchmark.
+ * An explicit URL always wins. Never guess a shared localhost port.
+ *
+ * @return {string} Selected URL.
+ */
+export function selectHostBenchmarkSite() {
+	if ( process.env.WP_BASE_URL ) {
+		BASE = process.env.WP_BASE_URL.replace( /\/$/, '' );
+		return BASE;
+	}
+	const dir = wpEnvWorkDirectory( '.wp-env.tests.json' );
+	try {
+		if ( ! dir ) {
+			throw new Error();
+		}
+		const address = execFileSync(
+			'docker',
+			[
+				'compose',
+				'-f',
+				nodePath.join( dir, 'docker-compose.yml' ),
+				'port',
+				'wordpress',
+				'80',
+			],
+			{
+				encoding: 'utf8',
+				timeout: 10000,
+				stdio: [ 'ignore', 'pipe', 'pipe' ],
+			}
+		).trim();
+		const port = address.match( /:(\d+)$/ )?.[ 1 ];
+		if ( ! port ) {
+			throw new Error();
+		}
+		BASE = `http://localhost:${ port }`;
+		return BASE;
+	} catch {
+		throw new Error(
+			'Cannot find this checkout’s running test site. Run npm run env:tests start, or set WP_BASE_URL to the site to measure.'
+		);
+	}
 }
 
 /**

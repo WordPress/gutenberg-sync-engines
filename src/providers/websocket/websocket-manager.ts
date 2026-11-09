@@ -22,6 +22,7 @@ import {
 	unregisterDebugSession,
 } from '../../debug/inspector';
 import { pollingManager } from '../http-polling/polling-manager';
+import { getClientLimitPerRoom } from '../connection-limit';
 import {
 	getPresenceRoom,
 	getPresenceToken,
@@ -42,7 +43,7 @@ import {
  * (`/wp-sync/v1/ws-token`); the daemon validates it against the logged-in
  * cookie on handshake.
  *
- * A PREFERRED TRANSPORT (docs/plan/advisory-channel.md): the socket
+ * A PREFERRED TRANSPORT (docs/transports.md): the socket
  * carries everything while it is open, and short polling, the base
  * transport, is the fallback whenever it is not — the daemon unreachable, the token
  * refused, the socket dropped. A room the socket cannot serve is PARKED
@@ -63,6 +64,7 @@ const AWARENESS_INTERVAL_MS = 10000;
 
 interface RoomState {
 	room: string;
+	isPrimaryRoom: boolean;
 	session: EngineSessionCodec;
 	cursor: number;
 	/** The room generation this session bootstrapped under. */
@@ -95,6 +97,7 @@ let reconnectTimer: ReturnType< typeof setTimeout > | null = null;
 let awarenessTimer: ReturnType< typeof setInterval > | null = null;
 let connecting = false;
 let connectAttemptTimer: ReturnType< typeof setTimeout > | null = null;
+let hasCheckedConnectionLimit = false;
 
 function clearConnectAttemptTimer(): void {
 	if ( connectAttemptTimer ) {
@@ -258,6 +261,25 @@ function applyServerRoom( serverRoom: ServerRoom ): void {
 	const state = rooms.get( serverRoom.room );
 	if ( ! state ) {
 		return;
+	}
+	// Match polling/SSE: check the first room's initial response only.
+	// Awareness includes this editor, so five means five total peers.
+	if ( state.isPrimaryRoom && ! hasCheckedConnectionLimit ) {
+		hasCheckedConnectionLimit = true;
+		if (
+			Object.keys( serverRoom.awareness ).length >
+			getClientLimitPerRoom( state.room )
+		) {
+			state.onStatusChange( {
+				status: 'disconnected',
+				error: new ConnectionError(
+					ConnectionErrorCode.CONNECTION_LIMIT_EXCEEDED,
+					'Connection limit exceeded'
+				),
+			} );
+			unregisterRoom( state.room );
+			return;
+		}
 	}
 
 	// The inspector's wire tap: pushed traffic, decoded.
@@ -644,6 +666,7 @@ export interface WebSocketManager {
 function registerRoom( options: WebSocketRoomOptions ): void {
 	const state: RoomState = {
 		room: options.room,
+		isPrimaryRoom: rooms.size === 0,
 		session: options.session,
 		cursor: 0,
 		onStatusChange: options.onStatusChange,
@@ -722,6 +745,7 @@ export const websocketManager: WebSocketManager = {
  */
 export function resetWebSocketManagerForTesting(): void {
 	rooms.clear();
+	hasCheckedConnectionLimit = false;
 	if ( reconnectTimer ) {
 		clearTimeout( reconnectTimer );
 		reconnectTimer = null;

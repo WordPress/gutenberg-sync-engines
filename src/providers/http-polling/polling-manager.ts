@@ -1,14 +1,9 @@
 /**
- * WordPress dependencies
- */
-import { applyFilters } from '@wordpress/hooks';
-
-/**
  * Internal dependencies
  */
 import { SseExchange } from '../sse/sse-exchange';
+import { getClientLimitPerRoom } from '../connection-limit';
 import {
-	DEFAULT_CLIENT_LIMIT_PER_ROOM,
 	ERROR_RETRY_DELAYS_SOLO_MS,
 	ERROR_RETRY_DELAYS_WITH_COLLABORATORS_MS,
 	MAX_SYNC_REQUEST_BODY_SIZE_IN_BYTES,
@@ -80,7 +75,6 @@ import type {
 } from './types';
 import {
 	createUpdateQueue,
-	intValueOrDefault,
 	postSyncUpdate,
 	postSyncUpdateNonBlocking,
 	rotateWindow,
@@ -375,17 +369,8 @@ function checkConnectionLimit(
 	// Limits are only enforced on the initial connection.
 	hasCheckedConnectionLimit = true;
 
-	const maxClientsPerRoom = applyFilters(
-		'sync.pollingProvider.maxClientsPerRoom',
-		DEFAULT_CLIENT_LIMIT_PER_ROOM,
-		roomState.room
-	);
-
 	const clientCount = Object.keys( awareness ).length;
-	const validatedLimit = intValueOrDefault(
-		maxClientsPerRoom,
-		DEFAULT_CLIENT_LIMIT_PER_ROOM
-	);
+	const validatedLimit = getClientLimitPerRoom( roomState.room );
 
 	if ( clientCount > validatedLimit ) {
 		roomState.log( 'Connection limit exceeded', {
@@ -418,7 +403,7 @@ let repollImmediately = false;
 let syncRequestBodySizeLimit = MAX_SYNC_REQUEST_BODY_SIZE_IN_BYTES;
 
 /*
- * THE CADENCE RULES (docs/plan/advisory-channel.md).
+ * THE CADENCE RULES (docs/transports.md).
  *
  * Short polling is the base transport everyone has. What changes is WHEN
  * the loop polls:
@@ -1266,7 +1251,7 @@ function createPayloadRoom(
 			  }
 			: {} ),
 		// This tab's presence token, on its post's room only: the first
-		// request carrying it is the tab's join (docs/plan/room-lifetime.md).
+		// request carrying it is the tab's join (docs/transports.md).
 		...( getPresenceRoom() === state.room && getPresenceToken()
 			? { presence_token: getPresenceToken()! }
 			: {} ),

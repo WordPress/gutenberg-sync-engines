@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, jest } from '@jest/globals';
  * WordPress dependencies
  */
 import apiFetch from '@wordpress/api-fetch';
+import { addFilter, removeFilter } from '@wordpress/hooks';
 
 /**
  * Internal dependencies
@@ -97,6 +98,10 @@ function fakeSession(
 
 describe( 'websocket manager', () => {
 	afterEach( () => {
+		removeFilter(
+			'sync.pollingProvider.maxClientsPerRoom',
+			'test/session-limit'
+		);
 		resetWebSocketManagerForTesting();
 		FakeWebSocket.instances = [];
 		delete (
@@ -163,6 +168,134 @@ describe( 'websocket manager', () => {
 			client_id: 101,
 			engine: 'intent-log',
 		} );
+	} );
+
+	it.each( [ 5, 6 ] )(
+		'checks the initial total of %i WebSocket peers',
+		async ( peers ) => {
+			setup();
+			const session = fakeSession();
+			const onStatusChange = jest.fn();
+			websocketManager.registerRoom( {
+				room: 'postType/post:1',
+				session,
+				onStatusChange,
+			} );
+			await Promise.resolve();
+			await Promise.resolve();
+			const ws = FakeWebSocket.instances[ 0 ];
+			ws.open();
+			onStatusChange.mockClear();
+			ws.receive( {
+				type: 'sync',
+				rooms: [
+					{
+						room: 'postType/post:1',
+						// Include our own client 101 in the total.
+						awareness: Object.fromEntries(
+							Array.from( { length: peers }, ( _, i ) => [
+								101 + i,
+								{},
+							] )
+						),
+						updates: [ { type: 'intent', data: 'AAAA' } ],
+						end_cursor: 1,
+					},
+				],
+			} );
+			if ( peers === 6 ) {
+				expect( onStatusChange ).toHaveBeenCalledWith( {
+					status: 'disconnected',
+					error: expect.objectContaining( {
+						code: 'connection-limit-exceeded',
+					} ),
+				} );
+				expect( session.receiveUpdate ).not.toHaveBeenCalled();
+				expect( session.destroy ).toHaveBeenCalledTimes( 1 );
+				expect( ws.readyState ).toBe( 3 );
+				expect( mockPolling.registerRoom ).not.toHaveBeenCalled();
+			} else {
+				expect( onStatusChange ).not.toHaveBeenCalled();
+				expect( session.receiveUpdate ).toHaveBeenCalledTimes( 1 );
+			}
+		}
+	);
+
+	it( 'keeps the session-limit override available to benchmarks', async () => {
+		setup();
+		addFilter(
+			'sync.pollingProvider.maxClientsPerRoom',
+			'test/session-limit',
+			() => 16
+		);
+		const session = fakeSession();
+		const onStatusChange = jest.fn();
+		websocketManager.registerRoom( {
+			room: 'postType/post:1',
+			session,
+			onStatusChange,
+		} );
+		await Promise.resolve();
+		await Promise.resolve();
+		const ws = FakeWebSocket.instances[ 0 ];
+		ws.open();
+		onStatusChange.mockClear();
+		ws.receive( {
+			type: 'sync',
+			rooms: [
+				{
+					room: 'postType/post:1',
+					awareness: Object.fromEntries(
+						Array.from( { length: 16 }, ( _, i ) => [
+							101 + i,
+							{},
+						] )
+					),
+					updates: [],
+					end_cursor: 1,
+				},
+			],
+		} );
+		expect( onStatusChange ).not.toHaveBeenCalled();
+		expect( session.applyRemoteAwareness ).toHaveBeenCalledTimes( 1 );
+	} );
+
+	it( 'checks only the primary room and does not evict an admitted editor', async () => {
+		setup();
+		const onStatusChange = jest.fn();
+		for ( const room of [ 'postType/post:1', 'taxonomy/category' ] ) {
+			websocketManager.registerRoom( {
+				room,
+				session: fakeSession(),
+				onStatusChange,
+			} );
+		}
+		await Promise.resolve();
+		await Promise.resolve();
+		const ws = FakeWebSocket.instances[ 0 ];
+		ws.open();
+		onStatusChange.mockClear();
+		const response = ( room: string, peers: number ) => ( {
+			room,
+			awareness: Object.fromEntries(
+				Array.from( { length: peers }, ( _, i ) => [ 101 + i, {} ] )
+			),
+			updates: [],
+			end_cursor: 1,
+		} );
+		ws.receive( {
+			type: 'sync',
+			rooms: [
+				response( 'taxonomy/category', 6 ),
+				response( 'postType/post:1', 5 ),
+			],
+		} );
+		ws.receive( {
+			type: 'sync',
+			rooms: [ response( 'postType/post:1', 6 ) ],
+		} );
+		expect( onStatusChange ).not.toHaveBeenCalled();
+		expect( ws.readyState ).toBe( FakeWebSocket.OPEN );
 	} );
 
 	it( 'feeds pushed updates to the codec and advances the cursor', async () => {
