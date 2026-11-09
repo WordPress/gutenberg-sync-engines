@@ -6,7 +6,6 @@ import * as Y from 'yjs';
 /**
  * WordPress dependencies
  */
-import { getBlockType, parse } from '@wordpress/blocks';
 import apiFetch from '@wordpress/api-fetch';
 // eslint-disable-next-line import/no-unresolved -- Provided at runtime as wp.sync.
 import type {
