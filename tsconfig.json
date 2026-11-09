@@ -10,6 +10,12 @@
       "@wordpress/blocks": [
         "./gutenberg/node_modules/@wordpress/blocks/build-types"
       ],
+      "@wordpress/components": [
+        "./gutenberg/node_modules/@wordpress/components/build-types"
+      ],
+      "@wordpress/plugins": [
+        "./gutenberg/node_modules/@wordpress/plugins/build-types"
+      ],
       "@wordpress/block-serialization-default-parser": [
         "./gutenberg/node_modules/@wordpress/block-serialization-default-parser"
       ],
@@ -39,6 +45,10 @@
     // Node-only harness modules beside the specs (simulator,
     // genesis-sync-id) ARE checked, via checkJs and their JSDoc.
     "tests/js/**/*.test.js",
-    "tests/js/jest-setup*.js"
+    "tests/js/jest-setup*.js",
+    // The conflict review UI's component tests render the (untyped, moved
+    // as is) prototype components with Testing Library, which Jest resolves
+    // from the subtree; they are not part of the typed program either.
+    "tests/js/review/**/*"
   ]
 }

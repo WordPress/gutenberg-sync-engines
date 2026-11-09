@@ -53,7 +53,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Request_Log' ) ) {
 		 * @since 0.4.0
 		 * @var string
 		 */
-		const DB_VERSION = '3';
+		const DB_VERSION = '4';
 
 		/**
 		 * Option holding the installed schema version.
@@ -239,7 +239,35 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Request_Log' ) ) {
 				'option_writes' => self::$option_writes,
 				'io'            => $this->io_blocks(),
 				'dispatch'      => null,
+				'timeline'      => null,
 			);
+			$request_id          = self::server_tag( 'HTTP_X_RTC_REQUEST_ID', '_rtcrequestid' );
+			if ( '1' === self::server_tag( 'HTTP_X_RTC_TIMELINE', '_rtctimeline' ) && preg_match( '/^[a-f0-9-]{36}$/D', $request_id ) ) {
+				$now                            = microtime( true ) * 1000;
+				self::$whole['monotonic_start'] = hrtime( true );
+				self::$whole['timeline']        = array(
+					'version'          => 1,
+					'request_id'       => $request_id,
+					'clock_id'         => self::clock_id(),
+					'pid'              => getmypid(),
+					'request_start_ms' => (float) ( $_SERVER['REQUEST_TIME_FLOAT'] ?? microtime( true ) ) * 1000,
+					'cpu_available'    => function_exists( 'getrusage' ),
+					'clock_stable'     => true,
+					'truncated'        => false,
+					'samples'          => array(
+						array(
+							'at_ms'         => $now,
+							'cpu_ms'        => 0,
+							'queries'       => 0,
+							'option_writes' => 0,
+						),
+					),
+				);
+				if ( ! headers_sent() ) {
+					header( 'X-RTC-Request-ID: ' . $request_id );
+				}
+				add_action( 'gutenberg_sync_engines_sse_checkpoint', array( __CLASS__, 'sample_timeline' ) );
+			}
 			register_shutdown_function( array( __CLASS__, 'flush_whole_request' ) );
 			register_shutdown_function( array( $this, 'decrement_concurrent' ) );
 		}
@@ -263,6 +291,22 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Request_Log' ) ) {
 
 			$whole    = self::$whole;
 			$instance = new self();
+
+			// Stop counters before preparing labels or writing the log itself.
+			$finished_at = microtime( true ) * 1000;
+			$completed   = array(
+				'at_ms'         => $finished_at,
+				'cpu_ms'        => round( ( $instance->cpu_us() - $whole['cpu_us'] ) / 1000, 2 ),
+				'queries'       => (int) $wpdb->num_queries - $whole['queries'],
+				'option_writes' => self::$option_writes - $whole['option_writes'],
+			);
+			$db_time_end = $instance->db_time_so_far();
+			$memory_end  = memory_get_usage( true );
+			$peak_end    = memory_get_peak_usage( true );
+			$io          = $instance->io_blocks();
+			if ( null !== self::$whole['timeline'] ) {
+				self::append_timeline_sample( $completed, true );
+			}
 
 			$row = is_array( $whole['dispatch'] ) ? $whole['dispatch'] : array(
 				'ts'              => time(),
@@ -294,15 +338,14 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Request_Log' ) ) {
 
 			$request_start = isset( $_SERVER['REQUEST_TIME_FLOAT'] ) ? (float) $_SERVER['REQUEST_TIME_FLOAT'] : 0.0;
 
-			$row['total_ms']      = $request_start > 0 ? round( ( microtime( true ) - $request_start ) * 1000, 2 ) : 0.0;
-			$row['total_cpu_ms']  = round( ( $instance->cpu_us() - $whole['cpu_us'] ) / 1000, 2 );
-			$row['db_queries']    = (int) $wpdb->num_queries - $whole['queries'];
-			$row['db_time_ms']    = round( ( $instance->db_time_so_far() - $whole['db_time'] ) * 1000, 2 );
-			$row['memory_delta']  = memory_get_usage( true ) - $whole['memory'];
-			$row['peak_memory']   = memory_get_peak_usage( true );
+			$row['total_ms']      = $request_start > 0 ? round( $finished_at - $request_start * 1000, 2 ) : 0.0;
+			$row['total_cpu_ms']  = $completed['cpu_ms'];
+			$row['db_queries']    = $completed['queries'];
+			$row['db_time_ms']    = round( ( $db_time_end - $whole['db_time'] ) * 1000, 2 );
+			$row['memory_delta']  = $memory_end - $whole['memory'];
+			$row['peak_memory']   = $peak_end;
 			$row['concurrent']    = $whole['concurrent'];
-			$row['option_writes'] = self::$option_writes - $whole['option_writes'];
-			$io                   = $instance->io_blocks();
+			$row['option_writes'] = $completed['option_writes'];
 			$row['php_io_reads']  = $io[0] - $whole['io'][0];
 			$row['php_io_writes'] = $io[1] - $whole['io'][1];
 			$status               = (int) http_response_code();
@@ -310,8 +353,62 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Request_Log' ) ) {
 				$row['status'] = $status;
 			}
 
+			if ( null !== self::$whole['timeline'] ) {
+				$row['request_id'] = self::$whole['timeline']['request_id'];
+				$row['timeline']   = wp_json_encode( self::$whole['timeline'] );
+			}
 			self::insert_row( $row );
-			self::$whole = null;
+			self::reset_whole_request();
+		}
+
+		/**
+		 * Identify the server clock. Cross-server measurements require a
+		 * separate clock calibration; never silently combine different clocks.
+		 *
+		 * @return string Opaque server identifier.
+		 */
+		public static function clock_id(): string {
+			return hash( 'sha256', php_uname( 'n' ) );
+		}
+
+		/**
+		 * Sample cumulative costs without database writes or stream frames.
+		 * Only the benchmark's opt-in header enables this hook.
+		 */
+		public static function sample_timeline(): void {
+			if ( null === self::$whole || null === self::$whole['timeline'] ) {
+				return;
+			}
+			global $wpdb;
+			$instance = new self();
+			self::append_timeline_sample(
+				array(
+					'at_ms'         => microtime( true ) * 1000,
+					'cpu_ms'        => round( ( $instance->cpu_us() - self::$whole['cpu_us'] ) / 1000, 2 ),
+					'queries'       => (int) $wpdb->num_queries - self::$whole['queries'],
+					'option_writes' => self::$option_writes - self::$whole['option_writes'],
+				)
+			);
+		}
+
+		/**
+		 * Bound sampling memory. Keep a final total even if samples are capped;
+		 * the reader will show a wider range for the unsampled tail.
+		 *
+		 * @param array $sample Cumulative counters.
+		 * @param bool  $is_final Whether this is the shutdown sample.
+		 */
+		private static function append_timeline_sample( array $sample, bool $is_final = false ): void {
+			$elapsed      = ( hrtime( true ) - self::$whole['monotonic_start'] ) / 1000000;
+			$wall_elapsed = $sample['at_ms'] - self::$whole['timeline']['samples'][0]['at_ms'];
+			if ( abs( $elapsed - $wall_elapsed ) > 50 ) {
+				self::$whole['timeline']['clock_stable'] = false;
+			}
+			if ( count( self::$whole['timeline']['samples'] ) >= 4096 && ! $is_final ) {
+				self::$whole['timeline']['truncated'] = true;
+				return;
+			}
+			self::$whole['timeline']['samples'][] = $sample;
 		}
 
 		/**
@@ -324,6 +421,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Request_Log' ) ) {
 		 * @return void
 		 */
 		public static function reset_whole_request(): void {
+			remove_action( 'gutenberg_sync_engines_sse_checkpoint', array( __CLASS__, 'sample_timeline' ) );
 			self::$whole         = null;
 			self::$whole_flushed = false;
 		}
@@ -396,7 +494,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Request_Log' ) ) {
 
 			if ( get_option( self::DB_VERSION_OPTION ) === self::DB_VERSION ) {
 				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Schema spot-check on a diagnostics-only table.
-				if ( null !== $wpdb->get_var( "SHOW COLUMNS FROM `{$table}` LIKE 'php_io_writes'" ) ) {
+				if ( null !== $wpdb->get_var( "SHOW COLUMNS FROM `{$table}` LIKE 'timeline'" ) ) {
 					return;
 				}
 			}
@@ -435,6 +533,8 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Request_Log' ) ) {
 					option_writes int(11) NOT NULL DEFAULT 0,
 					php_io_reads int(11) NOT NULL DEFAULT 0,
 					php_io_writes int(11) NOT NULL DEFAULT 0,
+					request_id varchar(36) NOT NULL DEFAULT '',
+					timeline longtext NULL,
 					PRIMARY KEY (id),
 					KEY approach_scenario (approach, scenario),
 					KEY ts (ts)
@@ -443,7 +543,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Request_Log' ) ) {
 			// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.SchemaChange, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Verify creation before recording the version.
-			if ( null !== $wpdb->get_var( "SHOW COLUMNS FROM `{$table}` LIKE 'php_io_writes'" ) ) {
+			if ( null !== $wpdb->get_var( "SHOW COLUMNS FROM `{$table}` LIKE 'timeline'" ) ) {
 				update_option( self::DB_VERSION_OPTION, self::DB_VERSION, true );
 			}
 		}
@@ -652,6 +752,11 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Request_Log' ) ) {
 				'%d',
 				'%d',
 			);
+
+			if ( isset( $row['request_id'] ) ) {
+				$fmt[] = '%s';
+				$fmt[] = '%s';
+			}
 
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery -- Diagnostics-only table.
 			$inserted = $wpdb->insert( self::table(), $row, $fmt );
@@ -1240,6 +1345,7 @@ if ( ! class_exists( 'Gutenberg_Sync_Engines_Request_Log' ) ) {
 					$row[ $col ] = (float) $row[ $col ];
 				}
 				$row['should_compact'] = (bool) $row['should_compact'];
+				$row['timeline']       = ! empty( $row['timeline'] ) ? json_decode( $row['timeline'], true ) : null;
 			}
 			unset( $row );
 

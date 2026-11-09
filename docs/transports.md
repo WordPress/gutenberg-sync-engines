@@ -1,341 +1,207 @@
 # Transports
 
-Transports are a separate axis from engines: the engine decides how
-concurrent edits merge, the transport decides how updates move. Engines
-run over any transport. Run the transport benchmark
-(`tests/benchmarks/transport/`) for measured edit-to-visible latency and
-idle traffic on your hardware; the stable shape:
+A transport is how updates move between the editor and WordPress. The
+engine is a separate choice: any engine runs over any transport. Every
+transport carries the same request (the room envelope in
+[protocol.md](protocol.md)); they differ in who holds a connection open
+and what that costs the host. Run `npm run bench -- --suite=transport`
+for measured latency and idle traffic on your hardware.
 
-| | edit-to-visible latency | idle traffic per collaborator |
-| --- | --- | --- |
-| http-polling | seconds-scale (bounded below by the poll interval) | roughly one request per poll interval |
-| sse | pushed the moment a row lands (Redis notices), or within half a second (version checks) | one held PHP worker per stream for up to five minutes; without Redis, one small lookup twice a second per stream; needs a proxy that passes streams through |
-| sse-daemon | pushed within about a second of the row landing (the daemon rescans each room once a second) | one held connection per stream in the sync daemon; no PHP worker, and no new port or TLS beyond the daemon the websocket transport already runs |
-| websocket | tens of milliseconds | a few frames per heartbeat — plus a persistent daemon, TLS termination, and an exposed port |
+| Transport | Edit-to-visible | Idle cost per collaborator | Needs from the host |
+| --- | --- | --- | --- |
+| `http-polling` (default) | seconds, bounded by the poll interval; under a second when the advisory channel is up | one request per interval, or none while nothing changes | nothing |
+| `sse` | the moment a row lands (Redis), or within half a second (storage checks) | one held PHP worker per visible tab with company | a proxy that passes streams through; Redis optional |
+| `sse-daemon` | within about a second | one connection in the sync daemon, no PHP worker | the daemon |
+| `websocket` | tens of milliseconds | a few frames per heartbeat, plus the daemon | the daemon, and a proxy that passes the WebSocket upgrade |
 
-Sessions allow **five total editor connections by default**, including the
-joining editor. Each tab counts as a connection, even for the same user.
-Polling, SSE, SSE-daemon, and WebSocket check this limit when the editor
-first joins its primary room. A sixth connection gets the connection-limit
-error; already admitted editors stay connected. The existing
-`sync.pollingProvider.maxClientsPerRoom` filter sets the limit for all these
-transports. The session benchmark overrides it in its own browser pages.
+A post admits <!-- const:DEFAULT_CLIENT_LIMIT_PER_ROOM -->5<!-- /const --> editor
+tabs by default, including the joining tab, checked on a tab's first
+connection (`sync.pollingProvider.maxClientsPerRoom`). Every transport
+falls back to polling when its connection fails, and comes back when it
+can. Every setting is explained on the Settings → Collaboration screen
+itself. The options are plain WordPress options, so WP-CLI and the REST
+settings endpoint can set them: the engine is `wp_sync_engine`, the
+transport `gutenberg_sync_engines_transport`, the advisory channel
+`gutenberg_sync_engines_advisory_channel`, and the rest start with
+`gutenberg_sync_engines_`. `WP_COLLABORATION_TRANSPORT` (constant or
+environment variable) takes priority over the stored transport choice,
+and the `wp_sync_websocket_url` filter over the daemon address.
 
-**Short polling is the base transport, and an advisory channel sits
-beside it.** Every tab editing a post also opens a channel to the other
-tabs on that post: by default browser to browser (WebRTC, negotiated
-through the heartbeat WordPress already sends from every editor screen),
-or, when the site chooses `websocket-advisory`, one socket per tab to the
-sync daemon, which relays between the tabs in a room and reaches tabs
-that cannot connect to each other directly. Either way the channel
-carries presence and the sentence "I landed rows, go and poll", never
-content; every read and write stays on the REST sync endpoint. While
-every known peer is reachable over it, a tab polls only when it has
-something to send, when a peer announces, or when the heartbeat reports
-changes from a writer not on the channel. A tab that is alone schedules
-no polls and holds its edits until
-company arrives, a save (flushed through the room first), or the tab
-going hidden. Any tab that cannot reach a peer keeps the cadence in the
-table. The transport an admin selects is a preference: SSE and
-websocket carry everything while connected and turn the channel off
-meanwhile, and short polling is always the fallback. The websocket
-transport hands its rooms to short polling whenever its socket is down
-and takes them back, at the cursor polling reached, when it reopens. The
-reasoning, the rules, and the failure cases are in
-[plan/advisory-channel.md](plan/advisory-channel.md).
+## Polling and the advisory channel
 
-**What happens to unsaved changes when the last editor leaves** is a
-setting (Settings → Collaboration → Unsaved changes), applied above the
-engine choice. By default they are discarded: every tab tells the server
-when it leaves (a beacon on `pagehide`, or the socket closing), and a
-per-post room nobody is in is reset to the saved post, at once when the
-last tab leaves or when a new tab arrives and finds nobody there. Every
-room response carries a generation token so a tab whose room was reset
-under it starts over. The alternative keeps rooms as a shared working
-copy. See [plan/room-lifetime.md](plan/room-lifetime.md).
+Short polling is the transport every host can run: the editor sends
+`POST /wp-sync/v1/updates` on a timer with every open room's queued
+edits and gets back the rows it has not seen. Beside it, every editor
+tab opens an **advisory channel** to the other tabs on its post. The
+channel carries presence (who is here) and the sentence "I landed rows,
+go and poll", never content. It runs over one of two links, chosen on
+the settings screen: WebRTC between the browsers (`webrtc-advisory`, the
+default, with the handshake relayed through the WordPress heartbeat and
+the polls), or one WebSocket per tab to the sync daemon or to a relay
+the host runs (`websocket-advisory`, which reaches tabs WebRTC cannot).
 
-Transport latency is engine-independent (the HTTP rows replicate within
-noise under intent-log). One caveat on the axis itself: "engines run
-over any transport" is an inherited framework property, not a
-principle. It fits the log-shaped engines; for DE-RTC it is part of the
-adaptation under review ([architecture-decisions.md](architecture-decisions.md),
-item 3) — that engine is allowed to declare its own transport story,
-including "manual sync with long delays," without penalty.
+The channel decides how often a tab polls:
 
-The short-polling cadence is tunable: the "Polling interval" field on
-Settings → Collaboration (default 5 seconds) slows active-tab polling down to 25 seconds
-for hosts that want fewer requests (see
-`src/providers/http-polling/README.md` for the exact semantics).
+1. **When you are alone, the tab stops polling**, except for 30
+   seconds after the page loads or regains focus. Its edits stay in the
+   browser until someone else arrives, until a save (the edits go
+   through the room first), or until the tab is hidden. A reload loses
+   them, which is what the editor's own unsaved-changes warning says.
+   De-rtc keeps sending its commits anyway. The heartbeat's answer names the room's
+   newest row, so a script or WP-CLI saving the post still wakes the
+   tab.
+2. **When a peer cannot be reached, the tab polls on a timer**: the
+   "Polling interval" setting, <!-- const:POLLING_INTERVAL_DEFAULT -->5<!-- /const --> seconds
+   by default.
+3. **When every peer can be reached, the tab polls only when needed**:
+   when it has edits to send, when a peer says it stored new rows, or
+   when the heartbeat reports rows it has not seen. No timer.
+4. **The channel is a hint only.** It never changes what a tab shows.
+   The server's presence records say who is in the post; the channel
+   only shows presence faster.
+5. **SSE and WebSocket turn the channel off while connected**, because
+   they carry everything themselves. The channel comes back while they
+   are down.
 
-**`sse` and `sse-daemon` are the same stream held by different
-processes.** Both send the room envelope once and then receive rows on
-one long-lived response. The difference is where that response is
-written. `sse` writes it from the web tier, so a PHP worker stays up for
-the length of the stream. `sse-daemon` writes it from the sync daemon, on
-the port the websocket transport already uses, so a stream costs a
-connection there instead of a worker. Three consequences are worth
-knowing before choosing between them.
-
-- A tab that goes hidden keeps its `sse-daemon` stream and keeps
-  receiving, because there is no worker to release. An `sse` tab drops
-  its stream on hide and re-reads on return.
-- Rows written through the ordinary WordPress REST endpoint reach a
-  daemon stream within about a second, on the daemon's once-a-second
-  room rescan, rather than the moment they land. Under `sse` with Redis
-  the notice is immediate.
-- A stream request authenticates with a one-time token in an
-  `Authorization` header (`/wp-sync/v1/ws-token`) rather than the REST
-  nonce `sse` sends, because the daemon is a separate process with no
-  WordPress request context. The daemon listens on its own port, so the
-  request is cross-origin and preflighted; the daemon answers the
-  preflight from the same origin allowlist the socket handshake uses.
-
-It needs the same proxy that passes streams through, and the same daemon
-the websocket transport runs.
-
-Two websocket specifics. The one-time auth token rides the
-`Sec-WebSocket-Protocol` offer list rather than the URL query string,
-because query strings end up in server and proxy access logs. And
-plaintext `ws://` must never leave a dev box; terminating TLS in front
-of the daemon is the operator's job, and the `wss://` address goes in
-the "WebSocket transport server" field on Settings → Collaboration (or
-the `wp_sync_websocket_url` filter, which wins). The advisory channel
-has its own "WebSocket advisory server" field, for a relay; empty means
-the daemon.
-
-The advisory channel's websocket link can end at a server that is not
-the plugin's daemon. With a `WP_SYNC_WEBSOCKET_ACCESS_TOKEN_SECRET`
-configured, each tab carries a signed, two-minute access token (a JSON Web
-Token, HS256) that a relay checks with the shared secret and no call
-to WordPress; `examples/advisory-relay/` is a Node relay a host can run
-as is or port, and `docs/plan/advisory-channel.md` ("Bring your own
-relay") lists the access token claims and the message formats. The daemon
-accepts access tokens too. The websocket *transport* cannot be relayed this
-way: it does engine work and writes rows.
-
-The websocket-only e2e suite runs against
-the real transport: it selects the websocket transport on the tests
-site, publishes the `wp collaboration sync-server` daemon, and restores
-the previous transport at teardown (`npm run test:e2e:websocket`). For
-hour-scale per-user costs with a convergence gate, run the soak harness
-(`tests/debugging/soak-transport.mjs`).
+If the channel fails (it never connects, a peer drops off it, or more
+than <!-- const:DEFAULT_MAX_PEERS -->8<!-- /const --> tabs are on one post), the tab polls on its timer as if
+there were no channel. Nothing is lost. A hidden tab polls every 25
+seconds. The relay a host can run in place of the daemon is in
+`examples/advisory-relay/README.md`.
 
 ## Server-sent events
 
-Select **Server-sent events** in Settings → Collaboration. This transport
-runs through ordinary WordPress REST requests: the browser opens one
-long-lived response per tab and the server writes each change to it. It
-needs no sync daemon or PHP Redis extension. Each open receive stream
-occupies a PHP web worker for its whole length.
+Select "Server-sent events" to receive over one long-lived response per
+tab that the server writes each change to. The browser still sends its
+own edits on the ordinary updates request beside the stream, marked
+`rows_received_separately: true`, and the server answers with the
+verdicts but no rows. The stream is the only way rows reach the tab, so
+no row arrives twice or gets missed. The browser holds such an answer
+until the stream has caught up to that point, then applies it.
 
-Redis is optional. What a stream sleeps on is chosen per request, in this
-order:
+What a stream waits on is chosen per request:
 
-| Wait | Chosen when | Cost per open stream while idle |
+| Wait | Chosen when | Idle cost per stream |
 | --- | --- | --- |
-| Redis Pub/Sub notice | `WP_SYNC_SSE_REDIS_URL` is set, or a Redis object cache is in use (its `WP_REDIS_*` constants name the server) | nothing: the stream is written the moment a row lands |
-| Version counter in the object cache | a persistent object cache of any kind (Memcached included) | one memory read twice a second |
-| Version counter in the room-meta table | no cache at all | one indexed query twice a second |
+| Redis notice | `WP_SYNC_SSE_REDIS_URL` is set, or a Redis object cache is detected | nothing |
+| Version counter in the object cache | any persistent object cache | one memory read twice a second |
+| Version counter in the room-meta table | no cache | one indexed query twice a second |
 
-The version counter is a number the room storage bumps after every
-successful write (updates, room meta, a reset, and presence when presence
-is kept in the room storage). Presence kept in the Presence API's
-`wp_presence` table, the default, bumps no counter. While it is in use,
-each counter check also reads the presence of the stream's rooms, one
-query per room, and wakes the stream when it differs from what was
-last sent. Presence writes there still send the Redis notice. The stream
-reads the counters of all its rooms in one lookup and re-reads storage
-when any differs from the snapshot it took just before its last read; a
-write landing during that read therefore still wakes the next check. The
-snapshot is compared for change, not counted, so nothing depends on the
-exact value. The bump is an atomic increment (Redis and Memcached
-increment in place; the row update is one statement MySQL serializes),
-and that is what carries the guarantee: if two writers could each turn
-5 into 6, a stream whose snapshot fell between their bumps would not
-wake for the second write until its next catch-up read. Nothing is
-lost either way, since storage is the truth and every cursor comes from
-a storage read, never from the counter. A storage other than the plugin's tables (through the
-storage filter) has no counters, and the stream checks it the long way
-instead: rows past the cursor and the awareness map, per room, twice a
-second.
+The counter is bumped on every storage write ([storage.md](storage.md)).
+Redis carries only the notice, never content, and a Redis that stops
+answering falls back to the checks by itself. Every stream response
+carries an `X-WP-Sync-SSE-Wait` header naming what it got: `redis`,
+`version-cache`, `version-table`, or `reads`.
 
-A configured Redis that does not answer is reported through the
-`gutenberg_sync_engines_sse_redis_failed` action and the stream falls back
-to the version checks; the browser never has to fall back to polling for
-it. The `wp_sync_sse_redis_url` filter sees the configured or detected
-address and may replace it, or return an empty string to keep the
-transport off Redis. Detection skips a Redis cluster, replica set, or
-sentinel group, which the plugin's small client does not speak; set the
-address by hand there if a single endpoint is available.
+The stream's rules: for the first second after a room joins, the tab
+uses ordinary requests, so a page that joins several rooms at load opens
+one stream. A tab that is alone closes its stream after its discovery
+window, exactly as polling goes quiet. A hidden tab drops its stream
+under `sse` (a PHP worker is held for as long as the stream is open) and
+polls every 25 seconds instead; under `sse-daemon` it keeps it, because
+a stream costs the daemon a connection rather than a worker. Streams end
+after five minutes at most (`wp_sync_sse_max_seconds`) and five seconds
+before PHP's execution limit; every end is safe, because the browser
+reconnects from the last row it applied. A keepalive comment goes out at
+least every five seconds; a silent connection is aborted by the browser
+after 25 seconds. When a stream cannot be opened at all, the browser
+polls and retries the stream after five seconds, doubling up to one
+minute.
 
-### Proxies, buffering, and timeouts
+### The same stream from the sync daemon
 
-A stream only works when every hop between PHP and the browser passes
-bytes through as they are written. This is the one operational
-requirement SSE adds over short polling, and it is the usual reason a
-stream "does not work" on a host where polling does:
+`sse-daemon` is the same stream written by the sync daemon (the process
+the websocket transport runs) instead of a web request. It holds no PHP
+worker, and an ordinary chunked HTTP response passes proxies that block
+a WebSocket upgrade. The client POSTs the room envelope to
+`/wp-sync/v1/sse` on the daemon's address with a one-time token in an
+`Authorization` header; the daemon authenticates once per connection,
+then writes the `200` and the `text/event-stream` headers, so a refused
+request never opens a stream. The daemon learns of new rows on its
+once-a-second check of each room's edit log, which is why delivery takes
+about a second, and it needs the daemon running; polling remains the
+fallback.
 
-- **Response buffering.** The route sends `X-Accel-Buffering: no` (which
-  nginx honors, `proxy_buffering` and `fastcgi_buffering` included) and
-  `Cache-Control: no-cache, no-store, no-transform`. Other proxies, CDNs,
-  and page caches need their own setting to leave `text/event-stream`
-  responses unbuffered and uncached.
-- **Compression.** Compression buffers. Exclude `text/event-stream` from
-  gzip and brotli at the proxy and in Apache's `mod_deflate`; PHP's
-  `zlib.output_compression` must be off for the route.
-- **Timeouts.** PHP's `max_execution_time` shortens a stream (the server
-  ends it five seconds before the limit), and PHP-FPM's
-  `request_terminate_timeout`, a proxy's read timeout, or a load
-  balancer's idle timeout can end it earlier. Every end is safe: the
-  browser reconnects from its last applied cursor. A five-second keepalive
-  comment keeps idle-timeout counters from firing on quiet streams.
-- **Worker pools.** Size the PHP worker pool for one held worker per open
-  editor tab on top of ordinary traffic. Tabs that are alone on a post
-  close their stream, and so do tabs nobody is looking at (a hidden
-  browser tab polls every twenty-five seconds instead, like short
-  polling, and reopens its stream the moment it is visible again), so
-  the count is the number of visible tabs that have company.
+## WebSocket
 
-When a stream cannot be opened at all (the request fails or is refused),
-the browser falls back to short polling and retries the stream with a
-growing wait, so a misconfigured proxy degrades to polling rather than
-breaking editing. A proxy that accepts the stream but buffers it is the
-worse case: the browser sees no keepalive, aborts after twenty-five
-seconds, and retries. If a host cannot pass streams through, choose
-polling with an advisory channel instead.
+The websocket transport moves everything over one socket per tab to the
+sync daemon (`wp collaboration sync-server`), authenticated with a
+one-time token offered in the `Sec-WebSocket-Protocol` header rather
+than the URL, so it stays out of access logs. Whenever the socket is
+down (token refused, daemon unreachable, dropped, or not open within
+five seconds) polling carries on from the last row the socket
+delivered, and the socket takes over again from the last row polling
+delivered when it reopens. Only one of them serves a room at a time, so
+no row repeats. Plain `ws://` must never leave a dev box;
+the `wss://` address behind TLS goes in the "WebSocket transport server"
+setting.
 
-For local use, run `npm run env start` or `npm run env:tests start`.
-Each config's `afterStart` hook starts Redis, connects it to that environment's
-network as `sync-redis`, and waits until it responds. Both configs set
-`WP_SYNC_SSE_REDIS_URL` to `redis://sync-redis:6379`. No separate launcher or
-Compose file is needed. Redis has no public port and stores no persistent data.
-A Redis that fails to start does not fail the environment start (the other
-transports need no Redis); the hook prints a notice, and `npm run doctor`
-reports the Redis container for each environment.
+## When the last editor leaves
 
-The hooks call shared npm commands. `redis:project` reads wp-env's project name,
-which already identifies the checkout and config. Shell variables `REDIS_PROJECT`
-and `REDIS_NAME` reuse that name for the network and Redis container. Set
-`GSE_WP_ENV_CONFIG=.wp-env.tests.json` for the tests config; the default is dev.
+What happens to unsaved changes when the last editor leaves a post is
+the "Unsaved changes" setting. By default they are discarded: every tab
+tells the server when it leaves (a beacon on `pagehide`, or the socket
+closing), and a per-post room nobody is in is reset to the saved post,
+at once on the last leave or when a new tab arrives and finds nobody
+there. Every room response carries a generation token (the id of the
+room's first row), so a tab whose room was reset under it starts over
+from the saved post. The alternative, `keep`, lets the room live on as
+a shared working copy. Engines that keep data elsewhere clear it on the
+`gutenberg_sync_engines_room_reset` action. Rooms not tied to one post
+(a taxonomy's list) are never reset this way.
 
-Both configs also install the Redis Object Cache plugin and point it at the
-same container (`WP_REDIS_HOST`, with its bundled Predis client so no PHP
-extension is needed), but leave its drop-in OUT: the test suites run
-without a persistent object cache, as most of PHPUnit assumes. `npm run
-cache:on` (dev) or `npm run cache:tests:on` (tests) copies the drop-in in,
-which gives the site a persistent object cache on Redis and lets the SSE
-transport detect Redis by itself; `cache:off` / `cache:tests:off` takes it
-out again, and `npm run doctor` reports the state per environment. With the
-drop-in on, the whole site's options and posts go through Redis too, so
-measurements taken that way describe a Redis-backed host, not just the
-transport.
+## Presence on a slow connection
 
-The transport and host benchmarks switch this for a run: `cache=none|redis`
-picks the persistent object cache and `wake=auto|redis|cache|table` pins
-what an SSE stream sleeps on (`cache` needs `cache=redis`, `table` needs
-`cache=none`; `auto` is whatever the site has, Redis when detectable).
-Both are restored afterwards, both work only for this checkout's wp-env
-sites (the switch goes through wp-cli), and the report records the wait
-the streams actually got, read from the `X-WP-Sync-SSE-Wait` header every
-stream response carries: `redis`, `version-cache`, `version-table`, or
-`reads`.
+Live cursors only work when every editor holds the same document and
+updates arrive before the other person moves on. Over polling every few
+seconds they always show a spot someone has left. Intent-log and
+de-rtc have no shared document to place them in at all. The "Awareness
+interval" setting replaces cursors with block presence: once per
+interval each editor names the block its selection is in (`gseBlock`),
+sent only when it changes, and other editors see Gutenberg's block
+outline and an avatar badge on that block. The name travels with
+whatever already carries presence (the sync transport by default, or
+the WordPress Heartbeat when "Awareness channel" says so, which then
+needs an advisory channel selected). A name for a block the receiver
+does not hold yet shows nothing until the block arrives.
 
-Use `npm run env:stop` or `npm run env:tests:stop` to stop Redis and WordPress.
-This wp-env version has no stop lifecycle hook: plain `wp-env stop` (including
-`npm run env stop`) does not stop Redis. Redis uses Docker's `--rm`, so stopping
-it also removes its disposable container; the next start creates it again.
-`afterDestroy` removes the matching Redis container if it still exists.
-The dev config keeps its existing WebSocket daemon startup.
-Other transports do not require Redis to be running.
+## What a host must provide
 
-Redis Pub/Sub channels are namespaced by the database host and name, table
-prefix, and multisite blog ID, followed by the room name. Installations with
-different databases can share one Redis instance without receiving each other's
-notices, and one site reached through several hostnames still shares one
-channel. Redis carries only notices; document storage stays in WordPress.
+- **Polling:** nothing. The WebRTC link needs the browsers to reach a
+  STUN server (a public Google one by default;
+  `gutenberg_sync_engines_advisory_ice_servers` replaces the list) and
+  falls back to the timer when they cannot.
+- **Server-sent events:** every hop between PHP and the browser must
+  pass bytes through as written.
+  - The route sends `X-Accel-Buffering: no` (nginx honors it) and
+    `Cache-Control: no-cache, no-store, no-transform`. Other proxies,
+    CDNs and page caches need their own setting to leave
+    `text/event-stream` unbuffered and uncached.
+  - Exclude it from gzip and brotli, which buffer, and keep PHP's
+    `zlib.output_compression` off for the route.
+  - PHP-FPM's `request_terminate_timeout`, a proxy's read timeout or a
+    load balancer's idle timeout end a stream early. That is safe.
+  - Size the PHP worker pool for one held worker per visible tab that
+    has company.
+  - A proxy that accepts a stream but buffers it is the worst case: the
+    browser sees no keepalive, aborts after 25 seconds and retries.
+    Choose polling instead.
+  - Redis is optional: `redis://`, `rediss://` or `unix://` in
+    `WP_SYNC_SSE_REDIS_URL`. A cluster or sentinel is not detected.
+- **The sync daemon** (`sse-daemon`, `websocket`): a PHP command-line
+  process that never ends, on port 8787 by default, answering
+  `GET /health`. Keep it out of the web worker pool. Start it with a
+  process manager that restarts it, put the web server in front of it
+  for TLS and pass one path to its local port (unbuffered, reads longer
+  than its <!-- const:IDLE_TIMEOUT_S -->45<!-- /const -->-second idle timeout, WebSocket upgrade headers passed).
+  It needs only the database (and the object cache, if any): web
+  requests and the daemon share the room tables and never talk to each
+  other. Restart it now and then; tabs reconnect from the last row they
+  received. Run one daemon per site. Limits: <!-- const:DEFAULT_MAX_CONNECTIONS -->512<!-- /const --> connections,
+  <!-- const:DEFAULT_MAX_CONNECTIONS_PER_IP -->20<!-- /const --> per IP,
+  <!-- const:MESSAGE_RATE_LIMIT -->200<!-- /const --> messages per socket per five seconds. A host that cannot run its
+  own processes should use polling or the web-tier stream.
 
-On a host without a Redis object cache, set `WP_SYNC_SSE_REDIS_URL` (or the
-`wp_sync_sse_redis_url` filter) to a private Redis address to get the
-instant wake; the settings screen says so next to the choice when no Redis
-is configured or detected. `redis://user:password@host:6379` supports Redis
-ACL credentials, `rediss://` uses TLS, and `unix:///path/to/redis.sock` a
-local socket. Keep this value server-side.
-
-The browser opens a POST stream with normal WordPress cookies and REST nonce
-headers. It shares one stream across its current rooms. The server subscribes
-to each Redis channel **before** reading stored updates. Edits, presence, and
-room resets queue notices from the table storage; notices publish after the
-writer finishes. Redis never stores document content. A replacement storage
-must emit `gutenberg_sync_engines_room_changed` after its own successful writes
-to get prompt notifications.
-
-Streams send JSON room responses in `sync` events, with a comment heartbeat
-at least every five seconds while waiting. They end after at most five
-minutes (`wp_sync_sse_max_seconds` can shorten this), then the browser
-reauthorizes and resumes from its last applied room cursors. A storage catch-up
-read every twenty seconds, within the same request,
-also covers a process killed after a database write but before its
-Redis publish. Redis restart, deploy, and truncated SSE events cannot remove
-stored edits. A disconnected browser's unsent edits retain the existing
-engine recovery rules; a page reload can still lose unsent local edits.
-
-For the first second after a tab joins a room it receives over ordinary
-requests: the editor registers its rooms one by one at load and the tab's
-presence fills in right after, and each would otherwise close and reopen
-the stream. Once the room set has been still for a second, one stream opens
-covering all of it. Local edits go out on the normal `/updates` request
-BESIDE the stream, which stays open while the tab types. Each such
-request is marked `rows_received_separately: true`: the server stores the edits and
-answers with its verdicts and the room's head cursor, but with no stored
-rows. The stream is the only path that delivers stored rows and moves a
-room's cursor, so nothing is delivered twice or skipped. The browser holds
-the answer until the stream has carried the cursor to that head (the
-write's own storage notice wakes the stream, so that is one round trip)
-and then applies it after the rows, the order every engine relies on. A
-cursor move rides the same request when it changes, checked once a
-second, so it never reopens the stream either. Redis failures switch receiving
-to polling (only a stream that cannot be opened at all does this; a Redis
-outage is handled server-side by the storage checks); the browser retries
-SSE after five seconds, and each further failure in a row doubles that
-wait, up to one minute. A tab alone in its room
-closes its stream once the discovery window after load passes, exactly as the
-other HTTP transports go quiet, so an idle solo tab holds no PHP worker; the
-heartbeat's company report reopens it. A hidden tab holds no stream either:
-when the tab goes into the background it drops the stream and receives over
-ordinary requests every twenty-five seconds, the cadence short polling uses
-for a hidden tab, and it reopens the stream at once when it is visible
-again. A hidden tab that is also alone goes quiet like any other. Every twenty seconds the stream
-refreshes presence only for a client still
-listed in the room, using its current state. It does not recreate an entry
-removed by a leave or room reset. Five-second heartbeat comments reset the
-browser's twenty-five-second inactivity timeout; a silent connection is aborted.
-
-The server shortens the stream to five seconds below a positive PHP execution
-limit. This is a conservative cap; PHP execution time is not always elapsed
-time. A host's PHP-FPM or proxy timeout can end the request earlier, and the
-browser reconnects with a fresh storage read.
-
-Benchmark on the test site's actual port (wp-env may choose another):
-
-```sh
-WP_BASE_URL=http://localhost:8889 npm run bench -- --suite=transport --transport=sse --engine=intent-log --trials=30 --json=/tmp/sse.json
-```
-
-The transport and host benchmarks count SSE response bytes as they arrive,
-including streams that later get interrupted. Reports distinguish successful
-SSE streams from attempted requests and polling fallback. A trial shows
-few streams (one per tab, renewed at the stream's length) beside many
-small `/updates` posts, one per batch of edits. Server request
-metrics recorded at dispatch do not include the later stream wait; use the
-host benchmark's whole-request measurements for PHP occupancy. Short runs can
-end before a held request is logged at shutdown.
-
-Add `--recovery` to the transport benchmark to interrupt the receiving tab,
-accept an edit while it is offline, and require it to catch up without a reload.
-The JSON report includes the recovery time separately from normal edit latency.
-
-The sse-only e2e suite (`npm run test:e2e:sse`) selects this transport on the
-tests site for its duration and restores the previous one afterwards. It needs
-the Redis container the tests env starts, and refuses to run without it, so
-that it certifies the Redis wake rather than the storage checks. The fuzzer
-sweeps `sse` with the same rule.
+Upgrading, deactivating and uninstalling the plugin are described in
+[storage.md](storage.md); switching engines mid-session in
+[protocol.md](protocol.md).

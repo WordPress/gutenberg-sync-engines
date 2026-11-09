@@ -231,13 +231,31 @@ function isRichTextValue(
 }
 
 /**
- * Normalizes an attribute value for the engine (rich text → HTML string).
+ * Normalizes an attribute value for the engine (rich text → HTML string),
+ * at any depth. A rich-text value can sit inside an array or object
+ * attribute (a table's cells are `body[].cells[].content`), and the
+ * document must hold plain JSON: its cloner copies own enumerable keys
+ * only, so a rich-text object nested in a stored attr would turn into `{}`
+ * on the next intent and fail capture verification.
  *
  * @param value Attribute value.
  * @return Serializable value.
  */
 function serializeAttribute( value: unknown ): unknown {
-	return isRichTextValue( value ) ? value.toHTMLString() : value;
+	if ( isRichTextValue( value ) ) {
+		return value.toHTMLString();
+	}
+	if ( Array.isArray( value ) ) {
+		return value.map( serializeAttribute );
+	}
+	if ( value && 'object' === typeof value ) {
+		const plain: Record< string, unknown > = {};
+		for ( const [ key, entry ] of Object.entries( value ) ) {
+			plain[ key ] = serializeAttribute( entry );
+		}
+		return plain;
+	}
+	return value;
 }
 
 /**

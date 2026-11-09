@@ -40,6 +40,17 @@ module.exports = {
 			},
 		},
 		{
+			// The conflict review UI's component tests import the editor
+			// packages and Testing Library, which Jest resolves from the
+			// vendored subtree (see jest.config.js), not from this
+			// package's own dependencies.
+			files: [ 'tests/js/review/**/*.{js,jsx}' ],
+			rules: {
+				'import/no-extraneous-dependencies': 'off',
+				'import/no-unresolved': 'off',
+			},
+		},
+		{
 			// The frozen JS engine core is a vendored cross-language contract
 			// (byte-matched against its PHP twin and JSON vectors); do not
 			// reformat or relint it here. It targets a Node-style runtime

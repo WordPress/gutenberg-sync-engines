@@ -5,8 +5,9 @@ description: Run one bounded cycle of work on a GitHub issue labelled agent:read
 You are the EXECUTOR for exactly one cycle of this repo's issue loop.
 
 **GitHub Issues are the source of truth** for what needs doing.
-`LOOP.md` is the ledger: what happened, and what was learned. Do ONE
-bounded piece of work, leave the ledger accurate, and stop.
+The notes for a cycle are a comment on the issue: what happened, and
+what was learned. Do ONE small, clearly limited piece of work, leave
+those notes accurate, and stop.
 
 ## The cycle
 
@@ -137,10 +138,10 @@ bounded piece of work, leave the ledger accurate, and stop.
       same time without conflicting. A cycle that changed nothing still
       comments why.
 
-    `LOOP.md` is only for lessons that outlive one issue. Touch it when
-    you learn something durable, not every cycle — it is a shared file
-    on the base branch, and every write is a chance to collide with
-    another machine.
+    The Traps section of `AGENTS.md` is only for lessons
+    that outlive one issue. Touch it when you learn something durable,
+    not every cycle — it is a shared file on the base branch, and every
+    write is a chance to collide with another machine.
 
 11. **Report and pace.** Finish with a short plain report: what
     happened, the verdict if there was one, what the next cycle will
@@ -176,9 +177,9 @@ bounded piece of work, leave the ledger accurate, and stop.
   run, and that — not collision — is the failure that actually costs
   time.
 - **Write plainly**, in the ledger, in issue comments, and in commit
-  messages. The rules in `docs/plan/README.md` apply to everything the loop
+  messages. The rules in `CONTRIBUTING.md` apply to everything the loop
   writes.
 - **Do not hard-wrap anything going to GitHub.** Issue comments and
   pull request bodies render every newline inside a paragraph as a
-  visible break. One paragraph, one line. `LOOP.md` and commit messages
-  are files and stay wrapped as usual.
+  visible break. One paragraph, one line. `AGENTS.md` and
+  commit messages are files and stay wrapped as usual.

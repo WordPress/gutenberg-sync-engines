@@ -119,6 +119,25 @@ class Tests_Collaboration_WpSseSyncServer extends WP_Test_REST_TestCase {
 		$this->assertSame( array(), $data['rooms'][0]['updates'], 'The next event must not replay the initial snapshot.' );
 	}
 
+	public function test_resource_checkpoints_surround_waits_and_run_after_disconnect() {
+		$request = $this->request();
+		$initial = $this->server->handle_request( $request )->get_data();
+		$samples = 0;
+		$sample  = static function () use ( &$samples ) {
+			++$samples;
+		};
+		add_action( 'gutenberg_sync_engines_sse_checkpoint', $sample );
+		$this->redis->waiting = function () use ( &$samples ) {
+			$this->assertSame( 2, $samples, 'Sample at stream start and before blocking.' );
+		};
+		try {
+			$this->server->stream( $request, $initial, static function () {} );
+			$this->assertSame( 5, $samples, 'Sample after wake, before the next wait, and when that wait fails.' );
+		} finally {
+			remove_action( 'gutenberg_sync_engines_sse_checkpoint', $sample );
+		}
+	}
+
 	public function test_a_new_request_catches_up_without_a_redis_notice() {
 		$initial = $this->server->handle_request( $this->request() )->get_data();
 		$cursor  = $initial['rooms'][0]['end_cursor'];
