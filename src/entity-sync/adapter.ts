@@ -1,7 +1,7 @@
 /**
  * Internal dependencies
  */
-import type { EntitySyncManager } from '@wordpress/core-data';
+import type { PluginEntitySyncManager } from './manager';
 
 /**
  * Flush plugin transport updates before completing a save.
@@ -11,18 +11,11 @@ import type { EntitySyncManager } from '@wordpress/core-data';
  * @return The plugin's entity sync manager.
  */
 export function createEntitySyncAdapter(
-	base: EntitySyncManager,
+	base: PluginEntitySyncManager,
 	flush: () => Promise< void >
-): EntitySyncManager {
+): PluginEntitySyncManager {
 	let stopped = false;
 	return {
-		onEditorAction: base.onEditorAction
-			? ( change ) => {
-					if ( ! stopped ) {
-						base.onEditorAction?.( change );
-					}
-			  }
-			: undefined,
 		get services() {
 			return stopped ? undefined : base.services;
 		},

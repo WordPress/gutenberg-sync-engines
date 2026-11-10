@@ -19,7 +19,7 @@ export { expect } from '@wordpress/e2e-test-utils-playwright';
 import {
 	SECOND_USER,
 	setCollaboration,
-} from '../../../gutenberg/test/e2e/specs/editor/collaboration/fixtures/collaboration-utils';
+} from '../specs/gutenberg-collaboration/fixtures/collaboration-utils';
 import CollaborationUtils from './authenticated-collaboration-utils';
 
 /**

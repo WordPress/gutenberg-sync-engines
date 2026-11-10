@@ -7,7 +7,7 @@ import type { Page } from '@playwright/test';
  * Internal dependencies
  */
 import { test, expect } from '../../config/collaboration-fixtures';
-import { SECOND_USER } from '../../../../gutenberg/test/e2e/specs/editor/collaboration/fixtures/collaboration-utils';
+import { SECOND_USER } from '../gutenberg-collaboration/fixtures/collaboration-utils';
 
 /**
  * SSE receives over a stream while one can be opened, and short polling,

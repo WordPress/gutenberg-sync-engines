@@ -11,8 +11,9 @@ import fastDeepEqual from 'fast-deep-equal/es6/index.js';
 /**
  * Internal dependencies
  */
-import { captureSemanticPrototypeAction } from '../debug/semantic-prototype';
 import { resolveEngineAdapter } from '../framework';
+import { createReviewHandlers } from '../review/handlers';
+import type { ReviewResolver } from '../review/resolver';
 import { LOCAL_EDITOR_ORIGIN, LOCAL_UNDO_IGNORED_ORIGIN } from '../sync/config';
 import type { SyncManager, SyncConfig, ObjectID } from '../sync';
 import type {
@@ -26,6 +27,23 @@ import type {
 
 const POST_META_KEY_FOR_CRDT_DOC_PERSISTENCE = '_crdt_document';
 const CRDT_AUTOSAVE_SNAPSHOT_KEY = 'crdt_snapshot';
+
+/**
+ * The services core-data reads from the provider, plus the two review
+ * resolution verbs. core-data no longer carries those; the plugin's review
+ * UI calls them on this object (see `src/review/resolver.ts`).
+ */
+export type PluginEntitySyncServices = NonNullable<
+	EntitySyncManager[ 'services' ]
+> &
+	ReviewResolver;
+
+/** The manager this plugin registers with core-data. */
+export interface PluginEntitySyncManager extends EntitySyncManager {
+	/** Absent once the manager was stopped (`unloadAll`). */
+	readonly services?: PluginEntitySyncServices;
+}
+
 function getRawValue( value: unknown ): string | undefined {
 	if ( typeof value === 'string' ) {
 		return value;
@@ -163,7 +181,7 @@ export function createPluginEntitySyncManager(
 	editor: EntitySyncContext,
 	resolve: () => SyncManager | undefined = () =>
 		resolveEngineAdapter()?.createManager()
-): EntitySyncManager {
+): PluginEntitySyncManager {
 	let syncManager: SyncManager | undefined;
 	let unavailable = false;
 	const getSyncManager = () => {
@@ -187,7 +205,6 @@ export function createPluginEntitySyncManager(
 	};
 
 	return {
-		onEditorAction: captureSemanticPrototypeAction,
 		services: {
 			isAvailable: () => {
 				getSyncManager();
@@ -219,13 +236,14 @@ export function createPluginEntitySyncManager(
 				return;
 			}
 
-			return manager.load(
-				syncConfig,
-				`${ kind }/${ name }`,
-				toObjectId( recordId ),
-				record,
-				editor.recordHandlers( kind, name, recordId, handlers )
-			);
+			const objectType = `${ kind }/${ name }`;
+			const objectId = toObjectId( recordId );
+			return manager.load( syncConfig, objectType, objectId, record, {
+				...editor.recordHandlers( kind, name, recordId, handlers ),
+				// The review half: core-data's handlers no longer carry
+				// it, so the plugin keeps its own list and notices.
+				...createReviewHandlers( objectType, objectId ),
+			} );
 		},
 
 		loadCollection( kind, name, handlers ) {

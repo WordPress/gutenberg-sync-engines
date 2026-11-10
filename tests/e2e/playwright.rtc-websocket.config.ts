@@ -2,7 +2,8 @@
  * Playwright config for the WebSocket-transport collaboration e2e.
  *
  * Extends the default plugin config (`./playwright.config.ts`) and runs
- * only the specs under `specs/websocket-only/`, against the plugin's REAL
+ * only the specs under a `websocket-only/` folder (the plugin's own and
+ * the Gutenberg suite's under `specs/gutenberg-collaboration/`), against the plugin's REAL
  * websocket transport: a second webServer selects the websocket transport
  * on the tests site and runs the `wp collaboration sync-server` PHP daemon
  * (engine seam and all) with host port 8787 published; Playwright waits on
@@ -70,7 +71,7 @@ const RELAY_ACCESS_TOKEN_SECRET =
 
 const config = defineConfig( {
 	...baseConfig,
-	testMatch: '**/specs/websocket-only/**/*.spec.ts',
+	testMatch: '**/websocket-only/**/*.spec.ts',
 	testIgnore: [],
 	// Restores the site's transport in the MAIN process: the daemon
 	// launcher's own restore dies with the webServer process group when

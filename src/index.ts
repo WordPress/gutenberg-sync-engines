@@ -14,6 +14,7 @@ import { createSseProvider } from './providers/sse/sse-provider';
 import { createSseDaemonProvider } from './providers/sse-daemon/sse-daemon-provider';
 import { bootstrapSlowAwareness } from './awareness';
 import { registerPluginEntitySync } from './entity-sync';
+import { registerReviewUi } from './review';
 
 // Engines: how concurrent edits merge.
 registerSyncEngine( createIntentLogEngineAdapter() );
@@ -44,6 +45,11 @@ registerSyncTransport( {
 	protocolVersion: 1,
 	create: createSseDaemonProvider,
 } );
+
+// The conflict review surface (store, notices, panel, in-canvas cards) the
+// engines' record handlers feed; registered before the provider so the
+// store exists when the first list arrives.
+registerReviewUi();
 
 // Core-data receives lifecycle events through the plugin adapter in every mode.
 registerPluginEntitySync();

@@ -26,7 +26,10 @@ shared editing session.
 ## Repo layout
 
 - `gutenberg-sync-engines.php` — plugin entry.
-- `includes/` — server PHP: `engines/{intent-log,yjs-server}/`
+- `includes/` — server PHP: `framework/` (the collaboration contracts,
+  registries, config, the `WP_Sync_Post_Meta_Storage` default, save route and announcement
+  that used to ship in Gutenberg; each file guards its declaration so an
+  older Gutenberg's copy wins), `engines/{intent-log,yjs-server}/`
   (one folder per engine; none uses another's classes), `shared/`,
   `transports/` (polling, `sse/`, `websocket/`), `admin/` (the settings
   screen), `storage/`, `diagnostics/` (dev-only), `lib/` (vendored
@@ -34,8 +37,9 @@ shared editing session.
 - `src/` — client TypeScript; `src/index.ts` builds `build/sync-engines.js`
   with `@wordpress/sync` and `yjs` external: `engines/`, `shared/`,
   `providers/{http-polling,sse,sse-daemon,websocket,advisory}/`,
-  `awareness/`, `entity-sync/`, `sync/` (plugin-owned manager and registries),
-  `framework.ts`, `debug/inspector.ts`.
+  `awareness/`, `entity-sync/`, `review/` (the conflict review store,
+  notices, sidebar panel and in-canvas cards), `sync/` (plugin-owned
+  manager and registries), `framework.ts`, `debug/inspector.ts`.
 - `gutenberg/` — a squashed Git subtree of Gutenberg, source only,
   pinned by `gutenberg-pin.json` (`commit`, `trunk`, and `tree`, which
   must equal `git rev-parse HEAD:gutenberg`). The plugin loads it when
@@ -43,9 +47,12 @@ shared editing session.
   Gutenberg `try/sync-engines` branch: rebase that branch on upstream
   trunk, test it, then `git subtree pull --prefix=gutenberg <checkout>
   <commit> --squash`, update the pin, rebuild, and run typecheck, Jest
-  and the browser tests. Keep the private API exports, the post-lock
-  fallback, the entity sync registration and the conflict-review
-  callbacks the vendored copy carries. The release zip includes the
+  and the browser tests. The plugin needs from the copy only the
+  `wp_is_collaboration_enabled()` gate and its filter, the post-lock
+  fallback, and core-data's private `registerEntitySyncProvider`
+  seam (no name; `recordHandlers` returns plain handlers); everything
+  else it used to lean on now lives under `includes/framework/` and
+  `src/review/`. The release zip includes the
   built framework.
 - `tests/` — `phpunit/`, `js/` (Jest, mirroring `src/`), `e2e/`
   (Playwright specs, config, fixture plugins, launchers in `bin/`),

@@ -4,9 +4,11 @@
  * The plugin brings its own e2e runner (`@playwright/test`,
  * `@wordpress/e2e-test-utils-playwright`, `@wordpress/scripts`); the **runtime**
  * Gutenberg comes from the pinned subtree in `../../gutenberg` (mounted by this
- * plugin's `.wp-env.json`). Specs live in `./specs` and import Gutenberg's
- * collaboration fixtures from the subtree while importing engine internals
- * (e.g. `genesisSyncId`) from this plugin's own source.
+ * plugin's `.wp-env.json`). Specs live in `./specs`: the plugin's own at
+ * the top level and under the transport folders, and under
+ * `./specs/gutenberg-collaboration/` the suite Gutenberg used to carry
+ * (with the fixtures every spec here imports). Engine internals (e.g.
+ * `genesisSyncId`) come from this plugin's own source.
  *
  * External dependencies
  */
@@ -69,13 +71,14 @@ export default defineConfig( {
 		navigationTimeout: 30_000,
 	},
 	// The transport-specific suites select their transport on the tests
-	// site themselves: websocket-only under playwright.rtc-websocket.config.ts
-	// (which also runs the daemon), sse-only under playwright.rtc-sse.config.ts.
+	// site themselves: every `websocket-only/` folder (the plugin's and the
+	// Gutenberg suite's) under playwright.rtc-websocket.config.ts (which
+	// also runs the daemon), sse-only under playwright.rtc-sse.config.ts.
 	testIgnore: [
-		'**/specs/websocket-only/**',
-		'**/specs/sse-only/**',
-		'**/specs/sse-framing/**',
-		'**/specs/sse-daemon-only/**',
+		'**/websocket-only/**',
+		'**/sse-only/**',
+		'**/sse-framing/**',
+		'**/sse-daemon-only/**',
 	],
 	webServer: {
 		...baseConfig.webServer,

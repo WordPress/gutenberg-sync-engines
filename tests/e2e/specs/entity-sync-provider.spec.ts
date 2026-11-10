@@ -6,7 +6,7 @@ import { test, expect } from '@wordpress/e2e-test-utils-playwright';
 /**
  * Internal dependencies
  */
-import { setCollaboration } from '../../../gutenberg/test/e2e/specs/editor/collaboration/fixtures/collaboration-utils';
+import { setCollaboration } from './gutenberg-collaboration/fixtures/collaboration-utils';
 
 test( 'a missing selected provider restores post locking without starting another sync engine', async ( {
 	page,

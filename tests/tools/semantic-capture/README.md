@@ -15,7 +15,7 @@ npm run env:tests start
 GSE_SEMANTIC_PROTOTYPE=1 npm run test:e2e -- semantic-capture
 ```
 
-The build script bundles only the development history panel. The fixture does not replace Gutenberg scripts or register another Gutenberg observer. Completed actions arrive through the plugin's `registerEntitySyncProvider` registration, alongside the record, save, and undo callbacks. Normal browser suites skip the prototype unless the environment variable is set. The prototype test restores the fixture's previous activation state and the engine setting.
+The build script bundles only the development history panel. The fixture does not replace Gutenberg scripts or register another Gutenberg observer. Completed actions used to arrive through the plugin's `registerEntitySyncProvider` registration (core-data's `onEditorAction` seam); that seam is gone from Gutenberg and the plugin does not re-implement a store middleware for it, so the history panel currently receives no live actions and only the text-apply half (`applySemanticPrototype`) still runs. Normal browser suites skip the prototype unless the environment variable is set. The prototype test restores the fixture's previous activation state and the engine setting.
 
 ## Try it manually
 

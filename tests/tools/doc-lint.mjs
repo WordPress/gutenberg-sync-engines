@@ -52,7 +52,10 @@ const SKIP_DIRS = new Set( [
 ] );
 
 /** Prose directories that are third-party code. */
-const SKIP_PROSE = [ 'gutenberg/', 'includes/lib/' ];
+// docs/prototype/ holds the intent-log prototype's planning documents as
+// they were written in Gutenberg: history, kept verbatim, so the names and
+// paths they mention are not checked against today's code.
+const SKIP_PROSE = [ 'gutenberg/', 'includes/lib/', 'docs/prototype/' ];
 
 /** Where a documented name must appear. */
 const CODE_DIRS = [

@@ -13,7 +13,7 @@ import { Editor } from '@wordpress/e2e-test-utils-playwright';
  */
 import CollaborationUtils, {
 	type UserCredentials,
-} from '../../../gutenberg/test/e2e/specs/editor/collaboration/fixtures/collaboration-utils';
+} from '../specs/gutenberg-collaboration/fixtures/collaboration-utils';
 
 type Session = {
 	user: UserCredentials;

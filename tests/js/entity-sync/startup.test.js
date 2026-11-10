@@ -14,7 +14,7 @@ jest.mock(
 	'@wordpress/core-data',
 	() => ( {
 		privateApis: {
-			registerEntitySyncProvider: jest.fn( ( _name, create ) =>
+			registerEntitySyncProvider: jest.fn( ( create ) =>
 				jest
 					.requireActual(
 						'../../../gutenberg/packages/core-data/src/entity-sync'
@@ -59,6 +59,11 @@ jest.mock( '../../../src/providers/http-polling/polling-manager', () => ( {
 } ) );
 jest.mock( '../../../src/awareness', () => ( {
 	bootstrapSlowAwareness: jest.fn(),
+} ) );
+// The review UI registers an editor plugin; the editor packages it needs
+// are not part of this test.
+jest.mock( '../../../src/review', () => ( {
+	registerReviewUi: jest.fn(),
 } ) );
 
 let base;
@@ -150,5 +155,26 @@ it( 'rejects a save when its flush does not finish within five seconds', async (
 		expect( jest.getTimerCount() ).toBe( 0 );
 	} finally {
 		jest.useRealTimers();
+	}
+} );
+
+it( 'names the provider and selects it when core-data still takes a name', () => {
+	// The bundled subtree's core-data selects providers by name: a
+	// two-parameter registration. The shim sets the selection it reads.
+	const { privateApis } = require( '@wordpress/core-data' );
+	const legacy = jest.fn();
+	privateApis.registerEntitySyncProvider = function ( name, create ) {
+		legacy( name, window._wpEntitySyncProvider, typeof create );
+		return () => {};
+	};
+	try {
+		registerPluginEntitySync();
+		expect( legacy ).toHaveBeenCalledWith(
+			'gutenberg-sync-engines',
+			'gutenberg-sync-engines',
+			'function'
+		);
+	} finally {
+		delete window._wpEntitySyncProvider;
 	}
 } );

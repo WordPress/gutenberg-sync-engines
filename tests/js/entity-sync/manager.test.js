@@ -2,7 +2,6 @@
  * Internal dependencies
  */
 import { createPluginEntitySyncManager } from '../../../src/entity-sync/manager';
-import { createEntitySyncAdapter } from '../../../src/entity-sync/adapter';
 
 jest.mock( '@wordpress/blocks', () => ( {
 	getBlockType: () => undefined,
@@ -34,7 +33,6 @@ beforeEach( () => {
 } );
 afterEach( () => {
 	delete window.__experimentalEnableRealTimeCollaboration;
-	delete window._gseSemanticPrototype;
 } );
 
 it( 'uses one engine for editor changes, snapshot reads, and connection retry', () => {
@@ -121,26 +119,6 @@ it( 'does not resend unchanged sibling meta or a raw/rendered title from the sav
 		'gutenberg-undo-ignored',
 		{ isSave: true }
 	);
-} );
-
-it( 'stops captured actions with the entity adapter and resumes them on load', () => {
-	const { manager } = setup();
-	const capture = jest.fn();
-	window._gseSemanticPrototype = { capture, apply: () => false };
-	const adapter = createEntitySyncAdapter( manager, async () => {} );
-	const action = {
-		action: { type: 'UPDATE_BLOCK_ATTRIBUTES' },
-		before: {},
-		after: {},
-		registry: {},
-	};
-	adapter.onEditorAction( action );
-	adapter.unloadAll();
-	adapter.onEditorAction( action );
-	expect( capture ).toHaveBeenCalledTimes( 1 );
-	adapter.load( 'postType', 'post', 7, {}, {} );
-	adapter.onEditorAction( action );
-	expect( capture ).toHaveBeenCalledTimes( 2 );
 } );
 
 it( 'reports an unavailable engine instead of selecting a different one', () => {

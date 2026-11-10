@@ -15,7 +15,7 @@ import {
  * Internal dependencies
  */
 import { test, expect } from '../config/collaboration-fixtures';
-import { SECOND_USER } from '../../../gutenberg/test/e2e/specs/editor/collaboration/fixtures/collaboration-utils';
+import { SECOND_USER } from './gutenberg-collaboration/fixtures/collaboration-utils';
 
 /**
  * Multi-client content preservation, run against ALL THREE engines.

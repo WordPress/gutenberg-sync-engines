@@ -2,8 +2,8 @@
  * Internal dependencies
  */
 import { test, expect } from '../../config/collaboration-fixtures';
-import { SECOND_USER } from '../../../../gutenberg/test/e2e/specs/editor/collaboration/fixtures/collaboration-utils';
-import type { UserCredentials } from '../../../../gutenberg/test/e2e/specs/editor/collaboration/fixtures/collaboration-utils';
+import { SECOND_USER } from '../gutenberg-collaboration/fixtures/collaboration-utils';
+import type { UserCredentials } from '../gutenberg-collaboration/fixtures/collaboration-utils';
 
 const BASE_URL = process.env.WP_BASE_URL || 'http://localhost:8889';
 

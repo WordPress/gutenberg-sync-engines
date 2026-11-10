@@ -33,13 +33,16 @@ if ( ! function_exists( 'gutenberg_sync_engines_activate' ) ) {
 	 * creates the storage tables and turns the Gutenberg real-time
 	 * collaboration experiment on.
 	 *
-	 * The framework gates real-time collaboration on the
+	 * Gutenberg gates real-time collaboration on the
 	 * `gutenberg-real-time-collaboration` experiment (the checkbox on the
 	 * Gutenberg → Experiments screen), and every fresh site starts with it
 	 * off. A site that installs this plugin wants collaboration, so
 	 * activation flips the experiment on — once, preserving every other
-	 * experiment. The checkbox stays live afterward: turning it off later
-	 * is honored until the plugin is activated again.
+	 * experiment. A newer Gutenberg also runs the gate through the
+	 * `wp_is_collaboration_enabled` filter, which the plugin forces on
+	 * while it is active (see Gutenberg_Sync_Engines_Plugin::register());
+	 * the experiment flip covers an older Gutenberg that reads the
+	 * experiment directly.
 	 *
 	 * The storage tables are per site and are created here (dbDelta, so a
 	 * re-activation is harmless). Deactivation leaves them and every
@@ -216,12 +219,12 @@ if ( ! function_exists( 'gutenberg_sync_engines_storage' ) ) {
 	/**
 	 * The sync storage the plugin's engines, transports, and tools use.
 	 *
-	 * Prefers the framework's filterable factory (`wp_get_sync_storage`,
+	 * Goes through the framework's filterable factory (`wp_get_sync_storage`,
 	 * `__unstable_wp_sync_storage` filter — where this plugin substitutes
 	 * its table storage) so a drop-in storage backend applies everywhere
-	 * at once; falls back to the plugin's table storage directly on a
-	 * framework build that predates the factory. Only called from
-	 * framework-gated code paths.
+	 * at once. The factory ships with the plugin (includes/framework/) and
+	 * exists once it has booted; the fallback only covers a call before
+	 * that.
 	 *
 	 * @since 0.4.0
 	 *

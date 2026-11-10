@@ -851,7 +851,7 @@ test.describe( 'Collaboration - intent-log engine @engine-intent-log', () => {
 		 * whose Adopt/Reject verbs are the primary resolution surface.
 		 */
 		const pendingCard = noticePage.locator(
-			'.editor-collaboration-pending-card__body'
+			'.gse-review-pending-card__body'
 		);
 		await expect( pendingCard.first() ).toBeVisible( { timeout: 15000 } );
 		await expect(
@@ -876,9 +876,7 @@ test.describe( 'Collaboration - intent-log engine @engine-intent-log', () => {
 		await noticePage
 			.getByRole( 'tab', { name: 'Post', exact: true } )
 			.click();
-		const panel = noticePage.locator(
-			'.editor-collaboration-review-panel'
-		);
+		const panel = noticePage.locator( '.gse-review-panel' );
 		await expect( panel ).toBeVisible( { timeout: 15000 } );
 		// Anchored conflicts carry no panel verbs — the summary-only
 		// contract (the panel still renders the group summaries).
@@ -947,11 +945,11 @@ test.describe( 'Collaboration - intent-log engine @engine-intent-log', () => {
 		await noticePage
 			.getByRole( 'tab', { name: 'Post', exact: true } )
 			.click();
+		await expect( noticePage.locator( '.gse-review-panel' ) ).toHaveCount(
+			0
+		);
 		await expect(
-			noticePage.locator( '.editor-collaboration-review-panel' )
-		).toHaveCount( 0 );
-		await expect(
-			noticePage.locator( '.editor-collaboration-pending-card__body' )
+			noticePage.locator( '.gse-review-pending-card__body' )
 		).toHaveCount( 0 );
 	} );
 

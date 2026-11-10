@@ -91,6 +91,32 @@ module.exports = {
 			FRAMEWORK_MODULES,
 			'@wordpress/blocks'
 		),
+		// The review UI (src/review/) renders with the editor's component
+		// library and reports through its notices store; both come from
+		// the subtree, and so must React itself: the components bind to
+		// the subtree's copy, and a second copy under this plugin's
+		// node_modules would break every hook.
+		'^@wordpress/notices$': path.join(
+			FRAMEWORK_MODULES,
+			'@wordpress/notices'
+		),
+		'^@wordpress/components$': path.join(
+			FRAMEWORK_MODULES,
+			'@wordpress/components'
+		),
+		'^@wordpress/element$': path.join(
+			FRAMEWORK_MODULES,
+			'@wordpress/element'
+		),
+		'^@wordpress/i18n$': path.join( FRAMEWORK_MODULES, '@wordpress/i18n' ),
+		'^react$': path.join( FRAMEWORK_MODULES, 'react' ),
+		'^react/(.*)$': path.join( FRAMEWORK_MODULES, 'react/$1' ),
+		'^react-dom$': path.join( FRAMEWORK_MODULES, 'react-dom' ),
+		'^react-dom/(.*)$': path.join( FRAMEWORK_MODULES, 'react-dom/$1' ),
+		'^@testing-library/(.*)$': path.join(
+			FRAMEWORK_MODULES,
+			'@testing-library/$1'
+		),
 	},
 	setupFiles: [
 		...( defaultConfig.setupFiles || [] ),

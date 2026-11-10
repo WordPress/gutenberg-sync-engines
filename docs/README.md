@@ -25,6 +25,10 @@ About an hour's reading, in this order.
 - [wontfix.md](wontfix.md) — what we decided not to do, and why.
 - [glossary.md](glossary.md) — the project's own words, in plain words.
 
+**History**
+
+- [prototype/](prototype/README.md) — the intent-log prototype's planning documents, kept as they were written in Gutenberg: [ARCHITECTURE.md](prototype/ARCHITECTURE.md), [INTEGRATION.md](prototype/INTEGRATION.md), [PROPOSAL-REVIEW.md](prototype/PROPOSAL-REVIEW.md) and the [review of 2026-08-05](prototype/REVIEW-2026-08-05.md). Read them as history; the names and paths they mention have since moved.
+
 The pages carry no measured numbers; `npm run bench` produces them on
 your hardware. Notable shipped changes are in `CHANGELOG.md`, how to
 work in the repo is in `AGENTS.md`, and open work lives in GitHub

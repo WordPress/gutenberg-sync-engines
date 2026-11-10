@@ -12,6 +12,17 @@ release, which the release script generates from the commit history.
 
 ### Added
 
+- The plugin now carries the collaboration framework's server side
+  (`includes/framework/`: the engine, transport and storage contracts,
+  the two registries, room config, `WP_Sync_Post_Meta_Storage`, the save route,
+  the `wp_sync_storage` post type, the `_crdt_document` meta and the
+  engine/transport announcement) and the conflict review surface
+  (`src/review/`: the open list, the notices, the document-settings
+  panel and the in-canvas cards). Gutenberg keeps only the
+  `wp_is_collaboration_enabled()` gate and the private
+  `registerEntitySyncProvider` seam; an older Gutenberg that still ships
+  these pieces keeps its own. The plugin forces the gate on through the
+  `wp_is_collaboration_enabled` filter while it is active.
 - WebSocket access tokens name their install (`iss`), so the example
   advisory relay keeps separate installs that share it apart. Update
   every install that shares a relay: tokens from older versions have no
@@ -24,6 +35,11 @@ release, which the release script generates from the commit history.
 
 ### Changed
 
+- The entity provider registers with core-data without a name (the first
+  registration wins), and the editing-action capture
+  (`onEditorAction`) is gone with core-data's seam for it: the
+  development history panel under `tests/tools/semantic-capture/` no
+  longer receives live editor actions.
 - Remove DE-RTC and its settings, autosave commit hooks, review route,
   and Automerge dependency. The supported engines are intent-log and
   yjs-server; no data migration is performed.

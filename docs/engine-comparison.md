@@ -75,7 +75,7 @@ The plugin owns the browser sync manager, engine registry, transport registry, a
 
 The remaining shared facilities have active users: intent-log needs conflict review; both engines need save hooks, snapshots, collaborative undo, presence, and room restart handling. WebSocket room scans still deliver writes made through HTTP or another daemon process. Atomic option updates still protect the advisory mailbox. These facilities remain.
 
-The Gutenberg PHP engine and transport interfaces, post-lock fallback, and review UI still differ from the pinned trunk. Moving their ownership is separate work; deleting them now would break the two remaining engines.
+The PHP engine and transport interfaces, the registries, the default storage, the save route and the review UI now ship in this plugin (`includes/framework/`, `src/review/`). Gutenberg keeps the collaboration gate, the post-lock fallback and the private provider seam in core-data.
 
 ## Known gaps
 

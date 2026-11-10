@@ -96,11 +96,11 @@ tables and every session; deleting it drops them. See
 
 ## Architecture
 
-The plugin owns the browser's sync manager, engines, and transports in `src/sync/` and `src/engines/`. It connects to Gutenberg through one private `registerEntitySyncProvider` registration. That interface supplies record changes, completed editor actions, save hooks, undo, cursor state, and connection controls. Gutenberg's original `@wordpress/sync` implementation remains available for its default provider; the plugin shares its Yjs library but does not use its manager or transport registry.
+The plugin owns the browser's sync manager, engines, and transports in `src/sync/` and `src/engines/`, and the conflict review surface in `src/review/`. It connects to Gutenberg through one private `registerEntitySyncProvider` registration (no name; the first registration wins). That interface supplies record changes, save hooks, undo, cursor state, and connection controls. Gutenberg registers no provider of its own; the plugin shares its Yjs library through `@wordpress/sync`.
 
-The PHP integration still uses the bundled `lib/experimental/collaboration/` server and its `wp_sync_engines` and `wp_sync_transports` filters. The server says which engine and transport to use, and the browser checks that it has them. The bundled server requires an external provider. If the plugin is missing or the engine does not match, the editor returns to standard post locking. Moving the server integration and review UI out of the subtree remains separate work.
+The PHP side lives in `includes/framework/`: the engine, transport and storage contracts, the two registries, the room config, the `WP_Sync_Post_Meta_Storage` default, the save route, the hidden `wp_sync_storage` post type, the `_crdt_document` meta and the announcement that tells the editor which engine and transport the server runs. The engines and transports register through the `wp_sync_engines` and `wp_sync_transports` filters. Gutenberg keeps only the `wp_is_collaboration_enabled()` gate (which the plugin forces on while active), the post-type gate, the post-lock interplay, meta-box compat and the autosaves controller. An older Gutenberg that still ships the framework keeps its own copy. If the plugin is missing or the engine does not match, the editor returns to standard post locking.
 
-The [editing-action prototype](tests/tools/semantic-capture/README.md) uses this same registration. Supported paragraph edits update Yjs text directly. Other changes retain the existing block comparison. Its history is local evidence, not a durable server audit.
+The [editing-action prototype](tests/tools/semantic-capture/README.md) is a development tool; since core-data no longer relays completed editor actions, its history panel receives none.
 
 How an edit travels is in [docs/data-flow.md](docs/data-flow.md). How to
 add an engine or a transport is in [docs/protocol.md](docs/protocol.md).

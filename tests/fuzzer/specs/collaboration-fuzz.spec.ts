@@ -49,8 +49,8 @@ import {
 	expect,
 	waitForSyncQuiet,
 } from '../../e2e/config/collaboration-fixtures';
-import type CollaborationUtils from '../../../gutenberg/test/e2e/specs/editor/collaboration/fixtures/collaboration-utils';
-import { SECOND_USER } from '../../../gutenberg/test/e2e/specs/editor/collaboration/fixtures/collaboration-utils';
+import type CollaborationUtils from '../../e2e/specs/gutenberg-collaboration/fixtures/collaboration-utils';
+import { SECOND_USER } from '../../e2e/specs/gutenberg-collaboration/fixtures/collaboration-utils';
 
 type Random = () => number;
 
@@ -479,7 +479,7 @@ async function appendToNthParagraph(
  * the next UI action wants to click (issue #109).
  */
 const REVIEW_CARD_SELECTOR =
-	'.editor-collaboration-pending-card, .editor-collaboration-insertion-card';
+	'.gse-review-pending-card, .gse-review-insertion-card';
 
 // How long a UI click may wait before the harness looks for a review card
 // in its way. The full action timeout still applies to the click that
@@ -551,7 +551,7 @@ async function resolveReviewCard(
 ): Promise< CardResolution > {
 	const handle = await card.elementHandle();
 	const kind = ( await card.evaluate( ( element ) =>
-		element.classList.contains( 'editor-collaboration-insertion-card' )
+		element.classList.contains( 'gse-review-insertion-card' )
 	) )
 		? 'insertion'
 		: 'pending';

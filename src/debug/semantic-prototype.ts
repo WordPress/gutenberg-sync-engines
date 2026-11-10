@@ -1,13 +1,18 @@
-import type { EntitySyncManager } from '@wordpress/core-data';
 /**
  * External dependencies
  */
 import type * as Y from 'yjs';
 
+/*
+ * The prototype's action capture (`capture`) used to receive every
+ * block-editor action through core-data's `onEditorAction` seam. That seam
+ * is gone from Gutenberg, and the plugin does not re-implement a store
+ * middleware for it: the development fixture under
+ * tests/tools/semantic-capture/ no longer receives live editor actions.
+ */
 declare global {
 	interface Window {
 		_gseSemanticPrototype?: {
-			capture?: EntitySyncManager[ 'onEditorAction' ];
 			apply: (
 				doc: Y.Doc,
 				changes: Record< string, unknown >,
@@ -33,16 +38,3 @@ export function applySemanticPrototype(
 		window._gseSemanticPrototype?.apply( doc, changes, entity ) === true
 	);
 }
-
-/**
- * Send accepted editor actions to the optional development capture. The
- * selected entity provider is the only Gutenberg registration.
- * @param change Accepted action and its before/after state.
- */
-export const captureSemanticPrototypeAction: NonNullable<
-	EntitySyncManager[ 'onEditorAction' ]
-> = ( change ) => {
-	if ( typeof window !== 'undefined' ) {
-		window._gseSemanticPrototype?.capture?.( change );
-	}
-};

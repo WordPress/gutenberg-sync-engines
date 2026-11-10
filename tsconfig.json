@@ -16,6 +16,13 @@
       "@wordpress/data": [
         "./gutenberg/node_modules/@wordpress/data/build-types"
       ],
+      "@wordpress/components": [
+        "./gutenberg/packages/components/build-types"
+      ],
+      "@wordpress/editor": [ "./gutenberg/packages/editor/build-types" ],
+      "@wordpress/notices": [ "./gutenberg/packages/notices/build-types" ],
+      "@wordpress/plugins": [ "./gutenberg/packages/plugins/build-types" ],
+      "@testing-library/*": [ "./gutenberg/node_modules/@testing-library/*" ],
       "yjs": [ "./gutenberg/node_modules/yjs" ],
       "y-protocols/*": [ "./gutenberg/node_modules/y-protocols/*" ],
       "lib0/*": [ "./gutenberg/node_modules/lib0/*" ]
